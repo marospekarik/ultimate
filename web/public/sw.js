@@ -23,26 +23,26 @@ self.addEventListener('activate', (event) =>
 self.addEventListener('fetch', (event) => {
   const { request } = event
   if (request.method !== 'GET' || request.headers.has('range')) return
-  // A hard reload asks for fresh files: it gets them, and they replace the cached ones.
+  // A hard reload asks for fresh files: it gets them straight from the network.
   if (request.cache === 'reload' || request.cache === 'no-store') return
   const url = new URL(request.url)
   if (!cacheable(url)) return
-  event.respondWith(request.mode === 'navigate' ? page(request) : answer(event, request))
+  event.respondWith(request.mode === 'navigate' ? page(event, request) : answer(event, request))
 })
 
 /**
  * The page itself always comes from the network: it names the module versions to load. When it changed (an edit or
  * a server restart), the cached modules may no longer fit together, so they are dropped and the app loads fresh once.
  */
-async function page(request) {
+async function page(event, request) {
   told = false
   const cache = await caches.open(CACHE)
   try {
     const response = await fetch(request, { cache: 'no-cache' })
     if (response.ok) {
       const cached = await cache.match(request)
-      if (cached && version(cached) !== version(response)) await clear(cache)
-      store(cache, request, response.clone())
+      if (cached && version(cached) !== version(response)) await clear(cache).catch(() => undefined)
+      event.waitUntil(store(cache, request, response.clone()))
     }
     return response
   } catch {
