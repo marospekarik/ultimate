@@ -3,6 +3,7 @@ import type { EntryRecord } from '@earendil-works/pi-durable'
 import type { ConversationSummary } from '../../../shared/protocol.ts'
 import { events } from './events.ts'
 import { errorMessage } from './format.ts'
+import { needsAttention } from './types.ts'
 import type {
   CodeBlockRenderer,
   CompactCallTest,
@@ -627,10 +628,27 @@ export function compactTools(
     }
   })
   if (!matching.length) return undefined
+  // Rows that ask the user to act (`attention` renderers) never fold: their calls stay out of runs of work, and the rows
+  // count as thread, never background.
+  const asks = (kind: 'entries' | 'tools') =>
+    new Set(
+      records.flatMap(({ extension }) =>
+        Object.entries(extension?.[kind] ?? {}).flatMap(([key, renderer]) =>
+          needsAttention(renderer) ? [key] : [],
+        ),
+      ),
+    )
+  const askingKinds = asks('entries')
+  const askingTools = asks('tools')
+  const asking = (row: CompactRow) =>
+    askingKinds.has(row.entry.kind) || row.calls.some((call) => askingTools.has(call.name))
   const tools = matching.flatMap(({ name, compact }) =>
     (compact.tools ?? []).map((tool) => ({ name, tool })),
   )
-  const names = new Set(tools.flatMap(({ tool }) => (typeof tool === 'string' ? [tool] : [])))
+  const names = new Set([
+    ...askingTools,
+    ...tools.flatMap(({ tool }) => (typeof tool === 'string' ? [tool] : [])),
+  ])
   const tests = tools.flatMap(({ name, tool }) =>
     typeof tool === 'function' ? [{ name, test: tool }] : [],
   )
@@ -646,6 +664,7 @@ export function compactTools(
         }
       }),
     quiet: (row, docs) => {
+      if (asking(row)) return false
       const verdicts = matching.map(({ name, compact }) => {
         try {
           return compact.quiet?.(row, docs) ?? false
@@ -658,6 +677,7 @@ export function compactTools(
     },
     thread: matching.some(({ compact }) => compact.thread)
       ? (row, docs) =>
+          asking(row) ||
           matching.some(({ name, compact }) => {
             try {
               return compact.thread?.(row, docs) ?? false

@@ -355,3 +355,15 @@ export interface WebExtension {
 export function defineWebExtension(extension: WebExtension): WebExtension {
   return extension
 }
+
+const marked = new WeakSet<object>()
+/**
+ * Marks an entry or tool renderer as one that asks the user to act or decide, such as a Fall asleep card: in a compact
+ * transcript its rows never fold away, and the stretch around them splits. Register it wrapped:
+ * `entries: { 'my.kind': attention(MyCard) }`. The card shows it is still open with `<Card attention>`.
+ */
+export function attention<T extends EntryRenderer | ToolRenderer>(renderer: T): T {
+  marked.add(renderer)
+  return renderer
+}
+export const needsAttention = (renderer: object | undefined) => !!renderer && marked.has(renderer)

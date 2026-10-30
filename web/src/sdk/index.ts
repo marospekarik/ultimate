@@ -3,6 +3,7 @@
  * The guide is extensions/README.md.
  */
 export {
+  attention,
   ConversationKind,
   defineWebExtension,
   definePoint,
