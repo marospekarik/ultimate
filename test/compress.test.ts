@@ -16,6 +16,9 @@ async function serve<T>(run: (url: string) => Promise<T>) {
     } else if (request.url === '/small') {
       response.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': 2 })
       response.end('{}')
+    } else if (request.url === '/reply') {
+      response.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': big.length })
+      response.end(big)
     } else {
       response.setHeader('Content-Type', 'text/javascript')
       response.end(big)
@@ -33,6 +36,13 @@ const remote = { 'X-Forwarded-For': '100.64.0.1', 'Accept-Encoding': 'gzip, br' 
 test('a remote client gets large text compressed, and fetch decodes it', () =>
   serve(async (url) => {
     const response = await fetch(`${url}/a.js`, { headers: remote })
+    assert.equal(response.headers.get('content-encoding'), 'br')
+    assert.equal(await response.text(), big)
+  }))
+
+test('headers passed to writeHead are honoured and Content-Length is dropped', () =>
+  serve(async (url) => {
+    const response = await fetch(`${url}/reply`, { headers: remote })
     assert.equal(response.headers.get('content-encoding'), 'br')
     assert.equal(await response.text(), big)
   }))

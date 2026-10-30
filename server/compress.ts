@@ -24,28 +24,34 @@ export function compress(request: IncomingMessage, response: ServerResponse) {
   }
   let stream: ReturnType<typeof createGzip> | undefined
   response.writeHead = (status: number, ...rest: unknown[]) => {
+    // Move the headers passed here onto the response, so one case-insensitive store holds them all.
     const headers = rest.find((value) => typeof value === 'object') as
       | OutgoingHttpHeaders
       | undefined
-    const get = (name: string) => headers?.[name] ?? response.getHeader(name)
+    for (const [name, value] of Object.entries(headers ?? {}))
+      if (value !== undefined) response.setHeader(name, value)
     if (
       status === 200 &&
-      compressible.test(String(get('content-type') ?? '')) &&
-      !get('content-encoding') &&
-      Number(get('content-length') ?? Infinity) > 1024
+      compressible.test(String(response.getHeader('content-type') ?? '')) &&
+      !response.hasHeader('content-encoding') &&
+      Number(response.getHeader('content-length') ?? Infinity) > 1024
     ) {
+      // The weak ETag Vite sends stays: it names the resource, and revalidation needs it.
       response.removeHeader('content-length')
-      if (headers) delete headers['content-length']
       response.setHeader('content-encoding', encoding)
       response.appendHeader('vary', 'Accept-Encoding')
       stream =
         encoding === 'br'
           ? createBrotliCompress({ params: { [constants.BROTLI_PARAM_QUALITY]: 4 } })
           : createGzip()
-      stream.on('data', (chunk: Buffer) => raw.write(chunk))
+      stream.on('data', (chunk: Buffer) => {
+        if (raw.write(chunk)) return
+        stream?.pause()
+        response.once('drain', () => stream?.resume())
+      })
       stream.on('end', () => raw.end())
     }
-    return raw.writeHead(status, ...rest)
+    return raw.writeHead(status, ...rest.filter((value) => typeof value === 'string'))
   }
   // Node sends headers implicitly on the first write or end; do it now, through the override above.
   const open = () => {
