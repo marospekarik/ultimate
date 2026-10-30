@@ -41,7 +41,10 @@ async function page(event, request) {
     const response = await fetch(request, { cache: 'no-cache' })
     if (response.ok) {
       const cached = await cache.match(request)
-      if (cached && version(cached) !== version(response)) await clear(cache).catch(() => undefined)
+      if (cached && version(cached) !== version(response)) {
+        // A failed clear leaves stale entries that revalidate one by one; it never fails the page.
+        await clear(cache).catch(() => undefined)
+      }
       event.waitUntil(store(cache, request, response.clone()))
     }
     return response
