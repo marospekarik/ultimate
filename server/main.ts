@@ -20,6 +20,7 @@ import { extensionModules } from './vite-extensions.ts'
 import { admit, createAccess } from './request-security.ts'
 import { writeProject } from './project.ts'
 import { reportCore } from './supervisor-protocol.ts'
+import { compress } from './compress.ts'
 import { viteLogger } from './vite-logger.ts'
 import type { Notice } from '../shared/protocol.ts'
 
@@ -73,6 +74,7 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
           options.publicUrl ??
             `http://127.0.0.1:${(http.address() as import('node:net').AddressInfo).port}`,
         ).port || '80'
+      compress(request, response)
       if (!(await admit(request, port, access.rules))) {
         response.writeHead(403)
         response.end('Forbidden')
