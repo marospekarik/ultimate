@@ -2,6 +2,7 @@ import type { EntryRecord } from '@earendil-works/pi-durable'
 import { useEffect, useState } from 'react'
 import {
   api,
+  attention,
   ConversationKind,
   defineWebExtension,
   events,
@@ -29,6 +30,7 @@ import {
 } from './data.tsx'
 import { callerOf } from './caller.ts'
 import { OpenMessages } from './open.tsx'
+import { QuestionPointer } from './pointer.tsx'
 import { StandingDoc } from '../subagents/ui.tsx'
 import { MessagesDoc, CallerAction } from './refs.ts'
 import type { MessagesData } from './refs.ts'
@@ -86,6 +88,8 @@ export default defineWebExtension({
   entries: {
     'board.message': MessageInput,
     'board.reply': MessageInput,
+    'board.asked': attention(QuestionPointer),
+    'board.answered': () => null,
     // Retired: triage's wake-up pointer in older transcripts.
     'board.wake': () => null,
     // The agent's reminder of the questions still open; the user sees them in the To-dos panel.

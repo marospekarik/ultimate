@@ -136,7 +136,8 @@ export function route(host: ExtensionHost) {
           for (const entryId of answered) {
             const entry = await tx.entry(entryId)
             const data = entry?.data as { from?: unknown; reply?: unknown } | undefined
-            const asked = entry?.kind === 'board.message' && data?.reply === true
+            const asked =
+              entry?.kind === 'board.message' && data?.reply === true && data.from !== 'user'
             if (asked && data.from === by) return undefined
             if (!asked) elsewhere = false
           }

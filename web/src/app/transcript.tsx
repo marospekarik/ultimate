@@ -12,7 +12,6 @@ import {
 import {
   Fragment,
   memo,
-  useContext,
   useEffect,
   useEffectEvent,
   useLayoutEffect,
@@ -56,7 +55,6 @@ import { covered } from '../sdk/resume.ts'
 import { ExtensionBoundary, Provided, Slot } from './boundary.tsx'
 import { ParkedRuns, RunStart } from '../sdk/types.ts'
 import type { CompactSummaryProps } from '../sdk/types.ts'
-import { ThreadContext } from '../sdk/thread.ts'
 import { MessageActions } from './message-actions.tsx'
 import { textOf, UserView } from './user-turn.tsx'
 import {
@@ -65,8 +63,6 @@ import {
   groupAside,
   groupBetween,
   groupQuiet,
-  emptyStretch,
-  threadStream,
   isOpenIn,
   openIn,
   partKey,
@@ -86,19 +82,6 @@ import { callsStart, indexTools, partialOf, slotsOf, toolCallView } from './mode
 import type { ToolResult } from './model.ts'
 import { ToolCallBlock } from './tool-call.tsx'
 import { TranscriptSkeleton } from './transcript-skeleton.tsx'
-
-/**
- * Thread `thread` of the shown conversation as a transcript of its own, for a side pane: its entries in order, cards
- * open, runs of work folded as in the main stream; `children` (such as its composer) go below it, in the thread.
- */
-export function ThreadView({ thread, children }: { thread: number; children?: ReactNode }) {
-  return (
-    <ThreadContext value={thread}>
-      <Transcript dock />
-      {children}
-    </ThreadContext>
-  )
-}
 
 /** The shown conversation; `dock` fits it into a narrow side region. */
 export function Transcript({ dock }: { dock?: boolean }) {
@@ -520,61 +503,34 @@ function TranscriptEntries() {
   // Keyed on the tools, not `live`: a streamed token must not re-render every row.
   const slots = useMemo(() => slotsOf(live.tools), [live.tools])
   const partial = partialOf(live)
-  const own = entries.filter(
+  const visible = entries.filter(
     (entry) =>
       entry.conversationId === id &&
       !(entry.kind === 'pi.tool-result' && calls.has(toolCallId(entry) ?? '')),
   )
   // Background rows, such as traffic between agents, fold into one line per stretch.
   const background = useCompactQuiet()
-  // A threaded conversation's main stream: each thread's entries leave it, and its root row stands where it began. A
-  // thread view shows one thread's entries alone.
-  const thread = useContext(ThreadContext)
-  // Threads read every loaded entry of the conversation, tool results with their calls included: a result can say what
-  // its call did (a message it sent, a branch it started).
-  const threading = useMemo(
-    () =>
-      background?.threads && id !== undefined
-        ? background.threads(
-            entries.filter((entry) => entry.conversationId === id),
-            id,
-          )
-        : undefined,
-    [background, entries, id],
-  )
-  const visible = useMemo(
-    () => (threading ? threadStream(own, threading, thread) : own),
-    // oxlint-disable-next-line react-hooks/exhaustive-deps -- `own` is derived from `entries` each render.
-    [threading, entries, thread],
-  )
-  // The run in progress streams where it belongs from its first token: in the one thread that woke it, else in main.
-  const runThread = threading?.live.length === 1 ? threading.live[0] : undefined
-  const runHere = runThread === thread
   const compact = useCompact()
   const keeps = (call: ToolCall) => !!compact?.(call)
   const rows: (CompactPart | WorkRun)[] = compact
     ? compactRows(visible, keeps)
     : visible.map((entry) => ({ entry }))
-  // In a thread every row is the thread itself: nothing there is background.
-  const quiet =
-    background && thread === undefined
-      ? groupQuiet(rows, (part) => background.quiet({ entry: part.entry, calls: shownCalls(part) }))
-      : rows
+  const quiet = background
+    ? groupQuiet(rows, (part) => background.quiet({ entry: part.entry, calls: shownCalls(part) }))
+    : rows
   // Background groups the reader or a reveal opened, by the keys of all their parts, as folded runs are.
   const [shownQuiet, setShownQuiet] = useState<ReadonlySet<string>>(new Set())
   // What a go-back set aside folds into one quiet row; the rows themselves render as usual inside it.
   const aside = useMemo(() => setAsideIds(entries), [entries])
   const grouped = groupAside(quiet, aside)
   // What lies between two rows of what the reader follows folds into one line that opens it.
-  const follows = thread === undefined ? background?.thread : undefined
+  const follows = background?.thread
   const threaded = follows
     ? groupBetween(
         grouped,
         (row) =>
           !('quiet' in row || 'work' in row || 'aside' in row) &&
-          // A thread's root is what the reader follows of it.
-          (row.entry.kind === threading?.root ||
-            follows({ entry: row.entry, calls: shownCalls(row) })),
+          follows({ entry: row.entry, calls: shownCalls(row) }),
       )
     : grouped.map((row) => row)
   const [shownBetween, setShownBetween] = useState(0)
@@ -744,17 +700,6 @@ function TranscriptEntries() {
       {threaded.map((item, index) => {
         const last = index === threaded.length - 1
         if (!('between' in item)) return renderItem(item, last)
-        // In a threaded stream, a stretch whose traffic all went into threads can be left with only rows that render
-        // nothing (a setup note, a reminder): no line, rather than an empty chevron.
-        if (
-          threading &&
-          emptyStretch(
-            item,
-            (part) =>
-              background?.quiet({ entry: part.entry, calls: shownCalls(part) }) === 'hidden',
-          )
-        )
-          return null
         const key = `between:${partKey(itemParts(item.between[0])[0])}`
         // The stretch the agent works in now stays in view while it works.
         const shown = (busy && last) || readBetween(id, item)
@@ -782,11 +727,11 @@ function TranscriptEntries() {
           </Fragment>
         )
       })}
-      {partial && runHere && (
+      {partial && (
         <AssistantView busy message={partial} results={results} slots={slots} streaming />
       )}
       <Slot name="transcript.end" />
-      {runHere && <LiveStatus busy={busy} id={id} live={live} partial={partial} />}
+      <LiveStatus busy={busy} id={id} live={live} partial={partial} />
       {tailSpace > 0 && (
         <div aria-hidden="true" data-history-anchor-space style={{ height: tailSpace }} />
       )}

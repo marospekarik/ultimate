@@ -210,25 +210,6 @@ export interface CompactContribution {
    * them recedes into one faded stretch.
    */
   thread?: (row: CompactRow, docs: CompactDocs) => boolean
-  /**
-   * Threads of the conversation, such as one per branch @ultimate talks with: which loaded entries each thread holds
-   * (`of`), which of them leave the main stream (`hidden`), and where each thread's root row stands in it (`roots`,
-   * thread → entry). The main stream shows an entry of kind `root` (`data: { thread }`, rendered by the contribution's
-   * entry renderer) after each root's entry, and `ThreadView` shows one thread's entries.
-   */
-  threads?: (entries: readonly EntryRecord[], docs: CompactDocs, conversation: number) => Threading
-}
-export type Threading = {
-  /** The entry kind of a thread's root row, which the contributing extension renders. */
-  root: string
-  of: ReadonlyMap<number, readonly number[]>
-  hidden: ReadonlySet<number>
-  roots: ReadonlyMap<number, number>
-  /**
-   * The threads the run in progress belongs to, known from the inputs that woke it: its streaming reply and working line
-   * show in that thread, never in the main stream, when it is exactly one.
-   */
-  live: readonly number[]
 }
 /** A compact transcript row: an entry, and the visible tool calls it shows when it shows only some of its blocks. */
 export interface CompactRow {

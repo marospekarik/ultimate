@@ -38,6 +38,11 @@ import type { ConversationState } from '../messages/ui.tsx'
 
 /** What a row's mark and state word say for each settled state; `working` and `idle` show no icon. */
 const settled = {
+  waits: {
+    label: 'Waits on you',
+    word: 'Waits on you',
+    tone: 'text-amber-700 dark:text-amber-300',
+  },
   awaiting: {
     label: 'Awaiting @ultimate',
     word: 'Awaiting @ultimate',
@@ -81,7 +86,7 @@ function Mark({
             >
               {shown === 'done' ? (
                 <CircleCheckIcon className="size-3.5" />
-              ) : shown === 'awaiting' ? (
+              ) : shown === 'awaiting' || shown === 'waits' ? (
                 <CircleHelpIcon className="size-3.5" />
               ) : shown === 'failed' ? (
                 <CircleXIcon className="size-3.5" />

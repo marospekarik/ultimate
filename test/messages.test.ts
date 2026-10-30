@@ -627,13 +627,13 @@ it('allows one-way updates to the sender while answering', async () => {
     { from: f.recipient.id, to: 1, re: 1 },
   ])
 })
-it('refuses messages to the user from anyone but @ultimate', async () => {
+it('refuses messages to the user from non-branch conversations other than @ultimate', async () => {
   const f = await fixture()
   await f.send('@scout', 'SEND ' + JSON.stringify({ to: 'user', text: 'Update' }))
   await until(async () => (await replies(f)).length === 1)
   expect((await f.log())!.messages).toHaveLength(2)
   expect(f.observed.join('\n')).toContain(
-    'Only @ultimate messages the user; send this to @ultimate (reply: false) and it relays it.',
+    'Only @ultimate and branches message the user; send this to the conversation that started you.',
   )
   await f.send('user', 'Relayed update')
   expect((await f.log())!.messages.at(-1)).toMatchObject({
@@ -839,7 +839,7 @@ it('lets a subagent message only the conversation that started it', async () => 
   const run = await child(false)
   await send(run, 'user')
   expect((await f.log())!.messages).toHaveLength(1)
-  expect(f.observed.join('\n')).toContain('Only @ultimate messages the user')
+  expect(f.observed.join('\n')).toContain('Only @ultimate and branches message the user')
 })
 it('refuses self, unknown ids, tally roots and unknown names with valid names', async () => {
   const f = await fixture()
@@ -1331,6 +1331,65 @@ async function branched(f: Awaited<ReturnType<typeof fixture>>) {
   await settled()
   return { id, branch, from, later, settled }
 }
+it('lets a branch ask the user directly and leaves passive question and answer notes for @ultimate', async () => {
+  const f = await fixture()
+  const b = await branched(f)
+  const entries = async (kind: string) => {
+    const view = await f.opened.root.viewState(context)
+    const found = view.value.entries.filter((entry) => entry.kind === kind)
+    view.dispose()
+    return found
+  }
+  const before = await f.opened.root.viewState(context)
+  const generations = before.value.entries.filter((entry) => entry.kind === 'pi.assistant').length
+  before.dispose()
+  await b.later(
+    'SEND ' +
+      JSON.stringify({
+        to: 'user',
+        text: 'Choose the implementation',
+        questions: [{ text: 'Use the smaller change?', kind: 'confirm' }],
+      }),
+  )
+  const question = (await f.log())!.messages.find((m) => m.from === b.id && m.to === 'user')!
+  expect(question).toMatchObject({
+    reply: true,
+    state: 'delivered',
+    questions: [{ kind: 'confirm' }],
+  })
+  await until(async () => (await entries('board.asked')).length === 1)
+  const [asked] = await entries('board.asked')
+  expect(asked.data).toMatchObject({ message: question.id, from: b.id })
+  expect(asked.input).not.toBe(true)
+  expect(JSON.stringify(asked.model)).toContain('Use the smaller change?')
+  expect(
+    (await f.opened.harness.snapshot(LiveDoc, ROOT_CONVERSATION_ID, context))?.run,
+  ).toBeUndefined()
+  const after = await f.opened.root.viewState(context)
+  expect(after.value.entries.filter((entry) => entry.kind === 'pi.assistant')).toHaveLength(
+    generations,
+  )
+  after.dispose()
+
+  const text = 'Q: Use the smaller change?\nA: Yes'
+  await f.service().answer(question.id, text, context)
+  await until(async () => (await entries('board.answered')).length === 1)
+  await b.settled()
+  const [answered] = await entries('board.answered')
+  expect(answered.data).toMatchObject({ message: question.id, from: b.id })
+  expect(answered.input).not.toBe(true)
+  expect(JSON.stringify(answered.model)).toContain('A: Yes')
+  const reply = (await f.log())!.messages.find((m) => m.from === 'user' && m.re === question.id)!
+  expect(reply).toMatchObject({ to: b.id, text, state: 'answered', entry: expect.any(Number) })
+  expect(f.observed).toContainEqual(expect.stringContaining(`Message from user:\n${text}`))
+  // The user's answer is input, so the branch's final result still reports to its starter.
+  expect((await b.from()).find((m) => m.report)).toMatchObject({
+    to: 1,
+    text: expect.stringContaining('A: Yes'),
+  })
+  expect(await entries('board.asked')).toHaveLength(1)
+  expect(await entries('board.answered')).toHaveLength(1)
+})
 it('forwards images into a new branch with its prompt', async () => {
   const f = await fixture()
   const tool = (await f.opened.root.agent(context)).deferred.find((t) => t.name === 'branch')!

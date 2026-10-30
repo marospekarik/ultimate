@@ -376,7 +376,7 @@ describe('conversation state', () => {
     expect(conversationState({ ...primary, runState: 'queued' }, messagesLog())).toBe('working')
   })
 
-  it('waits only for the primary agent with an open question to the user', () => {
+  it('waits for the primary agent with an open question to the user', () => {
     expect(conversationState({ ...primary, runState: 'answered' }, toUser)).toBe('waits')
     expect(conversationState({ ...primary, runState: 'answered' }, messagesLog())).toBe('idle')
     expect(
@@ -384,9 +384,14 @@ describe('conversation state', () => {
     ).toBe('idle')
   })
 
-  it('never waits for a subagent or another conversation, even with open messages to the user', () => {
-    for (const kind of ['subagent', 'other'] as const)
-      expect(conversationState({ id: 2, kind, runState: 'answered' }, toUser)).not.toBe('waits')
+  it('waits for a non-subagent question of its own, never for a subagent or an unrelated conversation', () => {
+    expect(conversationState({ id: 2, kind: 'other', runState: 'answered' }, toUser)).toBe('waits')
+    expect(conversationState({ id: 2, kind: 'subagent', runState: 'answered' }, toUser)).not.toBe(
+      'waits',
+    )
+    expect(conversationState({ id: 3, kind: 'other', runState: 'answered' }, toUser)).not.toBe(
+      'waits',
+    )
   })
 
   it('awaits the primary agent while its reply-expected message to it is open', () => {

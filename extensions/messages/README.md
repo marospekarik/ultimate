@@ -14,7 +14,7 @@ the same ones. `branch` takes the same `images` for its first message. @ultimate
 too: its bubble shows that entry's images as thumbnails that open full size.
 Address a conversation
 as `#123` or `123`, or a standing agent as `@name`. The lander runs no model and takes no messages.
-Only the `ultimate` resident's standing conversation may message `user`; other senders must send @ultimate a one-way update to relay.
+Only the `ultimate` resident's standing conversation and branches (conversations `branch` started) may message `user`; subagents and side chats are refused.
 Self-messages, unknown conversations and tallies are refused; use `note` for a tally. Unknown standing names list
 the valid ones. Standing agents are resolved and configured through the `subagents` service at delivery admission.
 Each post emits `board.sent` `{ message, from, to, reply, steer }` (`MessageSent`) in the posting commit, never the
@@ -38,8 +38,8 @@ conversation such as the onboarding walkthrough can ask one card after another. 
 and is never treated as owed: a message to its sender then goes as a new message, and the queued one gets its own
 turn and its own answer.
 A subagent (a conversation its parent lists in `ultimate.subagents`) may message only that parent, so its work reaches
-the user through its coordinator and @ultimate; its prompt says so. Automation runs and top-level conversations may
-message any agent; only @ultimate may message the user.
+the user through its coordinator; its prompt says so. Automation runs and top-level conversations may message any
+agent; only @ultimate and branches may message the user.
 `reply: false` is one-way: it wakes the recipient without returning an answer, and its model text says the
 answer is not sent. The log records its answering assistant entry in `answer` while keeping state `delivered`;
 no reply is appended.
@@ -78,7 +78,11 @@ A branch whose latest report came after the starter's latest message to it shows
 messaging the branch, or concluding it, clears it.
 
 Sending to `user` writes a message
-shown in @ultimate's transcript; it starts no run. The message is @ultimate's answer: a direct `message` call to
+shown in the sender's transcript; it starts no run. A branch's reply-expected message to `user` also writes a
+`board.asked` pointer into @ultimate's conversation (an attention card: who asks, the first question, Open; it turns
+`answered` with the answer once the user replies), and the user's answer or dismissal writes a `board.answered` note
+there with the answer text: both are writes, so @ultimate reads them with its next input and no run starts.
+A branch with an open question to the user shows as `waits on you`. For @ultimate, the message is its answer: a direct `message` call to
 `user` returns `terminate`, so the run ends without a final answer that would restate it, when every call of that
 tool round does so. It does not while a reply-enabled message @ultimate has read is still open, so that reply is
 still answered; codemode's nested calls never end the run.
@@ -144,10 +148,10 @@ create another branch even before the branch-id memo is saved. Pi retires that r
 It deduplicates message admission with the same task-scoped `board.sent-calls` receipt as `message`, indexed by call id
 so nested codemode calls stay distinct.
 
-Ultimate answers the user's typed input directly in its conversation. To relay a branch result, decision or landing
-to the user, Ultimate sends one consolidated `message {to: 'user', text}` when the needed replies have arrived.
-It appears there as a bubble with an answer card for questions. Decisions use a reply-expected message with
-`questions` (see [Questions](../questions/README.md)); reports that need no answer use `reply: false`.
+Ultimate answers the user's typed input directly in its conversation. A branch's decisions go to @ultimate first,
+which weighs in; the branch then asks the user with a reply-expected message with `questions` in its own
+conversation (see [Questions](../questions/README.md)). @ultimate asks itself only for its own work or one combined
+card across branches; reports that need no answer use `reply: false`.
 
 ## Other projects' Ultimates
 
