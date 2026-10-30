@@ -305,6 +305,15 @@ export const MessageReference = definePoint<
   string | undefined
 >('ultimate.messageReference')
 
+/**
+ * Where an error card can hand its report for debugging (`subagents` provides it: into @ultimate's composer, unsent):
+ * `title` labels the card's button. No button while nothing provides it.
+ */
+export const ErrorReport = definePoint<
+  null,
+  { title: string; send: (report: string) => void } | undefined
+>('ultimate.errorReport')
+
 /** What a facet provides for a point: `useValue` is a hook, run once per `<Provided>` with its input. */
 export interface Provision {
   point: string

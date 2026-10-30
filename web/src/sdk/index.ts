@@ -7,6 +7,7 @@ export {
   ConversationKind,
   defineWebExtension,
   definePoint,
+  ErrorReport,
   MessageReference,
   ParkedRuns,
   provide,
