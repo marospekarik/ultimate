@@ -205,6 +205,9 @@ process.on('message',(message:{type:string})=>{ if(message.type==='go')process.s
       output += chunk
     })
     await until(() => output.includes('Ultimate: http://'))
+    const original = JSON.parse(await readFile(join(home, 'storage.lock'), 'utf8'))
+    expect(original).toEqual({ pid: core.pid, coreStart: expect.any(String) })
+    expect(original.coreStart).not.toBe('')
     await writeFile(join(home, 'ultimate.lock'), JSON.stringify({ pid: 2147483647, port: 4747 }))
     const exited = once(core, 'exit')
     const supervisor = await launch(home)

@@ -185,7 +185,7 @@ function StepLine({
         icon={<LoaderCircleIcon className="size-3 shrink-0 animate-spin" />}
         took={<Elapsed since={row.at} />}
       >
-        <span className="animate-pulse">{row.step}</span>
+        <span>{row.step}</span>
       </Line>
     )
   const duration = took !== undefined && took >= 1000 ? formatDuration(took) : undefined

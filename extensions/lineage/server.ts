@@ -49,6 +49,8 @@ import {
   Memorized,
   Memory,
   memoryBrief,
+  MEMORY_RULES,
+  MEMORY_SLUG,
   memoryIndex,
   memorizeTask,
   memoryText,
@@ -1601,14 +1603,17 @@ export default function lineageExtension(host: ExtensionHost) {
       defineTool({
         name: 'remember',
         deferred: true,
-        description:
-          "Change a root's project memory in one atomic batch: ops are {op:'add', slug, kind: 'decision'|'fact'|'lesson', line, body, source?}, {op:'update', slug, kind?, line?, body?, source?} and {op:'delete', slug}. Slugs are kebab-case, lines one line of at most 120 characters, bodies at most 2000, source `#<conversation>/<entry>`; at most 150 memories. Any invalid op refuses the whole batch. `root` defaults to your tree's root, or outside a tree to the project's only root.",
+        description: `Change a root's project memory in one atomic batch. Limits, checked before anything is written: ${MEMORY_RULES}. One op over a limit refuses the whole batch, so count a line's characters before you send it and keep detail in the body. Ops are {op:'add', slug, kind: 'decision'|'fact'|'lesson', line, body, source?}, {op:'update', slug, kind?, line?, body?, source?} and {op:'delete', slug}; source is \`#<conversation>/<entry>\`. \`root\` defaults to your tree's root, or outside a tree to the project's only root.`,
         parameters: Type.Object({
           root: Type.Optional(Type.Integer({ minimum: 1 })),
           ops: Type.Array(
             Type.Object({
               op: Type.Union([Type.Literal('add'), Type.Literal('update'), Type.Literal('delete')]),
-              slug: Type.String(),
+              slug: Type.String({
+                pattern: MEMORY_SLUG.source,
+                maxLength: 48,
+                description: 'kebab-case, at most 48 characters',
+              }),
               kind: Type.Optional(
                 Type.Union([
                   Type.Literal('decision'),
@@ -1616,8 +1621,18 @@ export default function lineageExtension(host: ExtensionHost) {
                   Type.Literal('lesson'),
                 ]),
               ),
-              line: Type.Optional(Type.String({ maxLength: LINE_CHARS })),
-              body: Type.Optional(Type.String({ maxLength: BODY_CHARS })),
+              line: Type.Optional(
+                Type.String({
+                  maxLength: LINE_CHARS,
+                  description: `The index line: one line, at most ${LINE_CHARS} characters`,
+                }),
+              ),
+              body: Type.Optional(
+                Type.String({
+                  maxLength: BODY_CHARS,
+                  description: `The full memory, at most ${BODY_CHARS} characters; split longer text across memories`,
+                }),
+              ),
               source: Type.Optional(Type.String({ description: '#<conversation>/<entry>' })),
             }),
             { minItems: 1 },

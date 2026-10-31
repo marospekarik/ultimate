@@ -682,7 +682,7 @@ function RootMemory({
             if (!shown.length) return null
             return (
               <div className="mt-6" data-memory-kind={kind} key={kind}>
-                <h3 className="flex items-center gap-1.5 border-b border-border/60 pb-1.5 font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase">
+                <h3 className="flex items-center gap-1.5 border-b border-border/60 pb-1.5 section-label">
                   <span className={cn('size-1.5 rounded-full', kindDots[kind])} />
                   {title}
                   <span className="text-muted-foreground/60">{shown.length}</span>

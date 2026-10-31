@@ -249,10 +249,10 @@ function Landed({ output }: { output: string }) {
       )}
       {files.length > 0 && (
         <ToolSection>
-          <div className="flex items-center gap-2 text-[10px] tracking-wider text-muted-foreground/80 uppercase">
+          <div className="flex items-center gap-2 section-label">
             {files.length} changed file{files.length === 1 ? '' : 's'}
             {result.files && (
-              <span className="normal-case">
+              <span>
                 <span className="text-diff-add">+{added}</span>{' '}
                 <span className="text-diff-del">−{removed}</span>
               </span>

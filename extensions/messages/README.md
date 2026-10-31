@@ -69,15 +69,16 @@ conversation that started you is a note, and stopping with nothing under way is 
 - **Everything else wakes.** Reply-enabled messages, and one-way messages from anyone who is not the recipient's
   child or branch (another branch, an automation's escalation, another project's Ultimate), are inputs.
 - **Answers back down.** The primary agent's runs get a `board.route` task too (`down`). When every input of the run
-  was a reply or one-way message (a report) from one branch it started, the branch is not concluded and the run sent
-  that branch no message, its final answer goes to the branch as a one-way message with `routed: true`, which wakes
-  it. So a weigh-in reaches the branch whether its decisions came as the reply to the branch's first message or as a
-  later report. User input, notes, landing cards and runs answering several branches (a fan-out) route nothing, and a
-  message to the user ends the run without a final answer.
+  was a reply or one-way message (a report) from branches it started, its final answer goes to each of them that is
+  not concluded and that the run sent no message, as a one-way message with `routed: true`, which wakes it. So a
+  weigh-in reaches the branch whether its decisions came as the reply to the branch's first message or as a later
+  report. A reply steers a busy starter, so replies arriving close together share one run: each branch in it gets the
+  answer, prefixed with which branches it answers together, or one would wait on it forever. User input, notes and
+  landing cards in the run route nothing, and a message to the user ends the run without a final answer.
 
 Routing cannot loop: a branch's report that answers only routed messages carries `echo: true`, and the starter's
 answer to an echo stays local, so it goes back and forth at most once without an explicit `message`. Request id
-`route:<answer entry>` deduplicates delivery in the sender's `board.requests`, so a restart never sends an answer
+`route:<answer entry>` (`route:<answer entry>:<branch>` going down) deduplicates delivery in the sender's `board.requests`, so a restart never sends an answer
 twice.
 
 A branch whose latest report, or reply to the starter's message, came after the starter's latest message to it shows

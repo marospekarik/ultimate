@@ -15,6 +15,7 @@ import {
   defineExtension,
   defineTask,
   defineTool,
+  InboxDoc,
   LiveDoc,
   ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
@@ -30,6 +31,7 @@ import { emit } from '../server/events.ts'
 import messagesExtension, { actions } from '../extensions/messages/server.ts'
 import pauseExtension, { actions as pauseActions } from '../extensions/pause/server.ts'
 import { Messages, MessageSent } from '../extensions/messages/api.ts'
+import { send as sendMessage } from '../extensions/messages/send.ts'
 import { UserInputEvent } from '../shared/events.ts'
 import type { MessagesService } from '../extensions/messages/api.ts'
 import { BranchReceipts, Tally, rootOf, startBranch } from '../extensions/lineage/server.ts'
@@ -259,6 +261,9 @@ async function fixture(
       return fauxAssistantMessage([fauxToolCall('hold', {})], { stopReason: 'toolUse' })
     if (last.role === 'user' && text.startsWith('Message from') && text.includes('NOANSWER'))
       return fauxAssistantMessage([])
+    // A branch's reply that keeps @ultimate busy, so another branch's reply steers into the same run.
+    if (last.role === 'user' && text.startsWith('Reply from #') && text.includes('STALL'))
+      return fauxAssistantMessage([fauxToolCall('hold', {})], { stopReason: 'toolUse' })
     // @ultimate (#1) answers a branch's reply or report only to weigh in: any other final answer would go down to it.
     const fromBranch = /^(Reply|Message) from #(\d+)/.exec(text)
     if (
@@ -1310,18 +1315,19 @@ it('forwards tool-result images, finds latest past a page, and checks every imag
 async function branched(f: Awaited<ReturnType<typeof fixture>>, prompt = 'Explore') {
   const tool = (await f.opened.root.agent(context)).deferred.find(
     (candidate) => candidate.name === 'branch',
-  )!
+  )
   await f.opened.harness.commit(async (tx) => {
     ;(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots = [1]
-    await configure(tx, f.opened.root.id, { modelTools: { add: [tool] } })
+    if (tool) await configure(tx, f.opened.root.id, { modelTools: { add: [tool] } })
   }, context)
   await f.opened.root.submit(
     { type: 'input', content: 'BRANCH ' + JSON.stringify({ prompt, isolated: false }) },
     context,
   )
-  await until(async () => (await replies(f)).length === 1)
+  const before = (await replies(f)).length
+  await until(async () => (await replies(f)).length === before + 1)
   await f.opened.root.waitForIdle(context)
-  const id = (await f.log())!.messages[0].to as number
+  const id = (await f.log())!.messages.findLast((m) => m.from === 1)!.to as number
   const branch = (await f.opened.harness.conversation(id as ConversationId, context))!
   await branch.waitForIdle(context)
   const from = async () => (await f.log())!.messages.filter((m) => m.from === id)
@@ -1565,6 +1571,30 @@ it("routes @ultimate's final answer to a branch's reply back to the branch, once
     [1, undefined, undefined],
     [undefined, true, true],
   ])
+})
+it("routes @ultimate's final answer to every branch whose reply shared its run", async () => {
+  // omarchy-config: #45921's reply started @ultimate's run, #46397's steered into it 14 s later; the weigh-in reached
+  // neither, and both branches waited on it.
+  const f = await fixture()
+  const a = await branched(f)
+  const b = await branched(f)
+  const ask = (to: number, text: string) =>
+    sendMessage(f.host, 1, { to: `#${to}`, text, reply: true }, context, { requestId: `ask:${to}` })
+  await ask(a.id, 'STALL')
+  await until(f.holding)
+  await ask(b.id, 'WEIGH')
+  await until(
+    async () =>
+      (await f.opened.harness.snapshot(InboxDoc, f.opened.root.id, context))!.items.length > 0,
+  )
+  f.hold.release()
+  await until(
+    async () => (await f.log())!.messages.filter((m) => m.from === 1 && m.routed).length === 2,
+  )
+  await b.settled()
+  const routed = (await f.log())!.messages.filter((m) => m.from === 1 && m.routed)
+  expect(new Set(routed.map((m) => m.to))).toEqual(new Set([a.id, b.id]))
+  expect(routed[0].text).toContain(`answers #${a.id} and #${b.id} together`)
 })
 it("does not route an answer to the starter's reply-enabled message", async () => {
   const f = await fixture()

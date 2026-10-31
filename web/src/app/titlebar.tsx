@@ -176,9 +176,7 @@ function Brand() {
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="w-96" sideOffset={4}>
-          <DropdownMenuLabel className="px-2 pt-1 pb-1.5 font-mono text-[10.5px] font-normal tracking-wider text-muted-foreground uppercase">
-            Surfaces
-          </DropdownMenuLabel>
+          <DropdownMenuLabel className="px-2 pt-1 pb-1.5 section-label">Surfaces</DropdownMenuLabel>
           {surfaces.map((surface, index) => {
             const Item = surface.icon
             const active = surface.id === shown

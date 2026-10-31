@@ -92,13 +92,14 @@ async function children(tx: Tx, id: ConversationId): Promise<boolean> {
 }
 
 /**
- * The branch whose report or reply alone made up the starter's run `answered`, when the starter's final answer to it
- * should reach it: the branch is the starter's, not concluded, the starter did not message it during the run, and the
- * report was no echo (a branch's answer to a routed answer), so routing goes back and forth at most once.
+ * The branches whose reports or replies made up the starter's run `answered`, when the starter's final answer should
+ * reach them: each is the starter's, not concluded, and the starter did not message it during the run. Replies arriving
+ * close together share one run (a reply steers a busy starter), so every branch in it hears the answer, or one of them
+ * would wait on it forever. An echo (a branch's answer to a routed answer) routes nowhere, so routing goes back and
+ * forth at most once; any other input (the user's, a landing card) leaves the answer local.
  */
 async function reported(host: ExtensionHost, tx: Tx, starter: number, answered: number[]) {
-  let branch: number | undefined
-  let latest = 0
+  const latest = new Map<number, number>()
   for (const entryId of answered) {
     const entry = await tx.entry(entryId as never)
     const data = entry?.data as
@@ -106,19 +107,27 @@ async function reported(host: ExtensionHost, tx: Tx, starter: number, answered: 
       | undefined
     const report =
       entry?.kind === 'board.reply' || (entry?.kind === 'board.message' && data?.reply === false)
-    if (!report || typeof data?.from !== 'number' || data.echo === true) return undefined
-    if (branch !== undefined && data.from !== branch) return undefined
-    if ((await tx.doc(Started, data.from as ConversationId)).by !== starter) return undefined
-    branch = data.from
-    latest = Math.max(latest, data.id ?? 0)
+    if (!report || typeof data?.from !== 'number') return []
+    if (data.echo === true) continue
+    if ((await tx.doc(Started, data.from as ConversationId)).by !== starter) return []
+    latest.set(data.from, Math.max(latest.get(data.from) ?? 0, data.id ?? 0))
   }
-  if (branch === undefined) return undefined
-  if ((await host.need(ConversationsApi).concludedIn(tx)).has(branch as ConversationId))
-    return undefined
+  const concluded = await host.need(ConversationsApi).concludedIn(tx)
   const log = await tx.doc(Messages, ROOT_CONVERSATION_ID)
-  if (log.messages.some((m) => m.from === starter && m.to === branch && m.id > latest))
-    return undefined
-  return branch
+  return [...latest].flatMap(([branch, since]) =>
+    concluded.has(branch as ConversationId) ||
+    log.messages.some((m) => m.from === starter && m.to === branch && m.id > since)
+      ? []
+      : [branch],
+  )
+}
+
+/** One message `board.route` sends, with `send`'s options. */
+interface Route {
+  to: number
+  text: string
+  requestId: string
+  options: { note?: boolean; report?: boolean; echo?: boolean; routed?: boolean }
 }
 
 /**
@@ -158,25 +167,34 @@ export function route(host: ExtensionHost) {
         )
         const { by } = task.input
         const id = runtime.conversationId
-        const routed = await host.harness().commit(async (tx) => {
+        const routed = await host.harness().commit(async (tx): Promise<Route[]> => {
           // A continued generation's answer is no run's final answer: only inputs it settled make one.
           const answered = inputs.flatMap((input) =>
             input?.type === 'input' && input.status === 'done' && input.answer === answer
               ? [input.entry]
               : [],
           )
-          if (!answered.length) return undefined
+          if (!answered.length) return []
           const message = (await tx.entry(answer))?.model?.[0]
           if (
             message?.role !== 'assistant' ||
             message.stopReason === 'error' ||
             message.stopReason === 'aborted'
           )
-            return undefined
+            return []
           const text = message.content.flatMap((p) => (p.type === 'text' ? [p.text] : [])).join('')
           if (task.input.down) {
-            const branch = await reported(host, tx, by, answered)
-            return branch === undefined ? undefined : { text, to: branch }
+            const branches = await reported(host, tx, by, answered)
+            const together =
+              branches.length > 1
+                ? `(This answers ${branches.map((b) => `#${b}`).join(' and ')} together.)\n\n`
+                : ''
+            return branches.map((to) => ({
+              to,
+              text: together + text,
+              requestId: `route:${answer}:${to}`,
+              options: { routed: true },
+            }))
           }
           // board.delivery returns an answer to a reply-enabled message to whoever sent it. To the starter's, that is
           // where the answer goes; when every input was another conversation's question (a sibling's, a subagent's),
@@ -191,31 +209,37 @@ export function route(host: ExtensionHost) {
               | undefined
             const asked =
               entry?.kind === 'board.message' && data?.reply === true && data.from !== 'user'
-            if (asked && data.from === by) return undefined
+            if (asked && data.from === by) return []
             if (!asked) elsewhere = false
             if (data?.routed !== true) echo = false
           }
           const report = !(await underway(host, tx, id))
+          const up = (body: string, options: Route['options']) => [
+            {
+              to: by,
+              text: body,
+              requestId: `route:${answer}`,
+              options: { note: !report, report, ...options },
+            },
+          ]
           if (elsewhere) {
-            if (!report) return undefined
+            if (!report) return []
             // Answering them ended the branch's work, though, and the starter may have had its last update only as a
             // note: it becomes the report, so the starter still wakes when the branch stops.
             const last = (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages.findLast(
               (m) => (m.from === id && m.to === by) || (m.from === by && m.to === id),
             )
-            if (last?.from !== id || last.reply || last.report || last.re !== undefined)
-              return undefined
-            return { text: last.text, to: by, report }
+            if (last?.from !== id || last.reply || last.report || last.re !== undefined) return []
+            return up(last.text, {})
           }
-          return { text, to: by, report, echo }
+          return up(text, { echo })
         }, ctx)
-        if (routed?.text.trim())
-          await send(host, id, { to: `#${routed.to}`, text: routed.text, reply: false }, ctx, {
-            requestId: `route:${answer}`,
-            ...('report' in routed
-              ? { note: !routed.report, report: routed.report, echo: routed.echo }
-              : { routed: true }),
-          })
+        for (const { to, text, requestId, options } of routed)
+          if (text.trim())
+            await send(host, id, { to: `#${to}`, text, reply: false }, ctx, {
+              requestId,
+              ...options,
+            })
         await runtime.commit(() => terminal, ctx)
       },
     },
