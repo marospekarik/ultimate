@@ -80,13 +80,17 @@ export default function cfAccess(host: ExtensionHost) {
       config.allow.some((email) => typeof email !== 'string' || !email)
     )
       throw new Error('cfAccess needs team, aud, origin and allow (an array of email addresses)')
+    if (new URL(config.origin).origin !== config.origin)
+      throw new Error('cfAccess.origin must be a bare origin such as https://ultimate.example.com')
     remove = host.access.allow({
       origin: config.origin,
       verify: async ({ headers }) => {
         const token = headers['cf-access-jwt-assertion']
         if (typeof token !== 'string') return undefined
         const kid = decode(token.split('.')[0] ?? '')?.kid
-        if (!keys.some((key) => key.kid === kid)) await refresh(config.team)
+        // Known keys are re-read every ten minutes too, so a key Cloudflare withdraws stops being trusted.
+        if (!keys.some((key) => key.kid === kid) || Date.now() - fetchedAt > 600_000)
+          await refresh(config.team)
         const login = verifyToken(token, keys, config)
         return login ? { login } : undefined
       },
