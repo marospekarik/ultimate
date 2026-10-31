@@ -5,13 +5,6 @@ import type { MessagesData, Message, Remote } from './refs.ts'
 export const remoteLabel = (remote: Pick<Remote, 'project' | 'machine'>) =>
   `@ultimate@${remote.project} on ${remote.machine}`
 
-/** Whether tool call `call` ended in an error, from its stored result. */
-export const callFailed = (entries: readonly EntryRecord[], call: string) =>
-  entries.some((entry) => {
-    const message = entry.model?.[0]
-    return message?.role === 'toolResult' && message.toolCallId === call && message.isError
-  })
-
 /** Only incoming requests belong to an answer, never the outgoing reply log item. */
 export function answeredMessages(messages: Message[], conversation: number, entry: number) {
   return messages.filter((message) => message.to === conversation && message.answer === entry)
@@ -86,8 +79,8 @@ export function conversationState(
 
 /**
  * Whether conversation `id` waits on the primary agent: a reply-enabled message to it is open, or its latest report
- * (a routed final answer after it stopped with nothing under way) came after the primary agent's latest message to it
- * and after it was last concluded.
+ * (a routed final answer after it stopped with nothing under way) or reply to the primary agent's message came after
+ * the primary agent's latest message to it and after it was last concluded.
  */
 function awaitsPrimary(
   id: number,
@@ -100,7 +93,8 @@ function awaitsPrimary(
   for (const message of log.messages) {
     if (message.from === id && message.to === primary) {
       if (isOpen(message)) return true
-      if (message.report && !settled(message, concludedSince)) reported = true
+      if ((message.report || message.re !== undefined) && !settled(message, concludedSince))
+        reported = true
     } else if (message.from === primary && message.to === id) reported = false
   }
   return reported
@@ -204,13 +198,15 @@ export function backgroundRow(
 /**
  * Whether a row of @ultimate's compact transcript is the conversation itself, what the user reads: their inputs, @ultimate's
  * messages and answers to them. Everything between two such rows recedes; cards that ask the user to act (`attention`
- * renderers) stay out of it too.
+ * renderers) stay out of it too. `hidden` for a row that renders nothing in compact mode, or that a stretch's line does
+ * not count: a system prompt change.
  */
 export function threadRow(
   row: { entry: EntryRecord; calls: readonly { id: string; name: string; arguments: unknown }[] },
   log: Readonly<MessagesData> | null | undefined,
-): boolean {
+): boolean | 'hidden' {
   const { entry, calls } = row
+  if (hiddenKinds.has(entry.kind) || entry.kind === 'pi.system') return 'hidden'
   if (entry.kind === 'pi.user') return true
   if (entry.kind === 'board.message' || entry.kind === 'board.reply')
     return (entry.data as { from?: unknown } | undefined)?.from === 'user'

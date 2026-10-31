@@ -5,7 +5,6 @@ import { callerOf } from '../../extensions/messages/caller.ts'
 import {
   answerTo,
   answeredMessages,
-  callFailed,
   backgroundRow,
   conversationState,
   counterparts,
@@ -182,8 +181,6 @@ const row = (kind: string, data?: object, model?: object, calls: object[] = []) 
   } as unknown as EntryRecord,
   calls: calls as { id: string; name: string; arguments: unknown }[],
 })
-const result = (toolCallId: string, isError: boolean) =>
-  ({ model: [{ role: 'toolResult', toolCallId, isError }] }) as unknown as EntryRecord
 const said = (stopReason: string) => ({ role: 'assistant', stopReason, content: [] })
 
 describe("background in @ultimate's compact transcript", () => {
@@ -276,14 +273,6 @@ describe("background in @ultimate's compact transcript", () => {
       counterparts(row('pi.assistant', undefined, said('toolUse'), [toAgent]), messagesLog),
     ).toEqual([5])
     expect(counterparts(row('pi.assistant', undefined, said('stop')), messagesLog)).toEqual([4])
-  })
-
-  it('tells a failed call from one that ran by its stored result', () => {
-    const entries = [result('branch-1', true), result('branch-2', false)]
-    expect(callFailed(entries, 'branch-1')).toBe(true)
-    expect(callFailed(entries, 'branch-2')).toBe(false)
-    // Still running: no result yet.
-    expect(callFailed(entries, 'branch-3')).toBe(false)
   })
 
   it('pairs a question with your answer', () => {

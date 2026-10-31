@@ -219,7 +219,7 @@ type Core = {
   generation: number
   stderr: string
   messages: ChildMessage[]
-  reports: Map<'web' | 'services' | 'access', CoreReport>
+  reports: Map<'web' | 'access', CoreReport>
 }
 function wait(
   core: Core,

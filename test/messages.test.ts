@@ -259,6 +259,16 @@ async function fixture(
       return fauxAssistantMessage([fauxToolCall('hold', {})], { stopReason: 'toolUse' })
     if (last.role === 'user' && text.startsWith('Message from') && text.includes('NOANSWER'))
       return fauxAssistantMessage([])
+    // @ultimate (#1) answers a branch's reply or report only to weigh in: any other final answer would go down to it.
+    const fromBranch = /^(Reply|Message) from #(\d+)/.exec(text)
+    if (
+      last.role === 'user' &&
+      fromBranch &&
+      fromBranch[2] !== '1' &&
+      (fromBranch[1] === 'Reply' || text.includes('\nOne-way message:')) &&
+      !text.includes('WEIGH')
+    )
+      return fauxAssistantMessage([])
     if (last.role === 'user' && text.startsWith('Message from') && text.includes('\nASK'))
       return fauxAssistantMessage([fauxText('Scope changed. Proceed?\n1. Yes\n2. No')])
     return fauxAssistantMessage([fauxText(last.role === 'toolResult' ? 'Done' : `Answer: ${text}`)])
@@ -1297,7 +1307,7 @@ it('forwards tool-result images, finds latest past a page, and checks every imag
   expect(f.observed.join('\n')).toContain(`entry ${elsewhere} is not in this conversation`)
   expect((await f.log())!.messages.filter((m) => m.from === 1)).toHaveLength(1)
 })
-async function branched(f: Awaited<ReturnType<typeof fixture>>) {
+async function branched(f: Awaited<ReturnType<typeof fixture>>, prompt = 'Explore') {
   const tool = (await f.opened.root.agent(context)).deferred.find(
     (candidate) => candidate.name === 'branch',
   )!
@@ -1306,7 +1316,7 @@ async function branched(f: Awaited<ReturnType<typeof fixture>>) {
     await configure(tx, f.opened.root.id, { modelTools: { add: [tool] } })
   }, context)
   await f.opened.root.submit(
-    { type: 'input', content: 'BRANCH ' + JSON.stringify({ prompt: 'Explore', isolated: false }) },
+    { type: 'input', content: 'BRANCH ' + JSON.stringify({ prompt, isolated: false }) },
     context,
   )
   await until(async () => (await replies(f)).length === 1)
@@ -1533,6 +1543,28 @@ it("places a branch's one-way message to its starter as a note", async () => {
   expect(note?.data).toMatchObject({ delivery: 'note' })
   expect(note?.input).toBeUndefined()
   view.dispose()
+})
+it("routes @ultimate's final answer to a branch's reply back to the branch, once", async () => {
+  // #468703 replied with its decisions; @ultimate's weigh-in, a final answer to that reply, stayed in its own transcript.
+  const f = await fixture()
+  const b = await branched(f, 'Explore, then WEIGH')
+  await until(async () => (await f.log())!.messages.some((m) => m.from === 1 && m.routed))
+  await b.settled()
+  await b.branch.waitForIdle(context)
+  await b.settled()
+  await f.opened.root.waitForIdle(context)
+  await b.settled()
+  const toBranch = (await f.log())!.messages.filter((m) => m.from === 1 && m.to === b.id)
+  expect(toBranch.map((m) => [m.reply, m.routed])).toEqual([
+    [true, undefined],
+    [false, true],
+  ])
+  expect(toBranch[1].text).toContain('Reply from')
+  // The branch woke, and its answer to the routed weigh-in is an echo: @ultimate's answer to it stays local.
+  expect((await b.from()).map((m) => [m.re, m.report, m.echo])).toEqual([
+    [1, undefined, undefined],
+    [undefined, true, true],
+  ])
 })
 it("does not route an answer to the starter's reply-enabled message", async () => {
   const f = await fixture()

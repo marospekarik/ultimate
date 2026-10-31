@@ -72,6 +72,10 @@ export async function send(
     device?: Device
     /** A branch's final answer routed as its report: the branch shows as awaiting its starter. */
     report?: boolean
+    /** The starter's final answer routed down to the branch it answers. */
+    routed?: boolean
+    /** A branch's report that answers routed answers only. */
+    echo?: boolean
   } = {},
 ) {
   const { taskId, callId, requestId, answerId, device } = options
@@ -191,6 +195,8 @@ export async function send(
       ...(images ? { images } : {}),
       ...(questions ? { questions } : {}),
       ...(options.report ? { report: true as const } : {}),
+      ...(options.routed ? { routed: true as const } : {}),
+      ...(options.echo ? { echo: true as const } : {}),
     })
     await host.emit(tx, MessageSent, {
       message: message.id,

@@ -14,15 +14,14 @@ import {
 } from '@/sdk'
 import {
   Address,
-  BackgroundSummary,
   MessageInput,
   BranchCall,
   CompactAnswer,
   MessageCall,
+  StretchSummary,
 } from './cards.tsx'
 import {
   answeredMessages,
-  backgroundRow,
   emptyMessages,
   scriptMessaged,
   threadRow,
@@ -107,11 +106,9 @@ export default defineWebExtension({
       (call, docs) => scriptMessaged(call, docs.board as MessagesData | null | undefined),
     ],
     docs: ['board', StandingDoc.kind],
-    // Traffic between agents is background to your conversation with @ultimate: each stretch of it folds into one line.
-    quiet: (row, docs) => backgroundRow(row, docs.board as MessagesData | null | undefined),
-    summary: BackgroundSummary,
-    // Your inputs and @ultimate's messages to you are what you read; everything between recedes.
+    // Your inputs and @ultimate's messages to you are what you read; everything between recedes into one line.
     thread: (row, docs) => threadRow(row, docs.board as MessagesData | null | undefined),
+    summary: StretchSummary,
   },
   answerLabels: [MessageAnswerLabel],
   // The `branch` tool labels the coordinator branches it starts; the title bar names their kind before the agent.

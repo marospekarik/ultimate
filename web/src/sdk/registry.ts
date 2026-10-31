@@ -7,7 +7,6 @@ import type {
   CodeBlockRenderer,
   CompactCallTest,
   CompactDocs,
-  CompactQuietTest,
   CompactRow,
   CompactSummaryProps,
   CommandContribution,
@@ -16,7 +15,6 @@ import type {
   DocumentContribution,
   EntryRenderer,
   InboxRenderer,
-  IntroContribution,
   LinkRenderer,
   PanelContribution,
   SlotName,
@@ -144,21 +142,10 @@ const shapes: Record<keyof WebExtension, [Check, string]> = {
       when: isFunction,
       tools: optional(arrayOf((tool) => isString(tool) || isFunction(tool))),
       docs: optional(arrayOf(isString)),
-      quiet: optional(isFunction),
-      summary: optional(isComponent),
       thread: optional(isFunction),
+      summary: optional(isComponent),
     }),
-    'a { when, tools?, docs?, quiet?, summary?, thread? } object',
-  ],
-  intro: [
-    fields({
-      when: isFunction,
-      title: isString,
-      hint: optional(isString),
-      placeholder: optional(isString),
-      card: optional(isComponent),
-    }),
-    'a { when, title, hint?, placeholder?, card? } object',
+    'a { when, tools?, docs?, thread?, summary? } object',
   ],
   documents: [
     arrayOf(
@@ -463,34 +450,6 @@ export function documentItems(records: readonly ExtensionRecord[]): Map<string, 
   return byKind
 }
 
-/**
- * The last facet's intro whose `when` matches `conversation`, with the facet's name and version for its card's error
- * boundary; a throwing `when` is reported and skipped.
- */
-export function introOf(
-  records: readonly ExtensionRecord[],
-  conversation: ConversationSummary | undefined,
-  report: (extension: string, error: unknown) => void,
-): (IntroContribution & { extension: string; version: number }) | undefined {
-  if (!conversation) return undefined
-  const record = records.findLast(({ name, extension }) => {
-    if (!extension?.intro) return false
-    try {
-      return extension.intro.when(conversation)
-    } catch (error) {
-      report(name, error)
-      return false
-    }
-  })
-  return (
-    record?.extension?.intro && {
-      ...record.extension.intro,
-      extension: record.name,
-      version: record.version,
-    }
-  )
-}
-
 export function composerRenderers(
   records: readonly ExtensionRecord[],
 ): { extension: string; version: number; component: ComposerRenderer }[] {
@@ -602,8 +561,7 @@ export function compactTools(
 ):
   | {
       keeps: CompactCallTest
-      quiet: CompactQuietTest
-      thread?: (row: CompactRow, docs: CompactDocs) => boolean
+      thread?: (row: CompactRow, docs: CompactDocs) => boolean | 'hidden'
       summary?: {
         extension: string
         version: number
@@ -625,7 +583,7 @@ export function compactTools(
   })
   if (!matching.length) return undefined
   // Rows that ask the user to act (`attention` renderers) never fold: their calls stay out of runs of work, and the rows
-  // count as thread, never background.
+  // count as thread.
   const asks = (kind: 'entries' | 'tools') =>
     new Set(
       records.flatMap(({ extension }) =>
@@ -659,22 +617,10 @@ export function compactTools(
           return false
         }
       }),
-    quiet: (row, docs) => {
-      if (asking(row)) return false
-      const verdicts = matching.map(({ name, compact }) => {
-        try {
-          return compact.quiet?.(row, docs) ?? false
-        } catch (error) {
-          report(name, error)
-          return false
-        }
-      })
-      return verdicts.includes(true) || (verdicts.includes('hidden') ? 'hidden' : false)
-    },
     thread: matching.some(({ compact }) => compact.thread)
-      ? (row, docs) =>
-          asking(row) ||
-          matching.some(({ name, compact }) => {
+      ? (row, docs) => {
+          if (asking(row)) return true
+          const verdicts = matching.map(({ name, compact }) => {
             try {
               return compact.thread?.(row, docs) ?? false
             } catch (error) {
@@ -683,6 +629,11 @@ export function compactTools(
               return true
             }
           })
+          // Hidden only when every facet says so: a row any facet shows counts in its stretch.
+          return (
+            verdicts.includes(true) || (verdicts.every((v) => v === 'hidden') ? 'hidden' : false)
+          )
+        }
       : undefined,
     summary: matching.flatMap(({ name, version, compact }) =>
       compact.summary ? [{ extension: name, version, component: compact.summary }] : [],

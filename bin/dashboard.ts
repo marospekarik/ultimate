@@ -2,7 +2,6 @@ import { appendFileSync } from 'node:fs'
 import { stripVTControlCharacters } from 'node:util'
 import { createLogUpdate } from 'log-update'
 import type { CoreReport } from '../server/supervisor-protocol.ts'
-import type { ServiceInfo } from '../server/services.ts'
 
 const plain = (text: string) =>
   // Child diagnostics must not be able to control the terminal, including carriage returns.
@@ -17,7 +16,6 @@ export function dashboard(logPath: string, output: NodeJS.WriteStream = process.
   let url = ''
   let core: { generation: number; pid?: number } | undefined
   let web = 'waiting'
-  let services: ServiceInfo[] = []
   let origins: string[] = []
   let last = ''
   let logFailed = false
@@ -36,10 +34,6 @@ export function dashboard(logPath: string, output: NodeJS.WriteStream = process.
         `  supervisor  ${phase}`,
         `  core        ${core ? `generation ${core.generation} · PID ${core.pid ?? '?'} ` : ''}${core ? (phase === 'checking' ? 'ready' : phase) : 'waiting'}`,
         `  web         ${web} · embedded Vite`,
-        ...services.map(
-          (service) =>
-            `  ${row(service.extension + '/' + service.name)}  ${service.state}${service.detail ? ' · ' + row(service.detail) : ''}`,
-        ),
         `  last        ${row(last) || '—'}`,
         `  log         ${logPath}`,
       ].join('\n'),
@@ -77,7 +71,6 @@ export function dashboard(logPath: string, output: NodeJS.WriteStream = process.
       phase = value
       if (child?.generation !== core?.generation || !child) {
         web = 'waiting'
-        services = []
         origins = []
       }
       core = child
@@ -88,22 +81,10 @@ export function dashboard(logPath: string, output: NodeJS.WriteStream = process.
       else if (message.type === 'web') {
         web = message.state
         log('info', 'web', message.state)
-      } else if (message.type === 'access') {
+      } else {
         // The core logs each change itself (`Ultimate: … (remote)`); the dashboard only keeps the current ones on top.
         origins = message.origins
         draw()
-      } else {
-        services = message.services
-        log(
-          'info',
-          'services',
-          services
-            .map(
-              (service) =>
-                `${service.extension}/${service.name}: ${service.state}${service.detail ? ' · ' + service.detail : ''}`,
-            )
-            .join(', ') || 'none',
-        )
       }
     },
     close() {

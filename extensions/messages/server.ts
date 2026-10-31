@@ -134,7 +134,13 @@ export default function messages(host: ExtensionHost) {
         // Pi upstream: @earendil-works/pi-durable@1.4.0 — patched transactional beforeInput hook.
         beforeInput: (_input, api) => openQuestionsNote(api.tx, api.conversationId, Date.now()),
         onYield: async (_answer, api, ctx) => {
-          const by = (await api.snapshot(Started, api.conversationId, ctx))?.by
+          // A branch's answers go up to its starter; the primary agent's answers to a branch go down to it.
+          let by = (await api.snapshot(Started, api.conversationId, ctx))?.by
+          const down =
+            by === undefined &&
+            (await api.snapshot(Standing, ROOT_CONVERSATION_ID, ctx))?.ultimate ===
+              api.conversationId
+          if (down) by = api.conversationId
           if (by === undefined) return undefined
           await host.harness().commit(async (tx) => {
             // One observer per generation, decided in the commit that creates it.
@@ -147,6 +153,7 @@ export default function messages(host: ExtensionHost) {
                 generation: api.taskId as TaskId<GenerationResult>,
                 inputs: [...((await tx.doc(LiveDoc, api.conversationId)).run?.inputs ?? [])],
                 by,
+                ...(down ? { down } : {}),
               },
               {
                 ownership: { kind: 'conversation' },

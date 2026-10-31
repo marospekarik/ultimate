@@ -20,17 +20,6 @@ for (const tty of [true, false]) {
       view.url('http://127.0.0.1:1234')
       view.lifecycle('ready', { generation: 2, pid: 123 })
       view.report({ type: 'web', state: 'ready' })
-      view.report({
-        type: 'services',
-        services: [
-          {
-            extension: 'automations',
-            name: 'scheduler',
-            state: 'ready',
-            detail: 'durable scheduler',
-          },
-        ],
-      })
       view.log('info', 'web', 'hmr update /web/test.tsx')
       view.log('warn', 'web', '\x1b[31mwarning marker\x1b[0m')
       view.log('error', 'core', 'error marker\nstack line')
@@ -41,7 +30,6 @@ for (const tty of [true, false]) {
       expect(output.includes('\x1b[')).toBe(tty)
       expect(output.includes('generation 2 · PID 123')).toBe(tty)
       expect(output.includes('embedded Vite')).toBe(tty)
-      expect(output).toContain('automations/scheduler')
       expect(output.includes('http://127.0.0.1:1234')).toBe(tty)
       const records = (await readFile(path, 'utf8'))
         .trim()

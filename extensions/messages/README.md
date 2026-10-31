@@ -68,14 +68,21 @@ conversation that started you is a note, and stopping with nothing under way is 
   the `workspaces.branches` extension point that this extension provides (`starter`, `underway`).
 - **Everything else wakes.** Reply-enabled messages, and one-way messages from anyone who is not the recipient's
   child or branch (another branch, an automation's escalation, another project's Ultimate), are inputs.
+- **Answers back down.** The primary agent's runs get a `board.route` task too (`down`). When every input of the run
+  was a reply or one-way message (a report) from one branch it started, the branch is not concluded and the run sent
+  that branch no message, its final answer goes to the branch as a one-way message with `routed: true`, which wakes
+  it. So a weigh-in reaches the branch whether its decisions came as the reply to the branch's first message or as a
+  later report. User input, notes, landing cards and runs answering several branches (a fan-out) route nothing, and a
+  message to the user ends the run without a final answer.
 
-Routing cannot loop: it goes only from a branch to its starter, which existed before it, and a routed message is
-one-way, so the starter's answer to it goes nowhere. Request id `route:<answer entry>` deduplicates delivery in the
-branch's `board.requests`, so a restart never sends an answer twice.
+Routing cannot loop: a branch's report that answers only routed messages carries `echo: true`, and the starter's
+answer to an echo stays local, so it goes back and forth at most once without an explicit `message`. Request id
+`route:<answer entry>` deduplicates delivery in the sender's `board.requests`, so a restart never sends an answer
+twice.
 
-A branch whose latest report came after the starter's latest message to it shows as `awaiting @ultimate`
-(`conversationState` in `data.tsx`), as does one with a reply-enabled message to @ultimate still open; @ultimate
-messaging the branch, or concluding it, clears it.
+A branch whose latest report, or reply to the starter's message, came after the starter's latest message to it shows
+as `awaiting @ultimate` (`conversationState` in `data.tsx`), as does one with a reply-enabled message to @ultimate
+still open; @ultimate messaging the branch (a routed answer included), or concluding it, clears it.
 
 Sending to `user` writes a message
 shown in the sender's transcript; it starts no run. A branch's reply-expected message to `user` also writes a
