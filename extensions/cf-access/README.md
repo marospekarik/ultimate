@@ -23,9 +23,9 @@ Without `cfAccess` the extension does nothing. Point the tunnel (`cloudflared`) 
 Cloudflare Access adds a signed `Cf-Access-Jwt-Assertion` to every request it forwards. A request is admitted when:
 
 - the Host is `origin`'s and any Origin equals it (the core's rules for every remote client, including fetch-metadata checks and forwarded-header handling, apply unchanged);
-- the token is signed RS256 by a key in `https://<team>.cloudflareaccess.com/cdn-cgi/access/certs` (fetched when a key id is unknown, at most once a minute);
+- the token is signed RS256 by a key in `https://<team>.cloudflareaccess.com/cdn-cgi/access/certs` (fetched when a key id is unknown and every ten minutes, at most once a minute, so a withdrawn key stops being trusted);
 - its issuer is that team, its audience contains `aud`, it has not expired, and its email is in `allow`.
 
-A forged or copied header fails the signature check. Revoke a guest by removing the email from `allow` (applies on save) and from the Access policy; sessions end at the token's expiry, so also revoke the user's sessions in Cloudflare for an immediate cut-off.
+A forged header fails the signature check; a copied one stays valid until the token expires. Revoke a guest by removing the email from `allow` (applies on save) and from the Access policy; sessions end at the token's expiry, so also revoke the user's sessions in Cloudflare for an immediate cut-off.
 
 The local listener stays loopback-only: anything on the same machine can reach it without the tunnel, so give the machine to Ultimate and `cloudflared` alone.
