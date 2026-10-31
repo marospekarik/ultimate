@@ -16,7 +16,7 @@ export interface CfAccessSettings {
   /** Email addresses admitted, compared case-insensitively. */
   allow: string[]
 }
-type Jwk = { kid?: string; [field: string]: unknown }
+type Jwk = { kid?: string; kty?: string; n?: string; e?: string }
 
 const decode = (part: string) => JSON.parse(Buffer.from(part, 'base64url').toString('utf8'))
 
