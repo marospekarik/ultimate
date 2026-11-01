@@ -18,6 +18,8 @@ import { Standing } from '../extensions/subagents/api.ts'
 import { parseDefinition } from '../lib/agents.ts'
 import { fauxServer, seedTally, sourceCopy, temp, removeTemp, until, post } from './helpers.ts'
 
+// Each test boots a full server (Vite, extensions); on a loaded machine more than two at once push the slowest past its timeout.
+vi.setConfig({ maxConcurrency: 2 })
 type Server = Awaited<ReturnType<typeof fauxServer>>
 const servers: Server[] = []
 const homes: string[] = []
