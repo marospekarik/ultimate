@@ -4,7 +4,7 @@
   },
   "modelFamilies": {
     "families": {
-      "lead": { "model": "claude-code/claude-sonnet-5-5", "thinking": "high", "color": "orange" },
+      "lead": { "model": "ollama/kimi-k2.6:cloud", "thinking": "high", "color": "orange" },
       "review": { "model": "ollama/deepseek-v4-pro:cloud", "thinking": "high" },
       "fast": { "model": "ollama/glm-5.3:cloud" }
     },
