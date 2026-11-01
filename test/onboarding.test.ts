@@ -10,6 +10,9 @@ import { projectDecision } from '../server/project-setup.ts'
 import { updateSettings } from '../lib/settings.ts'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 
+// Each test boots a full server; on a loaded machine more than two at once push the slowest past its timeout.
+vi.setConfig({ maxConcurrency: 2 })
+
 it.concurrent('gates project resources, remembers choices, and applies onboarding settings actions live', async () => {
   const home = await temp('ultimate-onboarding-')
   const project = join(home, 'project')
