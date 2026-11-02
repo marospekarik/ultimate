@@ -29,7 +29,7 @@ import type {
   Extension,
   HarnessSettings,
   ModelRef,
-  ReportInfo,
+  Report,
   CompactionPolicy,
   Page,
   SubmissionQuery,
@@ -38,23 +38,24 @@ import type {
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node'
 import { createBuild } from './build.ts'
+import { spawn } from '../lib/spawn.ts'
 import { applyHttpProxySettings, configureHttpDispatcher } from './http.ts'
 import type { Notice } from '../shared/protocol.ts'
 
 export { context }
 
 /** A notice of a Pi Durable report, led by what failed: the task and conversation, extension or host callback. */
-export function reportMessage(error: unknown, info: ReportInfo): string {
+export function reportMessage({ error, ...info }: Report): string {
   const parts: string[] = []
   if ('task' in info && info.task)
     parts.push(`task #${info.task.id} (${info.task.kind}) in #${info.task.conversationId}`)
   else if ('conversationId' in info && info.conversationId !== undefined)
     parts.push(`#${info.conversationId}`)
   if ('extension' in info && info.extension) parts.push(`extension ${info.extension}`)
-  if (info.type === 'host_error') parts.push(`host callback ${info.callback}`)
+  if (info.kind === 'host_error') parts.push(`host callback ${info.callback}`)
   const reason = 'reason' in info ? ` (${info.reason.replaceAll('_', ' ')})` : ''
   const about = parts.length > 0 ? `: ${parts.join(', ')}` : ''
-  return `${info.type.replaceAll('_', ' ')}${reason}${about}. ${String(error)}`
+  return `${info.kind.replaceAll('_', ' ')}${reason}${about}. ${String(error)}`
 }
 
 /**
@@ -145,7 +146,8 @@ export async function prepareHarness(options: HostOptions) {
   const env = ({ cwd = projectRoot }: EnvTarget) => {
     let found = envs.get(cwd)
     if (!found) {
-      found = new NodeExecutionEnv({ cwd })
+      // Agents' commands start from the process helper (the patched spawn option), never by forking this process.
+      found = new NodeExecutionEnv({ cwd, spawn })
       envs.set(cwd, found)
     }
     return found
@@ -264,8 +266,8 @@ export async function prepareHarness(options: HostOptions) {
                 ),
             ),
             env,
-            onReport: (error, info) =>
-              options.report?.({ level: 'error', message: reportMessage(error, info) }),
+            onReport: (report) =>
+              options.report?.({ level: 'error', message: reportMessage(report) }),
           },
           context,
         )
