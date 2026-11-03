@@ -4,9 +4,7 @@
   },
   "modelFamilies": {
     "families": {
-      "lead": { "model": "ollama/glm-5.3:cloud", "thinking": "high", "color": "orange" },
-      "review": { "model": "ollama/deepseek-v4-pro:cloud", "thinking": "high" },
-      "fast": { "model": "ollama/glm-5.3:cloud" }
+      "lead": { "color": "orange" }
     },
     "assign": {
       "preview": "fast"
