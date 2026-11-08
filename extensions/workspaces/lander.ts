@@ -85,7 +85,12 @@ export const log = (
 ) => {
   const at = Date.now()
   if (data.step)
-    entry.steps.push({ step: data.step, at, ...(data.check ? { check: data.check } : {}) })
+    entry.steps.push({
+      step: data.step,
+      at,
+      ...(data.runs ? { runs: data.runs } : {}),
+      ...(data.check ? { check: data.check } : {}),
+    })
   return tx.appendEntry(LanderLog, id, {
     data: {
       submission: entry.id,
@@ -226,7 +231,10 @@ export async function runLanderCheck(
   } finally {
     clearTimeout(stallTimer)
     clearTimeout(totalTimer)
-    await rm(tmp, { recursive: true, force: true })
+    // Best effort: detached processes an e2e test leaves behind (supervisors, preview homes) can still be writing here,
+    // the same race #43 fixed in test/sweep-temp.ts. Without retry and catch, rm throws ENOTEMPTY and refuses a landing
+    // whose checks passed. sweepChecks removes the leftover at the next start. Can go once no check leaves writers.
+    await rm(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }).catch(() => {})
   }
 }
 
@@ -370,13 +378,22 @@ export function createLander(
           )?.landed
         /**
          * Log a step; a check's `output` tail goes to the lander log only, not the submission's steps. A run check's
-         * step also emits `workspaces.check`, with `ran` its duration and whether a watchdog stopped it.
+         * step also emits `workspaces.check`, with `ran` its duration and whether a watchdog stopped it. A step that
+         * starts a check names its command in `runs`.
          */
         const step = (
           text: string,
-          result?: LanderEntry['check'],
-          output?: string,
-          ran?: { ms: number; timedOut?: boolean },
+          {
+            runs,
+            result,
+            output,
+            ran,
+          }: {
+            runs?: string
+            result?: LanderEntry['check']
+            output?: string
+            ran?: { ms: number; timedOut?: boolean }
+          } = {},
         ) =>
           runtime.commit(async (tx) => {
             const saved = (await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).queue.find(
@@ -385,6 +402,7 @@ export function createLander(
             saved.step = text
             await log(tx, runtime.conversationId, saved, {
               step: text,
+              ...(runs ? { runs } : {}),
               ...(result ? { check: result } : {}),
               ...(output ? { output } : {}),
             })
@@ -601,7 +619,8 @@ export function createLander(
               if (
                 await merge(
                   entry.tip,
-                  `Merge ${entry.tip.slice(0, 7)} from #${entry.conversationId} into ${target}`,
+                  // The trailer labels the landing in first-parent catch-up rows (lineage/catchup.ts).
+                  `Merge ${entry.tip.slice(0, 7)} from #${entry.conversationId} into ${target}\n\nUltimate-Conversation: ${entry.conversationId}`,
                   `it conflicts with ${target} in`,
                   `Merge ${target} into your workspace, resolve, verify and submit again.`,
                 )
@@ -637,18 +656,17 @@ export function createLander(
                 const key = `check:${id}:${attempt}:${Array.isArray(group) ? `${position}.${member}` : position}`
                 let first = await runtime.memo<'passed' | 'failed'>(key, context)
                 if (!first) {
-                  await step(`checking: ${command}`)
+                  await step(`checking: ${command}`, { runs: command })
                   const began = performance.now()
                   const ran = await run(command, member)
                   const result = ran.failure === undefined ? 'passed' : 'failed'
                   // Logged before the memo: a crash in between reruns the check and logs it again, as it ran.
                   // A failure keeps its output tail, so a check that passes on its rerun can still be diagnosed.
-                  await step(
-                    `checked: ${command}`,
-                    { command, result, ...(ran.summary ? { summary: ran.summary } : {}) },
-                    ran.failure,
-                    { ms: performance.now() - began, timedOut: ran.timedOut },
-                  )
+                  await step(`checked: ${command}`, {
+                    result: { command, result, ...(ran.summary ? { summary: ran.summary } : {}) },
+                    output: ran.failure,
+                    ran: { ms: performance.now() - began, timedOut: ran.timedOut },
+                  })
                   first = await runtime.memo(key, result, context)
                 }
                 if (first === 'passed') return {}
@@ -656,21 +674,19 @@ export function createLander(
                 // neither grants a third run nor loses the failure.
                 let rerun = await runtime.memo<{ failure?: string }>(`${key}:rerun`, context)
                 if (!rerun) {
-                  await step(`rerunning: ${command}`)
+                  await step(`rerunning: ${command}`, { runs: command })
                   const began = performance.now()
                   const ran = await run(command, member)
                   const timing = { ms: performance.now() - began, timedOut: ran.timedOut }
                   if (ran.failure === undefined)
-                    await step(
-                      `checked: ${command}`,
-                      {
+                    await step(`checked: ${command}`, {
+                      result: {
                         command,
                         result: 'flaky',
                         ...(ran.summary ? { summary: ran.summary } : {}),
                       },
-                      undefined,
-                      timing,
-                    )
+                      ran: timing,
+                    })
                   else
                     await runtime.commit(async (tx) => {
                       await host.emit(tx, CheckRan, {

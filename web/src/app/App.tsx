@@ -19,7 +19,6 @@ import { HOME, surfaceItems } from '../sdk/registry.ts'
 import type { SurfaceItem } from '../sdk/registry.ts'
 import { rendered } from '../sdk/resume.ts'
 import { ExtensionErrors, Slot } from './boundary.tsx'
-import { ReloadPrompt } from './reload-prompt.tsx'
 import { useShortcuts } from './keyboard.ts'
 import { CommandPalette } from './palette.tsx'
 import { Conversation, Header, StatusLine } from './primitives.tsx'
@@ -188,7 +187,6 @@ export function App() {
       {loaded && <Shortcuts />}
       <CommandPalette />
       <ExtensionErrors />
-      <ReloadPrompt />
       <Slot name="overlay" />
     </TooltipProvider>
   )

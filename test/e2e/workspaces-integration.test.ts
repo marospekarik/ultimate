@@ -1246,6 +1246,14 @@ it.concurrent('lands two submissions in order onto a moved target and reports bo
       `^Merge .* from #${second} into main\nMerge .* from #${first} into main\nmoved.txt$`,
     ),
   )
+  expect(
+    await git(
+      f.projectRoot,
+      'log',
+      '-1',
+      '--format=%(trailers:key=Ultimate-Conversation,valueonly)',
+    ),
+  ).toBe(String(second))
   expect(await git(f.projectRoot, 'status', '--porcelain')).toBe('')
   for (const name of ['one.txt', 'two.txt', 'moved.txt'])
     expect(await readFile(join(f.projectRoot, name), 'utf8')).toBe(name)
@@ -1277,6 +1285,7 @@ it.concurrent('lands two submissions in order onto a moved target and reports bo
     'fast-forwarding',
     'landed',
   ])
+  expect(firstLog[5].runs).toBe('test -f base.txt')
   expect(firstLog[6].check).toEqual({ command: 'test -f base.txt', result: 'passed' })
   const landedOne = firstLog.at(-1)!
   expect(landedOne).toMatchObject({ conversationId: first, outcome: 'landed' })
