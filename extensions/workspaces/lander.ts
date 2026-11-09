@@ -11,8 +11,9 @@ import { defineEntry, defineTask, ROOT_CONVERSATION_ID } from '@earendil-works/p
 import type { ConversationDocToken, ConversationId, Tx } from '@earendil-works/pi-durable'
 import { git } from '../../lib/git.ts'
 import { runGroup, sweepPidFiles } from '../../lib/process-group.ts'
+import { weightDelta } from '../../lib/token-weight.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { CheckRan, SubmissionLanded } from './api.ts'
+import { CheckRan, SubmissionFailed, SubmissionLanded } from './api.ts'
 import { setup } from './setup.ts'
 import { addCheckout, treePath } from './tree.ts'
 import type { Landed, LanderEntry, LanderOutcome, QueueEntry, WorkspaceIndex } from './types.ts'
@@ -301,6 +302,7 @@ const landedOutcome = (landed: Landed): LanderOutcome => ({
   commits: landed.commits,
   paths: landed.paths,
   flaky: landed.flaky,
+  ...(landed.weight ? { weight: landed.weight } : {}),
 })
 type State =
   | { phase: 'next' }
@@ -434,6 +436,13 @@ export function createLander(
             }
             for (const old of Object.keys(draft.results).slice(0, -kept)) delete draft.results[old]
             await log(tx, runtime.conversationId, entry, outcome)
+            if (outcome.outcome === 'failed')
+              await host.emit(tx, SubmissionFailed, {
+                submission: id,
+                conversationId: entry.conversationId,
+                target: entry.target,
+                reason: outcome.reason ?? '',
+              })
             if (outcome.outcome === 'landed') {
               const subject = entry.subject ?? {}
               const commits = (outcome.commits ?? []).map((commit) => {
@@ -774,6 +783,7 @@ export function createLander(
             commits: lines(await git(source, 'log', '--oneline', `${base}..${integrated}`)),
             paths: lines(await git(source, 'diff', '--name-only', base, integrated)),
             flaky,
+            weight: await weightDelta(source, base, integrated),
           }
           let landed = candidate
           await runtime.commit(async (tx) => {
