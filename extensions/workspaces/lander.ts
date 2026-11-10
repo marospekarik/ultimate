@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { stripVTControlCharacters } from 'node:util'
 import { copyJson } from '@earendil-works/chord'
 import type { Context } from '@earendil-works/chord'
-import type { JsonObject } from '@earendil-works/pi-durable'
+import type { JsonObject, TaskRuntime } from '@earendil-works/pi-durable'
 import { withAbortSignal } from '@earendil-works/chord/context'
 import { defineEntry, defineTask, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationDocToken, ConversationId, Tx } from '@earendil-works/pi-durable'
@@ -15,6 +15,8 @@ import { runGroup, sweepPidFiles } from '../../lib/process-group.ts'
 import { weightDelta } from '../../lib/token-weight.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { CheckRan, SubmissionFailed, SubmissionLanded } from './api.ts'
+import { decidePolls, parsePr, realGh } from './pr.ts'
+import type { Gh, PrState } from './pr.ts'
 import { setup } from './setup.ts'
 import { addCheckout, treePath } from './tree.ts'
 import type { Landed, LanderEntry, LanderOutcome, QueueEntry, WorkspaceIndex } from './types.ts'
@@ -111,7 +113,15 @@ export const log = (
 }
 type Host = Pick<
   ExtensionHost,
-  'home' | 'ultimateRoot' | 'harness' | 'projectSettings' | 'doc' | 'metadata' | 'notice' | 'emit'
+  | 'home'
+  | 'ultimateRoot'
+  | 'harness'
+  | 'projectSettings'
+  | 'doc'
+  | 'metadata'
+  | 'notice'
+  | 'emit'
+  | 'resource'
 >
 /** One check command, with its own total limit in seconds when set. */
 type Check = { command: string; timeout?: number }
@@ -119,7 +129,11 @@ type Check = { command: string; timeout?: number }
 type Settings = {
   checks: (Check | Check[])[]
   push?: string
+  /** Pull request mode: push the conversation's branch to `remote` and open a PR against its `base`. */
+  pr?: { remote: string; base: string }
 }
+/** How long the lander waits before asking GitHub again about open pull requests. */
+const pollInterval = 5 * 60 * 1000
 /** Bounded retries when the target moves while a submission is integrated. */
 const attempts = 3
 /** Seconds without output and total seconds allowed for one check, unless the check sets its own `timeout`. */
@@ -251,7 +265,7 @@ const parseCheck = (value: unknown): Check | undefined => {
 }
 export const landerSettings = async (host: Pick<Host, 'projectSettings'>): Promise<Settings> => {
   const lander = (await host.projectSettings()).lander as
-    | { checks?: unknown; push?: unknown }
+    | { checks?: unknown; push?: unknown; pr?: unknown }
     | undefined
   const entries = lander?.checks ?? []
   const checks = Array.isArray(entries)
@@ -269,10 +283,16 @@ export const landerSettings = async (host: Pick<Host, 'projectSettings'>): Promi
     )
   if (lander?.push !== undefined && typeof lander.push !== 'string')
     throw new Error('lander.push must be a remote name')
+  const pr = parsePr(lander?.pr)
+  if (pr && lander?.push)
+    throw new Error(
+      'lander.pr and lander.push cannot both be set: pr pushes the branch and opens a pull request, push moves the target',
+    )
   return {
     checks: checks as Settings['checks'],
     // A preview never pushes; its git hooks refuse it too (extensions/instance).
     ...(lander?.push && !process.env.ULTIMATE_PREVIEW_BRANCH ? { push: lander.push } : {}),
+    ...(pr && !process.env.ULTIMATE_PREVIEW_BRANCH ? { pr } : {}),
   }
 }
 export const contains = (cwd: string, ancestor: string, descendant: string) =>
@@ -291,6 +311,7 @@ const failure = (error: unknown) => {
 const remote = (cwd: string, signal: AbortSignal, ...args: string[]) =>
   git({ cwd, signal, timeout: 300000 }, ...args)
 
+type Runtime = TaskRuntime<{ source: string }, State, null, object>
 type Prepared = {
   base: string
   integrated: string
@@ -309,6 +330,8 @@ type State =
   | { phase: 'next' }
   /** A rejected push integrates again once. */
   | { phase: 'land'; id: string; attempt: number; pushRetried?: boolean }
+  /** `pr` mode: ask GitHub about the open pull requests of this source; sleep when none ended. */
+  | { phase: 'poll' }
   | {
       phase: 'report'
       id: string
@@ -352,6 +375,76 @@ export function createLander(
     return path
   }
 
+  /** Record the outcome of `entry`, log it and report it to the submitter, in one commit. */
+  function finisher(runtime: Runtime, context: Context, entry: QueueEntry) {
+    const id = entry.id
+    const finish = (text: string, outcome: LanderOutcome) =>
+      runtime.commit(async (tx) => {
+        const draft = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
+        const steps = draft.queue.find((item) => item.id === id)!.steps
+        draft.queue = draft.queue.filter((item) => item.id !== id)
+        if (outcome.sha) draft.items[String(entry.conversationId)].landed = outcome.sha
+        draft.results[id] = {
+          ...outcome,
+          at: entry.at,
+          divergence: entry.divergence,
+          target: entry.target,
+          tip: entry.tip,
+          lander: runtime.conversationId,
+          steps,
+          conversationId: entry.conversationId,
+          ...(entry.subject ? { subject: entry.subject } : {}),
+        }
+        for (const old of Object.keys(draft.results).slice(0, -kept)) delete draft.results[old]
+        await log(tx, runtime.conversationId, entry, outcome)
+        if (outcome.outcome === 'failed')
+          await host.emit(tx, SubmissionFailed, {
+            submission: id,
+            conversationId: entry.conversationId,
+            target: entry.target,
+            reason: outcome.reason ?? '',
+          })
+        if (outcome.outcome === 'landed') {
+          const subject = entry.subject ?? {}
+          const commits = (outcome.commits ?? []).map((commit) => {
+            const space = commit.indexOf(' ')
+            return { sha: commit.slice(0, space), subject: commit.slice(space + 1) }
+          })
+          await host.emit(tx, SubmissionLanded, {
+            submission: id,
+            conversationId: entry.conversationId,
+            at: entry.at,
+            sha: outcome.sha!,
+            base: outcome.base!,
+            target: entry.target,
+            lander: runtime.conversationId,
+            divergence: entry.divergence,
+            title:
+              subject.title ??
+              (await tx.doc(host.metadata, entry.conversationId as ConversationId)).title ??
+              '',
+            ...(subject.summary ? { summary: subject.summary } : {}),
+            ...(subject.feature ? { feature: subject.feature } : {}),
+            commits: commits.slice(0, 10),
+            commitCount: commits.length,
+            paths: (outcome.paths ?? []).slice(0, 8),
+            ...(outcome.pushed ? { pushed: outcome.pushed } : {}),
+          })
+        }
+        return {
+          status: 'running',
+          checkpoint: {
+            phase: 'report',
+            id,
+            conversationId: entry.conversationId,
+            outcome: draft.results[id],
+            text: `[lander] Submission ${id} (#${entry.conversationId}, ${entry.tip.slice(0, 7)}) ${text}\nLog: lander conversation #${runtime.conversationId}.`,
+          },
+        }
+      }, context)
+    return finish
+  }
+
   const Lander = defineTask<{ source: string }, State, null>({
     name: 'workspaces.lander',
     version: 1,
@@ -360,8 +453,11 @@ export function createLander(
       next: (task, runtime, context) =>
         runtime.commit(async (tx) => {
           const index = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
-          const entry = index.queue.find((item) => item.source === task.input.source)
+          const own = index.queue.filter((item) => item.source === task.input.source)
+          // Open pull requests wait in the queue; they are polled once nothing else needs landing.
+          const entry = own.find((item) => item.state !== 'pr')
           if (!entry) {
+            if (own.length) return { status: 'running', checkpoint: { phase: 'poll' } }
             delete index.landers[task.input.source]
             return { status: 'terminal', outcome: { status: 'completed', result: null } }
           }
@@ -417,71 +513,7 @@ export function createLander(
                 ms: Math.round(ran.ms),
               })
           }, context)
-        /** Record the outcome, log it and report it to the submitter, in one commit. */
-        const finish = (text: string, outcome: LanderOutcome) =>
-          runtime.commit(async (tx) => {
-            const draft = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
-            const steps = draft.queue.find((item) => item.id === id)!.steps
-            draft.queue = draft.queue.filter((item) => item.id !== id)
-            if (outcome.sha) draft.items[String(entry.conversationId)].landed = outcome.sha
-            draft.results[id] = {
-              ...outcome,
-              at: entry.at,
-              divergence: entry.divergence,
-              target: entry.target,
-              tip: entry.tip,
-              lander: runtime.conversationId,
-              steps,
-              conversationId: entry.conversationId,
-              ...(entry.subject ? { subject: entry.subject } : {}),
-            }
-            for (const old of Object.keys(draft.results).slice(0, -kept)) delete draft.results[old]
-            await log(tx, runtime.conversationId, entry, outcome)
-            if (outcome.outcome === 'failed')
-              await host.emit(tx, SubmissionFailed, {
-                submission: id,
-                conversationId: entry.conversationId,
-                target: entry.target,
-                reason: outcome.reason ?? '',
-              })
-            if (outcome.outcome === 'landed') {
-              const subject = entry.subject ?? {}
-              const commits = (outcome.commits ?? []).map((commit) => {
-                const space = commit.indexOf(' ')
-                return { sha: commit.slice(0, space), subject: commit.slice(space + 1) }
-              })
-              await host.emit(tx, SubmissionLanded, {
-                submission: id,
-                conversationId: entry.conversationId,
-                at: entry.at,
-                sha: outcome.sha!,
-                base: outcome.base!,
-                target: entry.target,
-                lander: runtime.conversationId,
-                divergence: entry.divergence,
-                title:
-                  subject.title ??
-                  (await tx.doc(host.metadata, entry.conversationId as ConversationId)).title ??
-                  '',
-                ...(subject.summary ? { summary: subject.summary } : {}),
-                ...(subject.feature ? { feature: subject.feature } : {}),
-                commits: commits.slice(0, 10),
-                commitCount: commits.length,
-                paths: (outcome.paths ?? []).slice(0, 8),
-                ...(outcome.pushed ? { pushed: outcome.pushed } : {}),
-              })
-            }
-            return {
-              status: 'running',
-              checkpoint: {
-                phase: 'report',
-                id,
-                conversationId: entry.conversationId,
-                outcome: draft.results[id],
-                text: `[lander] Submission ${id} (#${entry.conversationId}, ${entry.tip.slice(0, 7)}) ${text}\nLog: lander conversation #${runtime.conversationId}.`,
-              },
-            }
-          }, context)
+        const finish = finisher(runtime, context, entry)
         const summary = (landed: Landed, sha: string, how = '') =>
           [
             landed.commits.length
@@ -561,6 +593,111 @@ export function createLander(
             },
           )
         }
+        /**
+         * Push the conversation's own branch and open (or reuse) its pull request; the entry stays queued in state
+         * `pr` until the poll sees the PR merge or close.
+         */
+        const openPullRequest = async (pr: NonNullable<Settings['pr']>, sha: string) => {
+          const gh = host.resource<Gh>('workspaces.gh', () => realGh)
+          const branch = index.items[String(entry.conversationId)].branch
+          // Before pushing anything: a missing or logged-out gh would leave a pushed branch without its PR.
+          try {
+            await gh(source, pr.remote, ['auth', 'status'], signal)
+          } catch (error) {
+            if (signal.aborted) throw error
+            return fail(
+              'GitHub CLI is not usable',
+              failure(error),
+              'Install gh and run `gh auth login`, then submit again.',
+            )
+          }
+          await step(`pushing ${branch} to ${pr.remote}`)
+          try {
+            await remote(source, signal, 'push', '-q', pr.remote, `${sha}:refs/heads/${branch}`)
+          } catch (error) {
+            if (signal.aborted) throw error
+            // Only a resubmit with rewritten history is rejected: this branch belongs to this conversation alone, so it
+            // may be replaced, and only where it still is what we saw.
+            const current = (
+              await remote(source, signal, 'ls-remote', pr.remote, `refs/heads/${branch}`)
+            ).split(/\s/)[0]
+            if (!current) return fail(`${pr.remote} rejected the push of ${branch}`, failure(error))
+            try {
+              await remote(
+                source,
+                signal,
+                'push',
+                '-q',
+                `--force-with-lease=refs/heads/${branch}:${current}`,
+                pr.remote,
+                `${sha}:refs/heads/${branch}`,
+              )
+            } catch (forced) {
+              if (signal.aborted) throw forced
+              return fail(`${pr.remote} rejected the push of ${branch}`, failure(forced))
+            }
+          }
+          const find = async () => {
+            const found = JSON.parse(
+              await gh(
+                source,
+                pr.remote,
+                ['pr', 'list', '--head', branch, '--state', 'open', '--json', 'number,url'],
+                signal,
+              ),
+            ) as { number: number; url: string }[]
+            return found[0]
+          }
+          let found = await runtime.memo<{ number: number; url: string }>(`pr:${id}`, context)
+          if (!found) {
+            let existing = await find()
+            if (!existing) {
+              const subject = entry.subject ?? {}
+              const title = subject.title ?? `${branch} (${sha.slice(0, 7)})`
+              await gh(
+                source,
+                pr.remote,
+                [
+                  'pr',
+                  'create',
+                  '--base',
+                  pr.base,
+                  '--head',
+                  branch,
+                  '--title',
+                  title,
+                  '--body',
+                  [subject.summary, `Diverged from the request: ${entry.divergence}`]
+                    .filter(Boolean)
+                    .join('\n\n'),
+                ],
+                signal,
+              )
+              existing = await find()
+              if (!existing)
+                return fail(`Opened a pull request for ${branch}, but could not read it back`)
+            }
+            found = await runtime.memo(`pr:${id}`, existing, context)
+          }
+          const opened = { number: found.number, url: found.url, head: branch }
+          await runtime.commit(async (tx) => {
+            const draft = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
+            // A resubmit of the same branch updated the pull request the older entry waited on.
+            for (const old of draft.queue.filter(
+              (item) =>
+                item.id !== id &&
+                item.state === 'pr' &&
+                item.conversationId === entry.conversationId,
+            ))
+              draft.queue.splice(draft.queue.indexOf(old), 1)
+            const saved = draft.queue.find((item) => item.id === id)!
+            saved.state = 'pr'
+            saved.pr = opened
+            delete saved.step
+            await log(tx, runtime.conversationId, saved, { step: `opened PR #${opened.number}` })
+            return { status: 'running', checkpoint: { phase: 'next' } }
+          }, context)
+        }
         try {
           const settings = await landerSettings(host)
           // An earlier lander task fast-forwarded this submission and then ended (a reload or fault before its push):
@@ -586,7 +723,8 @@ export function createLander(
             )
             if (!merged) {
               await step('preparing')
-              const base = await git(path, 'rev-parse', 'HEAD')
+              // The target tip the integration started from: what a fast-forward expects to find.
+              const localTip = await git(path, 'rev-parse', 'HEAD')
               /** Merge `commit` into the checkout; true when it conflicted and the submission failed. */
               const merge = async (
                 commit: string,
@@ -625,6 +763,16 @@ export function createLander(
                   }
                 }
               }
+              if (settings.pr) {
+                // The PR merges into the remote base: prove the submission against that, not local main.
+                const { remote: name, base: branch } = settings.pr
+                if (await remote(path, signal, 'ls-remote', name, `refs/heads/${branch}`)) {
+                  await step(`fetching ${name}/${branch}`)
+                  await remote(path, signal, 'fetch', '-q', name, branch)
+                  await git(path, 'checkout', '-q', '--detach', '--force', 'FETCH_HEAD')
+                } else
+                  await step(`${name}/${branch} does not exist yet, starting from local ${target}`)
+              }
               await step('merging')
               if (
                 await merge(
@@ -638,7 +786,7 @@ export function createLander(
                 return
               merged = await runtime.memo(
                 `merged:${id}:${attempt}`,
-                { base, sha: await git(path, 'rev-parse', 'HEAD') },
+                { base: localTip, sha: await git(path, 'rev-parse', 'HEAD') },
                 context,
               )
             }
@@ -746,6 +894,7 @@ export function createLander(
             )
           }
           const { base, integrated, flaky } = prepared
+          if (settings.pr) return await openPullRequest(settings.pr, integrated)
           await step('fast-forwarding')
           let refused: string | undefined
           const moved = await serial(source, async () => {
@@ -800,6 +949,133 @@ export function createLander(
           if (signal.aborted) throw error
           return fail('it failed', failure(error))
         }
+      },
+      /**
+       * Ask GitHub about each open pull request of this source. One that ended is finished like a landing (the
+       * report phase follows and returns to `next`); with none ended, sleep and ask again.
+       */
+      poll: async (task, runtime, context) => {
+        const { source } = task.input
+        const { signal } = runtime
+        const gh = host.resource<Gh>('workspaces.gh', () => realGh)
+        const index = (await runtime.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!
+        const open = index.queue.filter((item) => item.source === source && item.state === 'pr')
+        if (
+          open.length === 0 ||
+          index.queue.some((item) => item.source === source && item.state !== 'pr')
+        )
+          return runtime.commit(
+            () => ({ status: 'running', checkpoint: { phase: 'next' } }),
+            context,
+          )
+        const states: Record<string, PrState | undefined> = {}
+        for (const item of open)
+          try {
+            const view = JSON.parse(
+              await gh(
+                source,
+                (await landerSettings(host)).pr?.remote ?? 'origin',
+                ['pr', 'view', String(item.pr!.number), '--json', 'state,url'],
+                signal,
+              ),
+            ) as { state: PrState }
+            states[item.id] = view.state
+          } catch (error) {
+            if (signal.aborted) throw error
+            // A failed lookup waits for the next poll; the PR stays open in the queue meanwhile.
+            host.notice(`Polling PR #${item.pr!.number} failed: ${String(error)}`)
+          }
+        const decided = decidePolls(open, states)
+        const ended = decided.merged[0] ?? decided.closed[0]
+        if (ended === undefined)
+          return runtime.sleepUntil(runtime.now() + pollInterval, { phase: 'next' }, context)
+        const entry = open.find((item) => item.id === ended)!
+        const finish = finisher(runtime, context, entry)
+        const pr = entry.pr!
+        if (decided.closed[0] === ended)
+          return finish(`was not landed: PR #${pr.number} was closed without merging`, {
+            outcome: 'failed',
+            pr,
+            reason: `PR #${pr.number} was closed without merging`,
+            hint: 'Rework the branch and submit again to open a new pull request.',
+          })
+        const settings = await landerSettings(host)
+        const { remote: name, base: branch } = settings.pr!
+        const target = entry.target
+        await remote(
+          source,
+          signal,
+          'fetch',
+          '-q',
+          name,
+          `+refs/heads/${branch}:refs/remotes/${name}/${branch}`,
+        )
+        const fetched = await git(source, 'rev-parse', `refs/remotes/${name}/${branch}`)
+        // Decided once: after the fast-forward the local target no longer shows where it started.
+        const start = await runtime.memo<{ tip: string; base: string }>(
+          `pr-merged:${entry.id}`,
+          context,
+        )
+        const mergeAt =
+          start ??
+          (await runtime.memo(
+            `pr-merged:${entry.id}`,
+            {
+              tip: fetched,
+              base:
+                (await git(source, 'merge-base', `refs/heads/${target}`, fetched).catch(
+                  // No common ancestor: the target's own tip is the best "from" there is.
+                  () => '',
+                )) || (await git(source, 'rev-parse', `refs/heads/${target}`)),
+            },
+            context,
+          ))
+        let hint: string | undefined
+        await serial(source, async () => {
+          const current = await git(source, 'rev-parse', `refs/heads/${target}`)
+          if (current === mergeAt.tip) return
+          if (!(await contains(source, current, mergeAt.tip))) {
+            hint = `Local ${target} has diverged from ${name}/${branch}, so it was left alone: merge or rebase it yourself.`
+            return
+          }
+          try {
+            const worktree = (await git(source, 'worktree', 'list', '--porcelain'))
+              .split('\n\n')
+              .map((record) => record.split('\n'))
+              .find((record) => record.includes(`branch refs/heads/${target}`))?.[0]
+              .slice('worktree '.length)
+            if (worktree) await git(worktree, 'merge', '-q', '--ff-only', mergeAt.tip)
+            else await git(source, 'update-ref', `refs/heads/${target}`, mergeAt.tip, current)
+          } catch (error) {
+            hint = `Local ${target} could not be fast-forwarded to ${name}/${branch}: ${failure(error)}`
+          }
+        })
+        const commits = lines(
+          await git(source, 'log', '--oneline', `${mergeAt.base}..${mergeAt.tip}`),
+        )
+        const paths = lines(await git(source, 'diff', '--name-only', mergeAt.base, mergeAt.tip))
+        const needsRestart =
+          (await realpath(source)) === (await realpath(host.ultimateRoot)) && restartNeeded(paths)
+        return finish(
+          [
+            `was merged as PR #${pr.number} (${mergeAt.tip.slice(0, 7)} on ${name}/${branch}).`,
+            ...(commits.length ? [`Commits:\n${commits.join('\n')}`] : []),
+            ...(hint ? [hint] : []),
+            ...(needsRestart ? ['Needs restart.'] : []),
+          ].join('\n'),
+          {
+            outcome: 'landed',
+            sha: mergeAt.tip,
+            base: mergeAt.base,
+            commits,
+            paths,
+            flaky: [],
+            weight: await weightDelta(source, mergeAt.base, mergeAt.tip),
+            pr,
+            ...(hint ? { hint } : {}),
+            ...(needsRestart ? { needsRestart } : {}),
+          },
+        )
       },
       /**
        * A failure wakes the submitter, which fixes it and submits again. A landing is the end of the branch's work: the
@@ -914,7 +1190,7 @@ export function createLander(
         const index = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
         if (index.landers[task.input.source] === task.id) delete index.landers[task.input.source]
         for (const item of index.queue)
-          if (item.source === task.input.source) {
+          if (item.source === task.input.source && item.state !== 'pr') {
             item.state = 'queued'
             delete item.step
           }

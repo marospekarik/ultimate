@@ -300,7 +300,7 @@ export function workspaces(host: Host) {
       for (const source of sources) if (await landerIdle(tx, index, source)) stopped.push(source)
       for (const source of stopped) {
         for (const item of index.queue)
-          if (item.source === source) {
+          if (item.source === source && item.state !== 'pr') {
             item.state = 'queued'
             delete item.step
           }
@@ -822,6 +822,14 @@ export function workspaces(host: Host) {
       const { source, target } = index.items[String(id)]
       // Reads first: a transaction cannot read tables after its first write.
       const stopped = await landerIdle(tx, index, source)
+      // A lander asleep between pull request polls would hold this submission until it wakes.
+      const running = index.landers[source]
+      const sleeping =
+        !stopped &&
+        running !== undefined &&
+        (await tx.task(running as TaskId))?.state.status === 'sleeping'
+          ? (running as TaskId)
+          : undefined
       const lander = await ensureLander(tx, index, source, target, path)
       const queued = index.queue.find(
         (item) => item.conversationId === id && item.tip === tip && item.state === 'queued',
@@ -847,14 +855,21 @@ export function workspaces(host: Host) {
         .filter((item) => item.source === source)
         .findIndex((item) => item.id === entry.id)
       return {
+        sleeping,
         id: entry.id,
         position: position + 1,
         lander,
         text: `Submitted ${tip.slice(0, 7)} as ${entry.id}, position ${position + 1} in the ${target} queue. A failure comes back here; a landing reaches whoever started you and concludes you unless work is still under way. Log: lander conversation #${lander}.`,
       }
     }, context)
+    const { sleeping, ...submitted } = result
+    // The aborted task leaves its pull requests queued; the restart polls them again after landing this submission.
+    if (sleeping !== undefined) {
+      await host.harness().abortTask(sleeping, context)
+      await resume(context)
+    }
     host.harness().resume()
-    return result
+    return submitted
   }
   async function unavailable(id: ConversationId, context: Context) {
     let workspace = await get(id, context)

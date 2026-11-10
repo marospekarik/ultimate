@@ -203,6 +203,23 @@ The extension restarts a lander for every source whose queue holds submissions w
 when the harness opens, on each reload of the extension, and at once when a task of the previous code faults. A fault
 of the current code's own task waits for the next submit or open, so a deterministic fault does not loop.
 
+### Pull request mode
+
+`"lander": { "pr": { "remote": "origin", "base": "main" } }` (refused together with `push`) makes a submission end in a
+pull request instead of a push to the target. The lander merges the submission into the **remote base tip** (fetched;
+local target when the remote lacks the branch), runs the checks as usual, then pushes the conversation's own branch
+(`ultimate/<hash>-<id>`, `--force-with-lease` only after a rejected resubmit) to `pr.remote` and opens a pull request
+with `gh` (`gh auth status` runs first, so a missing or logged-out `gh` fails the submission before anything is pushed).
+An open PR for the branch is reused. The queue entry stays with state `pr` and `pr: { number, url, head }`; the submit
+card shows a `PR #N open` chip linking to it. The lander never moves local target and never pushes the target branch.
+
+When no submission waits to land, the lander task polls each `pr` entry with `gh pr view` and sleeps five minutes
+between polls (`sleepUntil`; a new submission wakes it by restarting the task, and a restart resumes polling). A merged
+PR fast-forwards local target to the fetched remote base when local target is an ancestor of it (never merge, never
+force; a diverged target is reported as a hint) and lands the submission: `landed` outcome, `workspaces.landed`, the
+branch concluded, its checkout released. A PR closed without merging is a failed outcome that wakes the submitter.
+All `gh` calls go through the resource `workspaces.gh`, which tests replace.
+
 Top-level mains use `workspace status` and `workspace submit` for their own checkout.
 Landing reports commits and changed paths, with a restart hint for core or package changes to the running clone.
 Landing never restarts Ultimate.
