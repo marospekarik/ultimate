@@ -600,6 +600,14 @@ export function createLander(
         const openPullRequest = async (pr: NonNullable<Settings['pr']>, sha: string) => {
           const gh = host.resource<Gh>('workspaces.gh', () => realGh)
           const branch = index.items[String(entry.conversationId)].branch
+          // The poll fast-forwards the local target from the PR's base; a base of another branch would move it
+          // somewhere unrelated, so the submission refuses instead of landing a lie.
+          if (pr.base !== entry.target)
+            return fail(
+              `lander.pr.base (${pr.base}) is not the branch this project lands into (${entry.target})`,
+              undefined,
+              `Set lander.pr.base to "${entry.target}" or retarget the project, then submit again.`,
+            )
           // Before pushing anything: a missing or logged-out gh would leave a pushed branch without its PR.
           try {
             await gh(source, pr.remote, ['auth', 'status'], signal)
@@ -969,12 +977,32 @@ export function createLander(
             context,
           )
         const states: Record<string, PrState | undefined> = {}
+        const prRemote = (await landerSettings(host)).pr?.remote
+        if (!prRemote)
+          return runtime.commit(async (tx) => {
+            // The setting vanished while pull requests wait: nothing can be polled or completed, so say so loudly
+            // and keep waiting; restoring it resumes the polls with the next sleep.
+            const draft = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
+            for (const item of draft.queue.filter(
+              (entry) => entry.source === source && entry.state === 'pr',
+            ))
+              await log(tx, runtime.conversationId, item, {
+                output: 'lander.pr is no longer set; its pull requests are not being polled',
+              })
+            host.notice('lander.pr is no longer set; open pull requests are not being polled')
+            // Sleep, not `next`: the queue holds only these entries, and next would return here at once.
+            return {
+              status: 'sleeping',
+              until: runtime.now() + pollInterval,
+              checkpoint: { phase: 'next' },
+            }
+          }, context)
         for (const item of open)
           try {
             const view = JSON.parse(
               await gh(
                 source,
-                (await landerSettings(host)).pr?.remote ?? 'origin',
+                prRemote,
                 ['pr', 'view', String(item.pr!.number), '--json', 'state,url'],
                 signal,
               ),
@@ -1002,14 +1030,23 @@ export function createLander(
         const settings = await landerSettings(host)
         const { remote: name, base: branch } = settings.pr!
         const target = entry.target
-        await remote(
-          source,
-          signal,
-          'fetch',
-          '-q',
-          name,
-          `+refs/heads/${branch}:refs/remotes/${name}/${branch}`,
-        )
+        try {
+          await remote(
+            source,
+            signal,
+            'fetch',
+            '-q',
+            name,
+            `+refs/heads/${branch}:refs/remotes/${name}/${branch}`,
+          )
+        } catch (error) {
+          if (signal.aborted) throw error
+          // A transient network failure must not fault the lander and stop polling: try again after the sleep.
+          host.notice(
+            `Fetching ${name}/${branch} for merged PR #${pr.number} failed: ${String(error)}`,
+          )
+          return runtime.sleepUntil(runtime.now() + pollInterval, { phase: 'next' }, context)
+        }
         const fetched = await git(source, 'rev-parse', `refs/remotes/${name}/${branch}`)
         // Decided once: after the fast-forward the local target no longer shows where it started.
         const start = await runtime.memo<{ tip: string; base: string }>(

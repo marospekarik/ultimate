@@ -7,7 +7,7 @@
 export type Git = (...args: string[]) => Promise<string>
 
 /**
- * The same GitHub repository over the other transport: SSH (`git@github.com:o/r.git`, `ssh://git://github.com/o/r`,
+ * The same GitHub repository over the other transport: SSH (`git@github.com:o/r.git`, `ssh://git@github.com/o/r`,
  * an SSH host alias such as `git@github.com-me:o/r.git` from `~/.ssh/config`) becomes `https://github.com/o/r.git` and
  * HTTPS becomes `git@github.com:o/r.git`; undefined for any other remote.
  */

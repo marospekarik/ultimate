@@ -2649,3 +2649,32 @@ it.concurrent('pr mode: a PR closed without merging fails the submission and wak
   })
   expect(await f.host.eventLog.recent({ events: [SubmissionFailed] })).toHaveLength(1)
 })
+
+// Regression: a submission arriving while the lander sleeps between PR polls once left the new
+// entry and every open PR with no live lander, because the sleeping task's abort mark settles
+// after the restart's idle check (review of 663506d5, P1). The restart must wait for the abort.
+it.concurrent('pr mode: a submission while the lander sleeps between polls restarts it and opens its PR too', async () => {
+  const { paths } = await withRemote()
+  const f = await lander({ pr: { remote: 'origin', base: 'main' } }, paths)
+  stubGh(f, async () => 'OPEN')
+  const first = await f.create()
+  await f.service.ready(first, context)
+  await commit((await f.service.get(first, context))!.path, 'first.txt')
+  await f.service.submit(first, 'None', context)
+  // The first submission's PR is open and the lander is asleep between polls.
+  await until(async () => {
+    const index = (await f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!
+    return index.queue.some((item) => item.conversationId === first && item.state === 'pr')
+  })
+  const second = await f.create()
+  await f.service.ready(second, context)
+  await commit((await f.service.get(second, context))!.path, 'second.txt')
+  await f.service.submit(second, 'None', context)
+  // The sleeping lander was aborted and restarted, so the second PR opened without waiting out the sleep.
+  await until(async () => {
+    const index = (await f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!
+    return index.queue.some((item) => item.conversationId === second && item.state === 'pr')
+  })
+  const index = (await f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!
+  expect(index.queue.filter((item) => item.state === 'pr')).toHaveLength(2)
+})
