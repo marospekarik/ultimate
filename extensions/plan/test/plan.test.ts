@@ -4,7 +4,7 @@ import {
   fauxToolCall,
   fauxProvider,
 } from '@earendil-works/pi-ai/providers/faux'
-import { defineExtension } from '@earendil-works/pi-durable'
+import { defineExtension, section } from '@earendil-works/pi-durable'
 import type { ConversationId, JsonObject } from '@earendil-works/pi-durable'
 import { expect, it } from 'vitest'
 import type { ExtensionHost } from '../../../server/extensions.ts'
@@ -342,6 +342,54 @@ it('indexes linked children with their task and renames them after it', async ()
     await call({ action: 'update', key: 'E1.1', child: second })
     expect(Object.keys((await index())!)).toEqual([String(second)])
     expect(await title(second)).toBe('Build it well')
+  } finally {
+    await opened.close()
+    await removeTemp(directory)
+  }
+})
+
+// The pi-durable patch (planSections in patches/): without it Pi removes and re-adds every section when one returns
+// ahead of a section already shown, sending the whole system prompt again (40 times in two days, #558178).
+it('patches only the plan section when it appears, leaves and returns ahead of a later section', async () => {
+  const directory = await temp('ultimate-plan-prompt-')
+  const prepared = await prepareHarness({
+    ultimateRoot: directory,
+    userHome: directory,
+    home: join(directory, 'home'),
+    faux: fauxProvider(),
+  })
+  prepared.registry.install(
+    planExtension({
+      react: () => {},
+      metadata: Metadata,
+      onOpen: () => {},
+    } as unknown as ExtensionHost),
+  )
+  prepared.registry.install(
+    defineExtension({ name: 'tail', sections: [section('tail', async () => 'Always here.')] }),
+  )
+  const opened = await prepared.open()
+  const call = async (args: JsonObject) => {
+    prepared.faux!.setResponses([
+      fauxAssistantMessage([fauxToolCall('plan', args)], { stopReason: 'toolUse' }),
+      fauxAssistantMessage('Complete'),
+    ])
+    await (
+      await opened.root.submit({ type: 'input', content: 'Update plan' }, context)
+    ).wait(context)
+    await opened.harness.waitForIdle(context)
+  }
+  try {
+    await call({ action: 'create', title: 'One', body: 'Body' })
+    await call({ action: 'update', key: 'E1', status: 'done' })
+    await call({ action: 'create', title: 'Two', body: 'Body' })
+    const patches = (await opened.root.context(context)).messages.flatMap((message) =>
+      message.role === 'system' && message.sections !== undefined ? [message.sections] : [],
+    )
+    const [baseline, ...later] = patches
+    expect(Object.keys(baseline)).toEqual(['tail'])
+    expect(later.map((patch) => patch.plan === null)).toEqual([false, true, false])
+    for (const patch of later) expect(Object.keys(patch)).toEqual(['plan'])
   } finally {
     await opened.close()
     await removeTemp(directory)
