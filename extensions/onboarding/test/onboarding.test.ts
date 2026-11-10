@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import { fauxServer, post, temp, removeTemp } from '../../../test/helpers.ts'
@@ -13,61 +13,69 @@ import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 // Each test boots a full server; on a loaded machine more than two at once push the slowest past its timeout.
 vi.setConfig({ maxConcurrency: 2 })
 
-it.concurrent('gates project resources, remembers choices, and applies onboarding settings actions live', async () => {
-  const home = await temp('ultimate-onboarding-')
-  const project = join(home, 'project')
-  const config = join(project, '.ultimate')
-  const userFile = join(home, '.ultimate/settings.json')
-  const projectFile = join(config, 'settings.json')
-  await mkdir(join(config, 'extensions/x'), { recursive: true })
-  await mkdir(join(config, 'agents'), { recursive: true })
-  await mkdir(join(config, 'skills/local-skill'), { recursive: true })
-  await writeFile(
-    join(config, 'extensions/x/server.ts'),
-    "import { defineExtension } from '@earendil-works/pi-durable'; export default defineExtension({ name: 'x' })",
-  )
-  await writeFile(join(config, 'extensions/x/web.tsx'), 'export default {}')
-  await writeFile(
-    join(config, 'extensions/x/README.md'),
-    '# X\n\nA local extension. Another sentence.',
-  )
-  await writeFile(
-    join(config, 'agents/y.md'),
-    '---\nname: y\ndescription: Project agent\n---\nInspect the project.',
-  )
-  await writeFile(
-    join(config, 'skills/local-skill/SKILL.md'),
-    '---\nname: local-skill\ndescription: Project skill\n---\nInspect.',
-  )
-  await writeFile(join(config, 'README.md'), 'Project setup.\n')
-  await writeFile(
-    projectFile,
-    JSON.stringify({
-      defaultSurface: 'workbench',
-      custom: { keep: 1 },
-      extensions: { disable: ['automations'], extra: 'keep' },
-    }),
-  )
-  const options = {
-    ultimateRoot: resolve('.'),
-    projectRoot: project,
-    userHome: home,
-    home: join(home, 'state'),
-    localSetup: false,
-    firstRun: true,
-  }
+describe('onboarding settings', () => {
+  let home: string, project: string, userFile: string, projectFile: string
+  let options: Parameters<typeof fauxServer>[0]
   let server: Awaited<ReturnType<typeof fauxServer>> | undefined
-  try {
-    server = await fauxServer(options)
-    const action = async (name: string, args: unknown = {}) => {
-      const response = await post(server!, `/api/extensions/onboarding/actions/${name}`, { args })
-      expect(response.status).toBe(200)
-      return response.data.result
+  beforeAll(async () => {
+    home = await temp('ultimate-onboarding-')
+    project = join(home, 'project')
+    const config = join(project, '.ultimate')
+    userFile = join(home, '.ultimate/settings.json')
+    projectFile = join(config, 'settings.json')
+    await mkdir(join(config, 'extensions/x'), { recursive: true })
+    await mkdir(join(config, 'agents'), { recursive: true })
+    await mkdir(join(config, 'skills/local-skill'), { recursive: true })
+    await writeFile(
+      join(config, 'extensions/x/server.ts'),
+      "import { defineExtension } from '@earendil-works/pi-durable'; export default defineExtension({ name: 'x' })",
+    )
+    await writeFile(join(config, 'extensions/x/web.tsx'), 'export default {}')
+    await writeFile(
+      join(config, 'extensions/x/README.md'),
+      '# X\n\nA local extension. Another sentence.',
+    )
+    await writeFile(
+      join(config, 'agents/y.md'),
+      '---\nname: y\ndescription: Project agent\n---\nInspect the project.',
+    )
+    await writeFile(
+      join(config, 'skills/local-skill/SKILL.md'),
+      '---\nname: local-skill\ndescription: Project skill\n---\nInspect.',
+    )
+    await writeFile(join(config, 'README.md'), 'Project setup.\n')
+    await writeFile(
+      projectFile,
+      JSON.stringify({
+        defaultSurface: 'workbench',
+        custom: { keep: 1 },
+        extensions: { disable: ['automations'], extra: 'keep' },
+      }),
+    )
+    options = {
+      ultimateRoot: resolve('.'),
+      projectRoot: project,
+      userHome: home,
+      home: join(home, 'state'),
+      localSetup: false,
+      firstRun: true,
     }
-    const enabled = (name: string) =>
-      server!.extensions.info().find((entry) => entry.name === name)?.enabled
-    const web = async () => server!.web.facets()
-    const tools = async () => (await server!.root.agent(context)).tools.map((tool) => tool.name)
+  })
+  afterAll(async () => {
+    await server?.close()
+    await removeTemp(home)
+  })
+  const action = async (name: string, args: unknown = {}) => {
+    const response = await post(server!, `/api/extensions/onboarding/actions/${name}`, { args })
+    expect(response.status).toBe(200)
+    return response.data.result
+  }
+  const enabled = (name: string) =>
+    server!.extensions.info().find((entry) => entry.name === name)?.enabled
+  const web = async () => server!.web.facets()
+  const tools = async () => (await server!.root.agent(context)).tools.map((tool) => tool.name)
+  it('gates project resources until the project is decided', async () => {
+    server = await fauxServer(options)
     for (const args of [
       {},
       { extensions: { plan: 'yes' } },
@@ -117,8 +125,11 @@ it.concurrent('gates project resources, remembers choices, and applies onboardin
       server.extensions.info().find((entry) => entry.name === 'messages')?.server?.tools,
     ).toContainEqual({ name: 'message', description: expect.stringMatching(/\S/) })
     expect(
-      (await post(server, '/api/extensions/onboarding/actions/details', { args: { name: 'nope' } }))
-        .data.error,
+      (
+        await post(server, '/api/extensions/onboarding/actions/details', {
+          args: { name: 'nope' },
+        })
+      ).data.error,
     ).toContain('Unknown extension "nope"')
     const denied = await post(server, '/api/extensions/onboarding/actions/setExtension', {
       args: { name: 'splash', enabled: false, scope: 'project' },
@@ -132,7 +143,9 @@ it.concurrent('gates project resources, remembers choices, and applies onboardin
     expect((await web()).some((path) => path.endsWith('/x/web.tsx'))).toBe(true)
     expect(server.system.current().skills.some((skill) => skill.name === 'local-skill')).toBe(true)
     expect(projectDecision(project, home)).toBe(true)
-    await server.close()
+  })
+  it('remembers the choice across a reboot and writes extension settings', async () => {
+    await server!.close()
     server = await fauxServer(options)
     expect(server.system.current().project.decision).toBe(true)
     expect(enabled('x')).toBe(true)
@@ -199,6 +212,8 @@ it.concurrent('gates project resources, remembers choices, and applies onboardin
       custom: 'user',
       extensions: { extra: 2, enable: ['splash'], disable: ['sounds', 'automations'] },
     })
+  })
+  it('skips the first run on request and keeps the decision across a reboot', async () => {
     // `"onboarding": false` in the user's settings skips the first run without its marker.
     await updateSettings(userFile, (value) => {
       value.onboarding = false
@@ -210,15 +225,12 @@ it.concurrent('gates project resources, remembers choices, and applies onboardin
     expect(await action('status')).toMatchObject({ firstRun: true, off: false })
     await action('firstRunDone')
     expect((await action('status')).firstRun).toBe(false)
-    await server.close()
+    await server!.close()
     server = await fauxServer(options)
     expect(server.system.current().project.decision).toBe(false)
     expect(enabled('x')).toBe(false)
     expect((await action('status')).firstRun).toBe(false)
-  } finally {
-    await server?.close()
-    await removeTemp(home)
-  }
+  })
 })
 
 it.concurrent('offers setup only to named definitions, refuses inapplicable cards, and deduplicates user-only choices', async () => {
