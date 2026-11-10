@@ -5,6 +5,7 @@
  * A change applies to conversations started after it; open ones keep their model. An agent's family is its
  * definition's; settings assign only features.
  */
+import { clampThinkingLevel } from '@earendil-works/pi-ai'
 import type { JsonObject } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { discoverAgents } from '../../lib/agents.ts'
@@ -16,7 +17,9 @@ import {
   FEATURES,
   mergeFamilies,
   parseFamilies,
+  RECOMMENDED_THINKING,
   refName,
+  refOf,
 } from '../../lib/families.ts'
 import type { Families, Feature, FamilySpec } from '../../lib/families.ts'
 import { mergeLayers, readFamilyLayers, writeFamilies } from '../../lib/families-settings.ts'
@@ -161,6 +164,49 @@ function compact(value: { families: object; assign: object }): JsonObject {
   return Object.fromEntries(
     Object.entries(value).filter(([, part]) => Object.keys(part).length),
   ) as JsonObject
+}
+
+/**
+ * Make `name` (`provider/id`, with a login here) the default family's model for this project and the most recent
+ * families, at the recommended thinking level: what new conversations and branches start on. The other families stay.
+ */
+export async function setDefault(host: ExtensionHost, name: string) {
+  const ref = refOf(name)
+  const model = ref && host.modelRuntime.getModel(ref.provider, ref.modelId)
+  if (
+    !ref ||
+    !model ||
+    !(await host.models()).some(
+      (item) => item.available && item.provider === ref.provider && item.id === ref.modelId,
+    )
+  )
+    throw new Error(`Model ${name} is not available`)
+  const thinkingLevel = clampThinkingLevel(model, RECOMMENDED_THINKING)
+  const layers = await readFamilyLayers(
+    host.userHome,
+    host.projectRoot,
+    await host.projectSettings(),
+  )
+  const effective = mergeLayers(layers).families
+  // Saved like the panel's families: what differs from the team's defaults. The most recent families become this
+  // project's own, which apply over the team's, so an assignment the team makes stays the team's.
+  const families = userFamilies(
+    {
+      ...effective,
+      [DEFAULT_FAMILY]: { ...effective[DEFAULT_FAMILY], model: name, thinking: thinkingLevel },
+    },
+    mergeFamilies(layers.project).families,
+  )
+  const assign =
+    layers.from === 'project'
+      ? layers.base.assign
+      : Object.fromEntries(
+          Object.entries(layers.base.assign).filter(
+            ([user]) => !Object.hasOwn(layers.project.assign, user),
+          ),
+        )
+  await writeFamilies(host.userHome, host.projectRoot, compact({ families, assign }))
+  return { model: ref, thinkingLevel }
 }
 
 export async function saveFamilies(host: ExtensionHost, args: SaveFamilies) {

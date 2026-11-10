@@ -7,13 +7,14 @@ import {
 import {
   getClaudeStatus,
   closeClaudeProcesses,
+  useExchangeTap,
   useSpawn,
 } from '@earendil-works/pi-claude-code/src/claude-cli.ts'
 import { defineExtension, GenerationTask, hook, ProviderDoc } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { spawn } from '../../lib/spawn.ts'
-import { ClaudeCodeEnv } from './api.ts'
+import { ClaudeCodeEnv, ClaudeCodeExchanges } from './api.ts'
 import type { ClaudeCodeEnvService } from './api.ts'
 import { StatusAction } from './refs.ts'
 
@@ -60,6 +61,26 @@ export default function claudeCode(host: ExtensionHost) {
   // Pi upstream: @earendil-works/pi-claude-code@0.1.0 src/claude-cli.ts useSpawn (patched). Claude Code starts from the
   // process helper, so a launch does not block this process.
   useSpawn(spawn)
+  // Pi upstream: @earendil-works/pi-claude-code@0.1.0 src/claude-cli.ts useExchangeTap (patched). Hands each relayed
+  // request and its raw answer to whoever implements ClaudeCodeExchanges (wire), with credentials redacted.
+  useExchangeTap(({ sessionId, model, exchange }) => {
+    const exchanges = host.want(ClaudeCodeExchanges)
+    if (!exchanges) return
+    exchanges.record({
+      conversationId: sessionId === undefined ? undefined : shared.sessions.get(sessionId),
+      model,
+      url: exchange.url,
+      startedAt: exchange.startedAt,
+      endedAt: exchange.endedAt,
+      requestHeaders: exchange.requestHeaders,
+      requestBody: exchange.requestBody.toString('utf8'),
+      ...(exchange.status === undefined ? {} : { status: exchange.status }),
+      responseHeaders: exchange.responseHeaders,
+      response: exchange.response.toString('utf8'),
+      ...(exchange.failure === undefined ? {} : { failure: exchange.failure }),
+      ...(exchange.message === undefined ? {} : { message: exchange.message }),
+    })
+  })
   // Browser refresh, facet reload and host restart are distinct. A landing can replace this facet through its import
   // graph even when this file did not change, before any restart. A supervised swap calls `release()`, which suspends
   // the harness before extension cleanup; an ordinary `close()` cleans up extensions first. The e2e test covers both.
@@ -163,6 +184,15 @@ export default function claudeCode(host: ExtensionHost) {
   // The replacement factory runs before the old facet closes. Keep its models
   // registered throughout that handoff, including disposal of a failed reload.
   host.modelRuntime.registerNativeProvider(provider)
+  // Ask the CLI for its catalog once all extensions registered theirs: a refresh any of them starts would cancel it.
+  // Refreshes without network only restore the stored catalog, so a model released since then never appeared.
+  host.onOpen(async () => {
+    void getClaudeStatus(claudeCodeEnv())
+      .then((status) => discover(host, status))
+      .catch((error: unknown) =>
+        host.notice(`Claude Code model discovery failed: ${String(error)}`),
+      )
+  })
   return defineExtension({
     name: 'claude-code',
     hooks: [
@@ -180,6 +210,26 @@ export default function claudeCode(host: ExtensionHost) {
   })
 }
 
+/**
+ * Run the provider's model discovery when Claude Code is logged in: a local `claude` process whose catalog Pi stores.
+ * Pi runs it only on a refresh that allows network; every other refresh restores the stored catalog, so without this
+ * a model released since the last discovery never appears (#542940). A failure keeps the stored catalog.
+ */
+async function discover(
+  host: Pick<ExtensionHost, 'modelRuntime' | 'notice'>,
+  status: { loggedIn: boolean },
+  signal?: AbortSignal,
+) {
+  if (!status.loggedIn) return
+  const refreshed = await host.modelRuntime.refresh({
+    allowNetwork: true,
+    providers: ['claude-code'],
+    signal,
+  })
+  const error = refreshed.errors.get('claude-code')
+  if (error) host.notice(`Claude Code model discovery failed: ${String(error)}`)
+}
+
 export const actions = {
   status: implementAction(StatusAction, async (_args, { host, signal }) => {
     signal.throwIfAborted()
@@ -188,6 +238,8 @@ export const actions = {
       throw new Error('Claude Code status refresh failed')
     // `claudeCodeEnv()` is upstream's provider-scoped environment, the one its auth checks remembered.
     const status = await getClaudeStatus(claudeCodeEnv(), signal)
+    await discover(host, status, signal)
+    signal.throwIfAborted()
     // Only expose status metadata, never CLI output or account identity.
     return {
       available: status.available,
