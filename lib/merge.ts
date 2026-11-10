@@ -2,9 +2,9 @@
  * Merging a diverged clone with origin: predicting conflicts without touching the worktree, the restore ref
  * written before a merge so it can be undone, and the merge itself — never a rebase, reset or stash.
  */
-import { exec } from '../../lib/exec.ts'
-import type { FastForward, Git, Standing } from '../../lib/fast-forward.ts'
-import { Refusal } from '../../lib/fast-forward.ts'
+import { exec } from './exec.ts'
+import type { FastForward, Git, Standing } from './fast-forward.ts'
+import { Refusal } from './fast-forward.ts'
 
 /**
  * Whether merging `remote` into `HEAD` would conflict, predicted by `git merge-tree --write-tree` without

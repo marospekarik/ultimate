@@ -7,13 +7,15 @@
 export type Git = (...args: string[]) => Promise<string>
 
 /**
- * The same GitHub repository over the other transport: SSH (`git@github.com:o/r.git`, `ssh://git@github.com/o/r`)
- * becomes `https://github.com/o/r.git` and HTTPS becomes `git@github.com:o/r.git`; undefined for any other remote.
+ * The same GitHub repository over the other transport: SSH (`git@github.com:o/r.git`, `ssh://git://github.com/o/r`,
+ * an SSH host alias such as `git@github.com-me:o/r.git` from `~/.ssh/config`) becomes `https://github.com/o/r.git` and
+ * HTTPS becomes `git@github.com:o/r.git`; undefined for any other remote.
  */
 export function otherTransport(url: string): string | undefined {
-  const ssh = /^(?:ssh:\/\/)?git@github\.com[:/]([\w.-]+)\/([\w.-]+?)(?:\.git)?\/*$/i.exec(
-    url.trim(),
-  )
+  const ssh =
+    /^(?:ssh:\/\/)?git@github\.com(?:-[\w-]+)?[:/]([\w.-]+)\/([\w.-]+?)(?:\.git)?\/*$/i.exec(
+      url.trim(),
+    )
   if (ssh) return `https://github.com/${ssh[1]}/${ssh[2]}.git`
   const https = /^https:\/\/(?:[^@/]+@)?github\.com\/([\w.-]+)\/([\w.-]+?)(?:\.git)?\/*$/i.exec(
     url.trim(),
@@ -131,6 +133,85 @@ export async function fastForward(
     !!state.behind &&
     !!(await git('diff', '--name-only', 'HEAD', state.remote, '--', 'pnpm-lock.yaml'))
   if (lockfile) await owe?.()
+  if (state.behind) await git('merge', '--ff-only', '--quiet', state.remote)
+  return { ...state, before, after: await git('rev-parse', 'HEAD'), lockfile }
+}
+
+/**
+ * The current branch against its own upstream (`@{upstream}`): `branch` is the branch, `remote` its tracking ref
+ * (e.g. `origin/main`). `refused` adds a detached HEAD, a branch without an upstream, uncommitted changes or a
+ * diverged branch (with `diverged: true`, as `standing` does).
+ */
+export async function standingUpstream(git: Git): Promise<Standing> {
+  const branch = await git('symbolic-ref', '--quiet', '--short', 'HEAD').catch(() => '')
+  const result: Standing = { branch: branch || 'HEAD', remote: '', ahead: 0, behind: 0 }
+  if (!branch) {
+    result.refused = 'The checkout is on a detached HEAD'
+    return result
+  }
+  const upstream = await git(
+    'rev-parse',
+    '--abbrev-ref',
+    '--symbolic-full-name',
+    `${branch}@{upstream}`,
+  ).catch(() => '')
+  if (!upstream) {
+    result.refused = `${branch} has no upstream; set one with git branch --set-upstream-to`
+    return result
+  }
+  const [ahead = 0, behind = 0] = (
+    await git('rev-list', '--left-right', '--count', `${branch}...${upstream}`)
+  )
+    .split(/\s+/)
+    .map(Number)
+  Object.assign(result, { remote: upstream, ahead, behind })
+  if (await git('status', '--porcelain', '--untracked-files=no'))
+    result.refused = 'The checkout has uncommitted changes'
+  else if (ahead && behind) {
+    result.refused = `${branch} has diverged from ${upstream}`
+    result.diverged = true
+  }
+  return result
+}
+
+/**
+ * Fetch the current branch's upstream's remote and fast-forward the branch to it; throws `Refusal` for the states
+ * `standingUpstream` refuses, handing a diverged branch to `diverged` instead (a merge that stops on conflicts,
+ * such as `lib/merge.ts`'s `mergeUpstream`). `admit`, checked after the fetch and before the move, refuses with the
+ * reason it returns. The result's `lockfile` says the move changed `pnpm-lock.yaml`; what an install owes is the
+ * caller's to decide.
+ */
+export async function fastForwardUpstream(
+  git: Git,
+  admit?: () => Promise<string | undefined>,
+  diverged?: (state: Standing) => Promise<FastForward>,
+): Promise<FastForward> {
+  // Checked before fetching, so a dirty checkout is refused as such and its remote refs stay as they were.
+  if (await git('status', '--porcelain', '--untracked-files=no'))
+    throw new Refusal('The checkout has uncommitted changes')
+  const branch = await git('symbolic-ref', '--quiet', '--short', 'HEAD').catch(() => {
+    throw new Refusal('The checkout is on a detached HEAD')
+  })
+  const upstream = await git(
+    'rev-parse',
+    '--abbrev-ref',
+    '--symbolic-full-name',
+    `${branch}@{upstream}`,
+  ).catch(() => {
+    throw new Refusal(`${branch} has no upstream; set one with git branch --set-upstream-to`)
+  })
+  await git('fetch', '--quiet', upstream.split('/')[0])
+  const state = await standingUpstream(git)
+  if (state.refused) {
+    if (state.diverged && diverged) return await diverged(state)
+    throw new Refusal(state.refused)
+  }
+  const refused = state.behind ? await admit?.() : undefined
+  if (refused) throw new Refusal(refused)
+  const before = await git('rev-parse', 'HEAD')
+  const lockfile =
+    !!state.behind &&
+    !!(await git('diff', '--name-only', 'HEAD', state.remote, '--', 'pnpm-lock.yaml'))
   if (state.behind) await git('merge', '--ff-only', '--quiet', state.remote)
   return { ...state, before, after: await git('rev-parse', 'HEAD'), lockfile }
 }

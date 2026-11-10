@@ -10,6 +10,8 @@ it.each([
   ['https://user:tok@github.com/o/r.git', 'github.com/o/r'],
   ['https://github.com/O/R/', 'github.com/o/r'],
   ['https://github.com/HazAT/poe2-rust.git/', 'github.com/hazat/poe2-rust'],
+  ['git@github.com-work:o/r.git', 'github.com/o/r'],
+  ['ssh://git@github.com-work/owner/R.git', 'github.com/owner/r'],
   ['git+ssh://git@github.com/o/my.repo.git\n', 'github.com/o/my.repo'],
 ])('normalises %s', (remote, key) => {
   expect(projectKey(remote)).toBe(key)
@@ -21,6 +23,7 @@ it.each([
   'https://notgithub.com/o/r',
   'https://github.com/o',
   'https://github.com/o/r/tree/main',
+  'git@github.com.evil:o/r.git',
   '/srv/git/r.git',
   '',
 ])('has no key for %j', (remote) => {

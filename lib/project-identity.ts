@@ -1,9 +1,9 @@
 import { git } from './git.ts'
 
-/** `github.com/<owner>/<repo>`, lowercased, for a GitHub SSH or HTTPS remote URL; undefined for any other. */
+/** `github.com/<owner>/<repo>`, lowercased, for a GitHub SSH (host aliases such as `github.com-work` included) or HTTPS remote URL; undefined for any other. */
 export function projectKey(remote: string): string | undefined {
   const match =
-    /^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[^@/]+@)?github\.com[:/]([\w.-]+)\/([\w.-]+?)(?:\.git)?\/*$/i.exec(
+    /^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[^@/]+@)?github\.com(?:-[\w-]+)?[:/]([\w.-]+)\/([\w.-]+?)(?:\.git)?\/*$/i.exec(
       remote.trim(),
     )
   return match ? `github.com/${match[1]}/${match[2]}`.toLowerCase() : undefined

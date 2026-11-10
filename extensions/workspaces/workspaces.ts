@@ -996,6 +996,7 @@ export function workspaces(host: Host) {
     standLander,
     started,
     get,
+    serialize: serial,
     unavailable,
     land,
     submit,

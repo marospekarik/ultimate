@@ -7,7 +7,7 @@ import { readJson, writeJson } from '../../lib/json-file.ts'
 import { corePath, packagePath } from '../../lib/layers.ts'
 // oxlint-disable-next-line no-restricted-imports -- the core's process-safe lock, shared with secrets and tailscale
 import { acquireLock } from '../../server/lock.ts'
-import { conflictsPredicted } from './merge.ts'
+import { conflictsPredicted } from '../../lib/merge.ts'
 import type { Layers, UpdateState } from './refs.ts'
 
 /** Origin is fetched when the last fetch of the clone, by any Ultimate on it, is older than this. */

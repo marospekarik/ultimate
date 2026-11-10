@@ -27,8 +27,8 @@ import {
   summaryFor,
   withLock,
 } from './clone.ts'
-import { conflictsPredicted, mergeUpstream } from './merge.ts'
-import type { Merged } from './merge.ts'
+import { conflictsPredicted, mergeUpstream } from '../../lib/merge.ts'
+import type { Merged } from '../../lib/merge.ts'
 import { Applied, CheckAction, MergeAction, Refused, StateAction, UpdateAction } from './refs.ts'
 import type { UpdateResult, UpdateState } from './refs.ts'
 import { UpdateApi } from './api.ts'

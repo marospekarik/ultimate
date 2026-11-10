@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest'
-import type { Git, Standing } from '../../../lib/fast-forward.ts'
-import { Refusal } from '../../../lib/fast-forward.ts'
-import { mergeUpstream, RESTORE_PREFIX } from '../merge.ts'
+import type { Git, Standing } from '../lib/fast-forward.ts'
+import { Refusal } from '../lib/fast-forward.ts'
+import { mergeUpstream, RESTORE_PREFIX } from '../lib/merge.ts'
 
 const standing: Standing = {
   branch: 'main',

@@ -7,7 +7,7 @@ import { context } from '../../../../server/harness.ts'
 import { Standing } from '../../../subagents/api.ts'
 import { Workspaces } from '../../../workspaces/workspaces.ts'
 import { fauxServer, post, sourceCopy, temp } from '../../../../test/helpers.ts'
-import { RESTORE_PREFIX } from '../../merge.ts'
+import { RESTORE_PREFIX } from '../../../../lib/merge.ts'
 
 const servers: Awaited<ReturnType<typeof fauxServer>>[] = []
 afterAll(async () => {
