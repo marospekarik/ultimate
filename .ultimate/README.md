@@ -6,7 +6,10 @@ work, and changes its own code while you talk to it.
 Every built-in is already on; this setup adds how the repository is landed and reviewed:
 
 - `settings.json`: each worktree isolate installs its dependencies, and the lander runs `pnpm check`, then
-  `pnpm test` and `pnpm test:e2e` in parallel, and pushes to `origin`.
+  `pnpm test` (2 workers) and `pnpm test:e2e`, one after the other, and pushes to the `fork` remote. This checkout
+  has no push access to `origin` (`HazAT/ultimate`): `main` goes to the user's fork, and changes reach upstream as pull
+  requests from branches there. Where `AGENTS.md` says the lander pushes to `origin`, read `fork` for this checkout.
+- `skills/merge-upstream`: how to merge `origin/main` into this diverged `main` when Update now predicts conflicts.
 - `agents/reviewer-*.md`: the review team (correctness, simplicity, architecture), each on its own model; the shipped
   `reviewer` starts them in parallel and returns one merged verdict.
 
