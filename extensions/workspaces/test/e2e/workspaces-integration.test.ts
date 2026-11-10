@@ -2536,3 +2536,116 @@ it.concurrent('a conversation whose checkout is gone can still message', async (
   expect(JSON.stringify(sent)).toContain('Message 1 sent.')
   expect(f.writes).toBe(0)
 })
+
+/** A stand-in for `gh`: records every call; `created` runs when a pull request is created and settles its state. */
+function stubGh(
+  f: Awaited<ReturnType<typeof fixture>>,
+  created: (branch: string) => Promise<'MERGED' | 'CLOSED' | 'OPEN'>,
+) {
+  const calls: string[][] = []
+  let state: 'MERGED' | 'CLOSED' | 'OPEN' | undefined
+  let branch: string | undefined
+  f.host.resource<unknown>(
+    'workspaces.gh',
+    () => async (_cwd: string, _remote: string, args: string[]) => {
+      calls.push(args)
+      const [command, sub] = args
+      if (command === 'auth') return ''
+      if (sub === 'create') {
+        branch = args[args.indexOf('--head') + 1]
+        state = await created(branch)
+        return 'https://github.com/example/my-app/pull/7'
+      }
+      if (sub === 'list')
+        return JSON.stringify(
+          branch ? [{ number: 7, url: 'https://github.com/example/my-app/pull/7' }] : [],
+        )
+      if (sub === 'view')
+        return JSON.stringify({ state, url: 'https://github.com/example/my-app/pull/7' })
+      throw new Error(`unexpected gh ${args.join(' ')}`)
+    },
+  )
+  return calls
+}
+const pushed = async (bare: string, branch: string) => git(bare, 'rev-parse', branch)
+
+// Core path: PR mode, merged.
+it.concurrent('pr mode: checks, pushes the branch, opens a PR, and a merged PR fast-forwards local main and concludes the branch', async () => {
+  const { paths, bare } = await withRemote()
+  const f = await lander(
+    { pr: { remote: 'origin', base: 'main' }, checks: ['test -f base.txt'] },
+    paths,
+    true,
+  )
+  f.host.implement(
+    ConversationsApi,
+    conversations({
+      concluded: async () => new Set<ConversationId>(),
+      subject: async () => ({}),
+      concludeIn: (tx, ids) => concludeIn(f.host, tx, ids),
+    }),
+  )
+  f.prepared.registry.install(lineage(f.host))
+  const id = await f.create()
+  await f.service.ready(id, context)
+  await f.opened.harness.commit(async (tx) => {
+    ;(await tx.doc(Started, id)).by = ROOT_CONVERSATION_ID
+  }, context)
+  const workspace = (await f.service.get(id, context))!
+  const tip = await commit(workspace.path, 'pr.txt')
+  const before = await git(f.projectRoot, 'rev-parse', 'main')
+  let mainDuringPr: string | undefined
+  const calls = stubGh(f, async (branch) => {
+    // The lander never touched local main while the PR was opened.
+    mainDuringPr = await git(f.projectRoot, 'rev-parse', 'main')
+    // The user merges on GitHub: the remote base fast-forwards to the pushed branch.
+    expect(await pushed(bare, branch)).toBe(tip)
+    await git(bare, 'update-ref', 'refs/heads/main', tip)
+    return 'MERGED'
+  })
+  const { id: submission } = await f.service.submit(id, 'None', context)
+  const [report] = await submitted(f, id)
+  expect(mainDuringPr).toBe(before)
+  expect(calls.find((args) => args[1] === 'create')).toEqual(
+    expect.arrayContaining(['--base', 'main', '--head', workspace.branch]),
+  )
+  expect(report).toContain('was merged as PR #7')
+  expect(await git(f.projectRoot, 'rev-parse', 'main')).toBe(tip)
+  expect(await git(bare, 'rev-parse', workspace.branch)).toBe(tip)
+  const result = (await f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!
+    .results[submission]
+  expect(result).toMatchObject({
+    outcome: 'landed',
+    sha: tip,
+    base: before,
+    pr: { number: 7, head: workspace.branch },
+  })
+  expect(result.steps.map((row) => row.step)).toContain('opened PR #7')
+  const landings = await f.host.eventLog.recent({ events: [SubmissionLanded] })
+  expect(landings).toHaveLength(1)
+  expect(await concludedIds(f)).toContain(id)
+})
+
+// Core path: PR mode, closed without merging.
+it.concurrent('pr mode: a PR closed without merging fails the submission and wakes the submitter', async () => {
+  const { paths } = await withRemote()
+  const f = await lander({ pr: { remote: 'origin', base: 'main' } }, paths)
+  const id = await f.create()
+  await f.service.ready(id, context)
+  await commit((await f.service.get(id, context))!.path, 'closed.txt')
+  const before = await git(f.projectRoot, 'rev-parse', 'main')
+  stubGh(f, async () => 'CLOSED')
+  const { id: submission } = await f.service.submit(id, 'None', context)
+  const [report] = await submitted(f, id)
+  expect(report).toContain('PR #7 was closed without merging')
+  expect(await git(f.projectRoot, 'rev-parse', 'main')).toBe(before)
+  expect(
+    (await f.opened.harness.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!.results[
+      submission
+    ],
+  ).toMatchObject({
+    outcome: 'failed',
+    pr: { number: 7 },
+  })
+  expect(await f.host.eventLog.recent({ events: [SubmissionFailed] })).toHaveLength(1)
+})

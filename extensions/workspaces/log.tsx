@@ -4,6 +4,7 @@ import {
   ChevronRightIcon,
   CircleDotIcon,
   GitMergeIcon,
+  GitPullRequestIcon,
   LoaderCircleIcon,
   TriangleAlertIcon,
   XIcon,
@@ -42,6 +43,13 @@ const time = (at: number) => formatTime(at, true)
 /** "Landed 115f168 on main · pushed to origin/main", or "Not landed: <reason>". */
 function headline(outcome: LanderOutcome, target?: string) {
   if (outcome.outcome === 'failed') return `Not landed: ${outcome.reason ?? 'failed'}`
+  if (outcome.outcome === 'pr') return `PR #${outcome.pr!.number} open`
+  if (outcome.pr) {
+    const merged = outcome.commits?.length
+      ? `Merged ${short(outcome.sha!)}${target ? ` on ${target}` : ''}`
+      : 'Merged'
+    return `${merged} · PR #${outcome.pr.number}`
+  }
   const on = target ? ` on ${target}` : ''
   const landed = outcome.commits?.length
     ? `Landed ${short(outcome.sha!)}${on}`
@@ -87,6 +95,17 @@ function OutcomeBody({ outcome }: { outcome: LanderOutcome }) {
         </p>
       ))}
       {outcome.needsRestart && <p className="text-warning">Needs restart.</p>}
+      {outcome.pr && (
+        <a
+          className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground hover:underline"
+          href={outcome.pr.url}
+          rel="noreferrer"
+          target="_blank"
+        >
+          <GitPullRequestIcon className="size-3" />
+          PR #{outcome.pr.number}
+        </a>
+      )}
       {outcome.hint && <p className="text-muted-foreground">{outcome.hint}</p>}
       {outcome.output && <OutputTail output={outcome.output} />}
     </>
@@ -429,6 +448,12 @@ function useSubmission(id: string | undefined): Submission | undefined {
   const index = useWorkspaceIndex()
   if (!id) return undefined
   const queued = index.queue.find((item) => item.id === id)
+  if (queued?.pr)
+    return {
+      ...queued,
+      position: 0,
+      outcome: { outcome: 'pr', pr: queued.pr, divergence: queued.divergence },
+    }
   if (queued)
     return {
       ...queued,
@@ -468,6 +493,19 @@ function StatusChip({ state }: { state: Submission }) {
   const { outcome } = state
   if (outcome.outcome === 'failed')
     return <span className={cn(chip, 'text-error')}>Not landed</span>
+  if (outcome.outcome === 'pr')
+    return (
+      <a
+        className={cn(chip, 'text-brand hover:underline')}
+        href={outcome.pr!.url}
+        rel="noreferrer"
+        target="_blank"
+        title={outcome.pr!.url}
+      >
+        <GitPullRequestIcon className="size-3 shrink-0" />
+        PR #{outcome.pr!.number} open
+      </a>
+    )
   const landed = outcome.commits?.length ? `Landed ${short(outcome.sha!)}` : 'Nothing new'
   if (outcome.reason)
     return <span className={cn(chip, 'text-warning')}>{landed} · push failed</span>
@@ -518,7 +556,7 @@ export function WorkspaceCall({ call }: { call: ToolCallView }) {
             lander={submitted.lander}
             onOpenChange={setOpen}
             open={open ?? !state.outcome}
-            ended={state.outcome?.outcome}
+            ended={state.outcome?.outcome === 'pr' ? 'landed' : state.outcome?.outcome}
             running={state.landing}
             steps={state.steps}
           />

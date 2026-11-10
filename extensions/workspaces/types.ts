@@ -20,14 +20,18 @@ export type QueueEntry = {
   /** Latest submitting conversation entry when submit was called. */
   at: number
   divergence: string
-  state: 'queued' | 'landing'
+  state: 'queued' | 'landing' | 'pr'
   subject?: ConversationSubject
   step?: string
   /** What the lander did so far, as its conversation logs it. */
   steps: LanderStep[]
   /** What its fast-forward landed: recorded with it, so any later lander task pushes and reports that. */
   landed?: Landed
+  /** The open pull request of a submission in `pr` mode, which the lander polls until it merges or closes. */
+  pr?: PullRequest
 }
+/** A pull request the lander opened for a conversation's branch (`lander.pr`). */
+export type PullRequest = { number: number; url: string; head: string }
 /** A submission's landing: the target moved from `base` to `sha`, which brought `commits` and `paths`. */
 export type Landed = {
   sha: string
@@ -53,9 +57,12 @@ export type LanderStep = {
   runs?: string
   check?: LanderCheck
 }
-/** How a submission ended. A push that failed after landing locally is `landed` with a `reason`. */
+/**
+ * How a submission ended. A push that failed after landing locally is `landed` with a `reason`. `pr` is a submission
+ * whose pull request is open: not an end, shown by the submit card only.
+ */
 export type LanderOutcome = {
-  outcome: 'landed' | 'failed'
+  outcome: 'landed' | 'failed' | 'pr'
   divergence?: string
   sha?: string
   /** The target's tip the landing moved from: `base..sha` is what it brought. */
@@ -64,6 +71,8 @@ export type LanderOutcome = {
   paths?: string[]
   flaky?: string[]
   weight?: Weight
+  /** The pull request behind a `pr` outcome, or the one whose merge landed this. */
+  pr?: PullRequest
   /** `<remote>/<target>` it was pushed to. */
   pushed?: string
   needsRestart?: boolean
