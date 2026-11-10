@@ -55,3 +55,28 @@ node .ultimate/skills/measure-switch/profile-summary.ts ~/switch-perf/a.cpuprofi
 ## 4. Clean up
 
 Stop the instance and `rm -rf ~/switch-perf`. Nothing from the copy goes into the repository.
+
+## Phone load over the tailnet
+
+Page load as a phone sees it. Use the tailnet address, not loopback: compression only applies to remote clients.
+
+```bash
+node .ultimate/skills/measure-switch/phone-load.ts https://<machine>.<tailnet>.ts.net:<port>/ --runs 3
+```
+
+`phone-load.ts` opens a fresh Chromium context per run (390x844, touch, "Fast 4G": 150 ms latency, 9 Mbit/s down,
+1.5 Mbit/s up, via CDP), loads the page cold, then reloads the same context warm. Per load it prints requests, wire
+MB (compressed, transferred), decoded MB, first contentful paint, time until the composer is on screen (usable), and
+how many requests were 200 from the network, 304, or served from cache. It ends with the medians. It needs no preview
+and touches no data. If "usable" times out, the composer selector in the script no longer matches.
+
+Baselines, medians of 3:
+
+|                                           | Requests           | Wire    | Decoded | First paint | Usable | 200 / 304 / cache |
+| ----------------------------------------- | ------------------ | ------- | ------- | ----------- | ------ | ----------------- |
+| Before, old Vite dev server, cold (#1257) | ~379               | ~25 MB  | n/a     | n/a         | n/a    | n/a               |
+| Before, warm                              | ~350 revalidations | n/a     | n/a     | n/a         | n/a    | mostly 304        |
+| Production bundle, cold (Nov 2026)        | 135                | 1.01 MB | 5.85 MB | 5.4 s       | 7.0 s  | 134 / 0 / 1       |
+| Production bundle, warm                   | 132                | 0.04 MB | 6.04 MB | 3.2 s       | 3.5 s  | 23 / 0 / 108      |
+
+Warm loads revalidate nothing: the hashed bundle files come from cache; the 200s are API and event requests.
