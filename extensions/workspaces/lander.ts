@@ -123,8 +123,8 @@ type Host = Pick<
   | 'emit'
   | 'resource'
 >
-/** One check command, with its own total limit in seconds when set. */
-type Check = { command: string; timeout?: number }
+/** One check command, with its own total limit in seconds when set, and its own no-output limit. */
+type Check = { command: string; timeout?: number; stall?: number }
 /** Checks run in order; an array is a group whose commands run concurrently. */
 type Settings = {
   checks: (Check | Check[])[]
@@ -136,14 +136,20 @@ type Settings = {
 const pollInterval = 5 * 60 * 1000
 /** Bounded retries when the target moves while a submission is integrated. */
 const attempts = 3
-/** Seconds without output and total seconds allowed for one check, unless the check sets its own `timeout`. */
+/** Seconds without output and total seconds allowed for one check, unless the check sets its own limits. */
 type CheckLimits = { stall: number; total: number }
 const checkLimits: CheckLimits = { stall: 2 * 60, total: 10 * 60 }
-/** A check's limits: its `timeout` replaces the total, and the stall limit never exceeds it. */
-export const limitsFor = (check: Check, limits: CheckLimits): CheckLimits =>
-  check.timeout === undefined
-    ? limits
-    : { stall: Math.min(limits.stall, check.timeout), total: check.timeout }
+/**
+ * A check's limits: its `timeout` replaces the total and its `stall` the no-output limit; neither exceeds the total.
+ * A suite whose cold start is legitimately silent needs its own `stall` — the full e2e suite prints nothing for its
+ * first minute or more while vitest collects it cold, which the 2-minute default cut mid-transform in the lander's
+ * fresh checkout (#12346), and the kill left the transform cache cold for every retry.
+ */
+export const limitsFor = (check: Check, limits: CheckLimits): CheckLimits => {
+  const total = check.timeout ?? limits.total
+  const stall = Math.min(check.stall ?? limits.stall, total)
+  return { stall, total }
+}
 /** Lines naming failed tests (vitest's `FAIL`, `×` and `✗` marks), kept from a check's whole output. */
 const failedLine = /^\s*(FAIL|×|✗)\s/
 const seconds = (value: number) => (value < 60 ? `${value} s` : `${+(value / 60).toFixed(1)} min`)
@@ -254,14 +260,24 @@ export async function runLanderCheck(
   }
 }
 
-/** A check from settings: a command, or `{ command, timeout }` with a positive timeout in seconds. */
+/** A check from settings: a command, or `{ command, timeout, stall }` with positive seconds. */
 const parseCheck = (value: unknown): Check | undefined => {
   if (typeof value === 'string') return { command: value }
   if (!value || typeof value !== 'object') return undefined
-  const { command, timeout } = value as { command?: unknown; timeout?: unknown }
+  const { command, timeout, stall } = value as {
+    command?: unknown
+    timeout?: unknown
+    stall?: unknown
+  }
   if (typeof command !== 'string') return undefined
-  if (timeout === undefined) return { command }
-  return typeof timeout === 'number' && timeout > 0 ? { command, timeout } : undefined
+  const fields = [timeout, stall]
+  if (!fields.every((field) => field === undefined || (typeof field === 'number' && field > 0)))
+    return undefined
+  return {
+    command,
+    ...(typeof timeout === 'number' ? { timeout } : {}),
+    ...(typeof stall === 'number' ? { stall } : {}),
+  }
 }
 export const landerSettings = async (host: Pick<Host, 'projectSettings'>): Promise<Settings> => {
   const lander = (await host.projectSettings()).lander as
@@ -279,7 +295,7 @@ export const landerSettings = async (host: Pick<Host, 'projectSettings'>): Promi
     : undefined
   if (!checks?.every((group) => (Array.isArray(group) ? group.every(Boolean) : group)))
     throw new Error(
-      'lander.checks must be an array of checks or check groups; a check is a command or { "command", "timeout" } with timeout in seconds',
+      'lander.checks must be an array of checks or check groups; a check is a command or { "command", "timeout", "stall" } with timeout and stall in seconds',
     )
   if (lander?.push !== undefined && typeof lander.push !== 'string')
     throw new Error('lander.push must be a remote name')

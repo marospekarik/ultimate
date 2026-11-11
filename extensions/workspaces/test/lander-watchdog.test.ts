@@ -81,6 +81,18 @@ it('stops a printing check at its own timeout, not the default cap', async () =>
     stall: 120,
     total: 600,
   })
+  // A check whose cold start is legitimately silent raises its own no-output limit.
+  expect(limitsFor({ command: 'x', timeout: 900, stall: 420 }, { stall: 120, total: 600 })).toEqual(
+    {
+      stall: 420,
+      total: 900,
+    },
+  )
+  // The stall limit still never exceeds the total.
+  expect(limitsFor({ command: 'x', stall: 900 }, { stall: 120, total: 600 })).toEqual({
+    stall: 600,
+    total: 600,
+  })
 })
 
 it('names the tests that failed before the watchdog fired, even when they left the tail', async () => {

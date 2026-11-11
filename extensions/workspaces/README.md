@@ -158,11 +158,12 @@ lander's sidebar row shows the feature it lands or landed last.
    runs once when the checkout is created. With `lander.push`, it fetches the remote branch and merges it when it is ahead.
 2. Merges the submitted tip. A conflict aborts the merge and reports the conflicting paths to the submitter.
 3. Runs `lander.checks` in order. Each check is stopped after 2 minutes without output or 10 minutes total, or at
-   its own `timeout` (seconds, which also caps the no-output limit), killing its whole process group. Watchdog
+   its own `timeout` (seconds, which also caps the no-output limit) or its own `stall` (seconds, for a check whose
+   cold start is legitimately silent, such as a full suite vitest collects from scratch), killing its whole process group. Watchdog
    failures name the limit that fired, the failed test lines seen so far (vitest's `FAIL`/`×` lines, kept even when
    they scrolled out of the tail) and the output tail, and rerun like other check failures.
    An entry is a check or an array of checks, a group that runs concurrently; a check is a command string or
-   `{ "command": "pnpm test", "timeout": 180 }`.
+   `{ "command": "pnpm test", "timeout": 180, "stall": 90 }`.
    A failing check
    reruns once: passing then is reported as flaky, failing again reports the output tail to the submitter once every
    command of its group settled. Each command keeps its own memo, steps and flaky note. A passed or flaky check records its last
