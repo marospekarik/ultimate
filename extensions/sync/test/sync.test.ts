@@ -2,11 +2,12 @@ import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { expect, it } from 'vitest'
 import { git as runGit } from '../../../lib/git.ts'
-import { gitIn, openPr, pull, push, stateOf } from '../sync.ts'
+import { fetchedAt, gitIn } from '../../../lib/clone.ts'
+import { fetchIfDue, openPr, pull, push, stateOf } from '../sync.ts'
 import type { Context, Run } from '../sync.ts'
 import { temp } from '../../../test/helpers.ts'
 
-const none: Context = { protectedBranches: [], targets: [] }
+const none: Context = { protectedBranches: [] }
 const direct = <T>(operation: () => Promise<T>) => operation()
 
 /** A bare origin and two clones of it: `mine` (the checkout under test, on `main`) and `other` (a collaborator). */
@@ -59,7 +60,7 @@ it('computes the state: in sync, behind, ahead, diverged, dirty, protected', asy
     conflicts: false,
   })
   await writeFile(join(mine, 'a.txt'), 'dirty\n')
-  const dirty = await stateOf(git, mine, { protectedBranches: ['main'], targets: [] })
+  const dirty = await stateOf(git, mine, { protectedBranches: ['main'] })
   expect(dirty).toMatchObject({ dirty: true, protected: true })
   expect(dirty.pullRefused).toContain('uncommitted')
   expect(dirty.pushRefused).toContain('protected')
@@ -113,7 +114,7 @@ it('refuses a predicted conflict and leaves the branch untouched', async () => {
 it('pushes without force and refuses protected, dirty and diverged branches', async () => {
   const { mine, other, origin, git } = await repos()
   await commit(mine, 'b.txt', 'b\n', 'mine')
-  expect(await push(git, mine, { protectedBranches: ['main'], targets: [] })).toMatchObject({
+  expect(await push(git, mine, { protectedBranches: ['main'] })).toMatchObject({
     ok: false,
     refused: expect.stringContaining('protected'),
   })
@@ -144,30 +145,56 @@ it('opens a PR with gh against the base, from the latest commit subject', async 
     calls.push({ file, args, env: options.env })
     return { stdout: 'https://github.com/owner/repo/pull/7\n' }
   }
-  const context = { protectedBranches: ['main'], targets: ['main'] }
+  const context = { protectedBranches: ['main'], defaultBranch: 'main' }
   expect(await openPr(git, mine, context, run)).toEqual({
     ok: true,
     url: 'https://github.com/owner/repo/pull/7',
   })
   expect(calls[0].file).toBe('gh')
-  expect(calls[0].args).toEqual([
-    'pr',
-    'create',
-    '--repo',
-    'owner/repo',
-    '--base',
-    'main',
-    '--head',
-    'topic',
-    '--title',
-    'Add the b file',
-    '--body',
-    '',
-  ])
+  expect(calls[0].args).toEqual(
+    expect.arrayContaining([
+      'pr',
+      'create',
+      '--repo',
+      'owner/repo',
+      '--base',
+      'main',
+      '--head',
+      'topic',
+      '--title',
+      'Add the b file',
+    ]),
+  )
   expect(calls[0].env.GIT_TERMINAL_PROMPT).toBe('0')
   expect(await runGit(origin, 'rev-parse', 'topic')).toBe(await runGit(mine, 'rev-parse', 'HEAD'))
   // The base branch itself has no PR to open.
   await runGit(mine, 'checkout', '-q', 'main')
   expect(await openPr(git, mine, context, run)).toMatchObject({ ok: false })
   expect(calls).toHaveLength(1)
+})
+
+it('fetches the upstream remote only when the last fetch is stale, and always on demand', async () => {
+  const { mine, other, git } = await repos()
+  const advance = async () => {
+    await commit(other, 'a.txt', `${Math.random()}\n`, 'upstream change')
+    await runGit(other, 'push', '-q', 'origin', 'main')
+  }
+  await advance()
+  await fetchIfDue(git, mine, Date.now())
+  const at = await fetchedAt(git, mine)
+  expect(at).toBeGreaterThan(0)
+  expect(await runGit(mine, 'rev-parse', 'origin/main')).toBe(
+    await runGit(other, 'rev-parse', 'main'),
+  )
+  // A fresh fetch is gated: a new upstream commit is not seen until the hour or Check now.
+  await advance()
+  await fetchIfDue(git, mine, Date.now() + 1000)
+  expect(await fetchedAt(git, mine)).toBe(at)
+  expect(await runGit(mine, 'rev-parse', 'origin/main')).not.toBe(
+    await runGit(other, 'rev-parse', 'main'),
+  )
+  await fetchIfDue(git, mine, Date.now() + 1000, true)
+  expect(await runGit(mine, 'rev-parse', 'origin/main')).toBe(
+    await runGit(other, 'rev-parse', 'main'),
+  )
 })

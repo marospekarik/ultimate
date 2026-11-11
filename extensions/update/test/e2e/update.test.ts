@@ -5,8 +5,9 @@ import { git } from '../../../../lib/git.ts'
 import { fastForward, Refusal, standing } from '../../../../lib/fast-forward.ts'
 import type { Standing } from '../../../../lib/fast-forward.ts'
 import { conflictsPredicted, mergeUpstream, RESTORE_PREFIX } from '../../../../lib/merge.ts'
-import { cloneState, fetchIfDue, layersOf, withLock } from '../../clone.ts'
-import { gitIn, installOwed } from '../../server.ts'
+import { gitIn, withLock } from '../../../../lib/clone.ts'
+import { cloneState, fetchIfDue, layersOf } from '../../clone.ts'
+import { installOwed } from '../../server.ts'
 import { temp } from '../../../../test/helpers.ts'
 
 let upstream: string

@@ -1,30 +1,11 @@
 /** The project checkout against its branch's upstream: state, fetch, Pull, Push and Open PR. Host-free, so tests run it on real repositories. */
-import { stat } from 'node:fs/promises'
-import { isAbsolute, join } from 'node:path'
 import { exec } from '../../lib/exec.ts'
 import { fastForwardUpstream, Refusal, standingUpstream } from '../../lib/fast-forward.ts'
 import type { Git } from '../../lib/fast-forward.ts'
+import { cloneLock, FETCH_EVERY, fetchedAt, gitPath, withLock } from '../../lib/clone.ts'
 import { conflictsPredicted, mergeUpstream } from '../../lib/merge.ts'
 import { githubRepo } from '../../lib/project-identity.ts'
-// oxlint-disable-next-line no-restricted-imports -- the core's process-safe lock, shared with update, secrets and tailscale
-import { acquireLock } from '../../server/lock.ts'
 import type { PrResult, PullResult, PushResult, SyncState } from './refs.ts'
-
-/** The upstream's remote is fetched when the repository's last fetch, by any Ultimate on it, is older than this. */
-export const FETCH_EVERY = 60 * 60_000
-
-/** Git in `root`, never prompting: an HTTPS fetch or push without a login must fail rather than hang. */
-export const gitIn =
-  (root: string): Git =>
-  async (...args) => {
-    try {
-      const env = { ...process.env, GIT_TERMINAL_PROMPT: '0' }
-      return (await exec('git', args, { cwd: root, env, timeout: 120_000 })).stdout.trim()
-    } catch (error) {
-      const { stderr = '' } = error as { stderr?: string }
-      throw new Error(`git ${args[0]} failed: ${stderr.trim() || String(error)}`, { cause: error })
-    }
-  }
 
 /** Runs a program: `exec` in production, a stub in tests. */
 export type Run = (
@@ -34,24 +15,10 @@ export type Run = (
 ) => Promise<{ stdout: string }>
 
 export type Context = {
-  /** Branches that never get a manual push: `sync.protected` and the lander's targets. */
+  /** Branches that never get a manual push: `sync.protected`, origin's default branch and the lander's target when it pushes. */
   protectedBranches: string[]
-  /** Branches workspaces land into for this checkout, preferred as a PR's base. */
-  targets: string[]
-}
-
-/** `name` inside the repository's git directory, shared by every Ultimate on it. */
-export async function gitPath(git: Git, root: string, name: string) {
-  const path = await git('rev-parse', '--git-path', name)
-  return isAbsolute(path) ? path : join(root, path)
-}
-
-/** When the repository was last fetched (`FETCH_HEAD`'s mtime), or undefined before the first fetch. */
-export async function fetchedAt(git: Git, root: string) {
-  return stat(await gitPath(git, root, 'FETCH_HEAD')).then(
-    (info) => info.mtimeMs,
-    () => undefined,
-  )
+  /** Origin's default branch: the base of a pull request opened from a branch of its own. */
+  defaultBranch?: string
 }
 
 /** The upstream's remote name and branch (`branch.<b>.remote`/`.merge`), or undefined without an upstream. */
@@ -62,35 +29,16 @@ async function upstreamOf(git: Git, branch: string) {
 }
 
 /**
- * Run `work` holding `lock`; undefined without running while another Ultimate still holds it. The core's SQLite-held
- * lock: the exclusive transaction ends with its process, so a dead holder never blocks the next.
- */
-export async function withLock<T>(lock: string, work: () => Promise<T>): Promise<T | undefined> {
-  let held: Awaited<ReturnType<typeof acquireLock>>
-  try {
-    held = await acquireLock(lock, { pid: process.pid }, 0)
-  } catch (error) {
-    if (error instanceof Error && error.message.startsWith('Ultimate core already owns'))
-      return undefined
-    throw error
-  }
-  try {
-    return await work()
-  } finally {
-    await held.close()
-  }
-}
-
-/**
  * Fetch the branch's upstream remote when the last fetch is older than `FETCH_EVERY`, or always with `force`;
- * the error of a failed fetch, else undefined. Under the repository's sync lock, with the age read again inside it.
+ * the error of a failed fetch, else undefined. Under the repository's clone lock (shared with the update extension
+ * for the Ultimate clone), with the age read again inside it.
  */
 export async function fetchIfDue(git: Git, root: string, now: number, force = false) {
   const branch = await git('symbolic-ref', '--quiet', '--short', 'HEAD').catch(() => '')
   const upstream = branch ? await upstreamOf(git, branch) : undefined
   if (!upstream) return undefined
-  const lock = await gitPath(git, root, 'ultimate-sync.lock')
-  const done = await withLock(lock, async () => {
+  const lock = await gitPath(git, root, cloneLock)
+  return withLock(lock, async () => {
     const last = await fetchedAt(git, root)
     if (!force && last !== undefined && now - last < FETCH_EVERY) return undefined
     return git('fetch', '--quiet', upstream.remote).then(
@@ -98,15 +46,6 @@ export async function fetchIfDue(git: Git, root: string, now: number, force = fa
       (error: unknown) => (error instanceof Error ? error.message : String(error)),
     )
   })
-  return done
-}
-
-/** The PR's base: a branch the lander targets (other than `branch`), else origin's default branch. */
-async function baseOf(git: Git, branch: string, context: Context) {
-  const target = context.targets.find((name) => name !== branch)
-  if (target) return target
-  const head = await git('symbolic-ref', '--short', 'refs/remotes/origin/HEAD').catch(() => '')
-  return head ? head.replace(/^origin\//, '') : undefined
 }
 
 /** Where the checkout's branch stands against its upstream, from local refs only. */
@@ -128,7 +67,7 @@ export async function stateOf(git: Git, root: string, context: Context): Promise
   if (at !== undefined) state.fetchedAt = at
   const repo = await githubRepo(root)
   if (repo) state.repo = repo.replace(/^github\.com\//, '')
-  const base = branch ? await baseOf(git, branch, context) : undefined
+  const base = branch && context.defaultBranch !== branch ? context.defaultBranch : undefined
   if (base) state.base = base
   if (!branch || !standing.remote) {
     return { ...state, ...(standing.refused ? { pullRefused: standing.refused } : {}) }
@@ -213,6 +152,7 @@ export async function push(git: Git, root: string, context: Context): Promise<Pu
   const state = await stateOf(git, root, context)
   const refused = pushRefusal(state)
   if (refused) return { ok: false, refused }
+  // Safe: pushRefusal above returns a refusal for a detached checkout or a branch without an upstream.
   const upstream = (await upstreamOf(git, state.branch!))!
   try {
     await git('push', upstream.remote, `HEAD:refs/heads/${upstream.branch}`)

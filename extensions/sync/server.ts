@@ -8,8 +8,9 @@ import { ConversationsApi } from '../conversations/api.ts'
 import { SubagentsApi } from '../subagents/api.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
 import { PauseApi } from '../pause/api.ts'
-import { fetchIfDue, gitIn, openPr, pull, push, stateOf } from './sync.ts'
+import { fetchIfDue, openPr, pull, push, stateOf } from './sync.ts'
 import type { Context } from './sync.ts'
+import { cloneLock, gitIn, gitPath, withLock } from '../../lib/clone.ts'
 import { CheckAction, MergeAction, PrAction, PullAction, PushAction, StateAction } from './refs.ts'
 import type { SyncState } from './refs.ts'
 
@@ -42,7 +43,17 @@ async function sourceOf(host: ExtensionHost) {
   return top ? realpath(top) : undefined
 }
 
-/** Branches that never get a manual push, and the ones workspaces land into. */
+/** A preview's state: it moves nothing and shows no item. */
+const previewState: SyncState = {
+  ahead: 0,
+  behind: 0,
+  dirty: false,
+  commits: [],
+  protected: false,
+  preview: true,
+}
+
+/** Branches that never get a manual push, and origin's default branch. */
 async function contextOf(host: ExtensionHost, git: ReturnType<typeof gitIn>): Promise<Context> {
   const settings = (await host.projectSettings()) as {
     sync?: { protected?: unknown }
@@ -60,14 +71,14 @@ async function contextOf(host: ExtensionHost, git: ReturnType<typeof gitIn>): Pr
     // No origin/HEAD: only the listed branches are protected.
     () => '',
   )
-  const fallback = origin.replace(/^origin\//, '')
+  const defaultBranch = origin.replace(/^origin\//, '') || undefined
   return {
     protectedBranches: [
       ...listed,
-      ...(fallback ? [fallback] : []),
+      ...(defaultBranch ? [defaultBranch] : []),
       ...(landerPushes && target ? [target] : []),
     ],
-    targets: target ? [target] : [],
+    ...(defaultBranch ? { defaultBranch } : {}),
   }
 }
 
@@ -88,8 +99,7 @@ async function refresh(host: ExtensionHost, check: boolean, force = false) {
 }
 
 async function currentState(host: ExtensionHost): Promise<SyncState> {
-  if (preview())
-    return { ahead: 0, behind: 0, dirty: false, commits: [], protected: false, preview: true }
+  if (preview()) return previewState
   const store = shared(host)
   if (!store.latest) await refresh(host, false)
   return store.latest!
@@ -145,15 +155,7 @@ export const actions = {
   /** The checkout's state from the last check. */
   state: implementAction(StateAction, (_args, { host }) => currentState(host)),
   check: implementAction(CheckAction, async (_args, { host }) => {
-    if (preview())
-      return {
-        ahead: 0,
-        behind: 0,
-        dirty: false,
-        commits: [],
-        protected: false,
-        preview: true as const,
-      }
+    if (preview()) return previewState
     const store = shared(host)
     // A background tick may be mid-check without forcing: let it finish, then fetch now. A second click joins.
     await store.ticking
@@ -165,22 +167,28 @@ export const actions = {
   }),
   pull: implementAction(PullAction, async (_args, { host }) => {
     const { root, git } = await checkout(host)
-    const result = await pull(git, root, (operation) =>
-      host.need(WorkspacesApi).serialize(root, operation),
+    // The clone lock keeps a tick's or Check now's fetch out of the move; serialize keeps the lander's own
+    // fast-forwards out of it, so the two never write the same branch at once.
+    const result = await withLock(await gitPath(git, root, cloneLock), () =>
+      pull(git, root, (operation) => host.need(WorkspacesApi).serialize(root, operation)),
     )
-    await refresh(host, false)
-    return result
+    // With a fetch check (gated, so none runs right after the pull's own): a stale fetch error from an
+    // earlier tick does not survive a successful pull.
+    await refresh(host, true)
+    return (
+      result ?? { ok: false as const, refused: "Another Ultimate holds this repository's lock" }
+    )
   }),
   push: implementAction(PushAction, async (_args, { host }) => {
     const { root, git, settings } = await checkout(host)
     const result = await push(git, root, settings)
-    await refresh(host, false)
+    await refresh(host, true)
     return result
   }),
   pr: implementAction(PrAction, async (_args, { host }) => {
     const { root, git, settings } = await checkout(host)
     const result = await openPr(git, root, settings)
-    await refresh(host, false)
+    await refresh(host, true)
     return result
   }),
   merge: implementAction(MergeAction, async (_args, { host }) => {

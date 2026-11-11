@@ -1,17 +1,11 @@
 /** The Ultimate clone against origin: what it lacks, what that touches, and fetching it at most hourly. */
-import { stat } from 'node:fs/promises'
-import { isAbsolute, join } from 'node:path'
 import type { Git } from '../../lib/fast-forward.ts'
 import { fetchOrigin, standing } from '../../lib/fast-forward.ts'
+import { FETCH_EVERY, fetchedAt } from '../../lib/clone.ts'
 import { readJson, writeJson } from '../../lib/json-file.ts'
 import { corePath, packagePath } from '../../lib/layers.ts'
-// oxlint-disable-next-line no-restricted-imports -- the core's process-safe lock, shared with secrets and tailscale
-import { acquireLock } from '../../server/lock.ts'
 import { conflictsPredicted } from '../../lib/merge.ts'
 import type { Layers, UpdateState } from './refs.ts'
-
-/** Origin is fetched when the last fetch of the clone, by any Ultimate on it, is older than this. */
-export const FETCH_EVERY = 60 * 60_000
 
 /** Which layers `files` (paths from the repository root) touch. */
 export function layersOf(files: string[]): Layers {
@@ -22,20 +16,6 @@ export function layersOf(files: string[]): Layers {
     else if (packagePath(file)) layers.lockfile = true
     else layers.live = true
   return layers
-}
-
-/** `name` inside the clone's git directory, shared by every Ultimate on the clone. */
-export async function gitPath(git: Git, root: string, name: string) {
-  const path = await git('rev-parse', '--git-path', name)
-  return isAbsolute(path) ? path : join(root, path)
-}
-
-/** When origin was last fetched into the clone (`FETCH_HEAD`'s mtime), or undefined before the first fetch. */
-export async function fetchedAt(git: Git, root: string) {
-  return stat(await gitPath(git, root, 'FETCH_HEAD')).then(
-    (info) => info.mtimeMs,
-    () => undefined,
-  )
 }
 
 /**
@@ -49,31 +29,6 @@ export async function fetchIfDue(git: Git, root: string, now: number, force = fa
     () => undefined,
     (error: unknown) => (error instanceof Error ? error.message : String(error)),
   )
-}
-
-/**
- * Run `work` holding `lock`, so fetches, summaries, updates and installs of one clone never overlap across Ultimates;
- * undefined without running while another still holds it after `waitMs`. The lock is the core's SQLite-held one
- * (`server/lock.ts`): the exclusive transaction ends with its process, so a dead holder never blocks the next.
- */
-export async function withLock<T>(
-  lock: string,
-  work: () => Promise<T>,
-  waitMs = 0,
-): Promise<T | undefined> {
-  let held: Awaited<ReturnType<typeof acquireLock>>
-  try {
-    held = await acquireLock(lock, { pid: process.pid }, waitMs)
-  } catch (error) {
-    if (error instanceof Error && error.message.startsWith('Ultimate core already owns'))
-      return undefined
-    throw error
-  }
-  try {
-    return await work()
-  } finally {
-    await held.close()
-  }
 }
 
 /**

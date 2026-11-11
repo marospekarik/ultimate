@@ -13,20 +13,13 @@ import { compareUrl } from '../../lib/compare.ts'
 import { exec } from '../../lib/exec.ts'
 import { fastForward, Refusal } from '../../lib/fast-forward.ts'
 import type { Git } from '../../lib/fast-forward.ts'
+import { cloneLock, gitIn, gitPath, withLock } from '../../lib/clone.ts'
 import { githubRepo } from '../../lib/project-identity.ts'
 import { ConversationsApi } from '../conversations/api.ts'
 import { SubagentsApi } from '../subagents/api.ts'
 import { SubmissionLanded, WorkspacesApi } from '../workspaces/api.ts'
 import { PauseApi } from '../pause/api.ts'
-import {
-  cloneState,
-  fetchIfDue,
-  gitPath,
-  layersOf,
-  SUMMARY_SYSTEM,
-  summaryFor,
-  withLock,
-} from './clone.ts'
+import { cloneState, fetchIfDue, layersOf, SUMMARY_SYSTEM, summaryFor } from './clone.ts'
 import { conflictsPredicted, mergeUpstream } from '../../lib/merge.ts'
 import type { Merged } from '../../lib/merge.ts'
 import { Applied, CheckAction, MergeAction, Refused, StateAction, UpdateAction } from './refs.ts'
@@ -35,19 +28,6 @@ import { UpdateApi } from './api.ts'
 
 /** How often the clone is compared with origin locally; origin itself is fetched at most hourly (`FETCH_EVERY`). */
 export const TICK = 5 * 60_000
-
-/** Git in `root`, never prompting: an HTTPS fetch without a login must fail rather than hang a background check. */
-export const gitIn =
-  (root: string): Git =>
-  async (...args) => {
-    try {
-      const env = { ...process.env, GIT_TERMINAL_PROMPT: '0' }
-      return (await exec('git', args, { cwd: root, env, timeout: 120_000 })).stdout.trim()
-    } catch (error) {
-      const { stderr = '' } = error as { stderr?: string }
-      throw new Error(`git ${args[0]} failed: ${stderr.trim() || String(error)}`, { cause: error })
-    }
-  }
 
 const read = (path: string) =>
   readFile(path, 'utf8').catch(
@@ -167,8 +147,10 @@ export function loadable(host: ExtensionHost): Promise<void> {
     )
     const deadline = Date.now() + CHECKOUT_WAIT
     if (index) while (existsSync(index) && Date.now() < deadline) await sleep(50)
-    const failure = (error: string) =>
-      new Error(`pnpm install failed, so the packages on disk are not the lockfile's:\n${error}`)
+    const failure = (error: string | undefined) =>
+      new Error(
+        `pnpm install failed, so the packages on disk are not the lockfile's:\n${error ?? ''}`,
+      )
     // Before comparing lockfiles: a failed install may have left them equal. Tried again for another lockfile only.
     const failed = shared.failed
     if (failed && failed.lockfile === (await read(join(root, 'pnpm-lock.yaml'))))
@@ -180,7 +162,7 @@ export function loadable(host: ExtensionHost): Promise<void> {
       host.notice(`Update check: ${String(error)}`),
     )
     if (!result) throw new Error('Another Ultimate is still installing packages into this clone')
-    if (result.install === 'failed') throw failure(result.installError!)
+    if (result.install === 'failed') throw failure(result.installError)
   })().finally(() => {
     shared.installing = undefined
   })
@@ -317,7 +299,7 @@ const boot = (host: ExtensionHost) =>
   }))
 
 /** The clone-wide lock: fetches, updates and installs of one clone never overlap across the Ultimates on it. */
-const lockOf = (root: string) => gitPath(gitIn(root), root, 'ultimate-update.lock')
+const lockOf = (root: string) => gitPath(gitIn(root), root, cloneLock)
 
 /** Ask the summary model once with the range's commit messages; undefined without one. */
 async function ask(host: ExtensionHost, input: string) {
