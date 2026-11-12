@@ -4,7 +4,7 @@ import { access, link, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import type { JsonValue } from '@earendil-works/chord'
+import type { JsonValue } from '@earendil-works/chord/json'
 import { arr, bool, int, lit, map, num, obj, opt, str, union } from '@earendil-works/pi-schema'
 import { strEnum } from '../../lib/schema.ts'
 import {
@@ -846,13 +846,19 @@ export default function automations(host: ExtensionHost) {
       }),
     ],
     sections: [
-      section('automations', async ({ read }, context) => {
-        const state = await read.snapshot(Automations, context)
-        const lines = Object.values(state?.automations ?? {})
-          .filter((a) => a.enabled)
-          .map((a) => `${a.id} ${a.name}: ${describeTrigger(a)}`)
-        return lines.length ? lines.join('\n') : undefined
-      }),
+      // Empty, not undefined, with none enabled: the slot keeps its place, so coming back patches only this section
+      // (Pi re-sends every section when one would land out of order, #573861).
+      section(
+        'automations',
+        async ({ read }, context) => {
+          const state = await read.snapshot(Automations, context)
+          const lines = Object.values(state?.automations ?? {})
+            .filter((a) => a.enabled)
+            .map((a) => `${a.id} ${a.name}: ${describeTrigger(a)}`)
+          return lines.length ? `<automations>\n${lines.join('\n')}\n</automations>` : ''
+        },
+        { tag: false },
+      ),
     ],
     tools: [
       defineTool({
@@ -863,7 +869,7 @@ export default function automations(host: ExtensionHost) {
         // subscribe meant to replace it and be refused for leaving nobody to wake.
         executionMode: 'sequential',
         description:
-          'Automate background work: one trigger (schedule, ask, event or condition) and one or both actions (prompt, subscribers: #id|@name). create {name, trigger, prompt?, subscribers?, key?, …}; with neither action the caller subscribes. To be reminded or woken, subscribe (cheap); add a prompt only when fresh work must run (a whole agent turn every fire). schedule: cron "0 9 * * 1-5" Europe/Vienna, at <ISO time>, in 30m, every 15m. ask: a watcher writes a supervised script that fires on stdout FIRE (tokens only for setup and repair). event {name,where?}: action events lists them. condition {metric:"context",of:"@name"|"#id",above}. list; these take {id}: update, pause, resume, run, runs, log, abort {runId}, escalate {reason}, subscribe/unsubscribe {to?}, delete. Details: extensions/automations/README.md in the Ultimate clone.',
+          'Automate background work: one trigger (schedule, ask, event or condition) and one or both actions (prompt, subscribers: #id|@name). create {name, trigger, prompt?, subscribers?, key?, …}; with neither action the caller subscribes. To be reminded or woken, subscribe (cheap); add a prompt only when fresh work must run (a whole agent turn every fire). schedule: cron "0 9 * * 1-5" Europe/Vienna, at <ISO time>, in 30m, every 15m. ask: a watcher writes a supervised script that fires on stdout FIRE (tokens only for setup and repair); once defaults to true, so the first FIRE finishes it: pass once:false to keep watching. event {name,where?}: action events lists them. condition {metric:"context",of:"@name"|"#id",above}. list; these take {id}: update, pause, resume, run, runs, log, abort {runId}, escalate {reason}, subscribe/unsubscribe {to?}, delete. Details: extensions/automations/README.md in the Ultimate clone.',
         parameters: obj({
           action: strEnum(operations),
           id: opt(str()),

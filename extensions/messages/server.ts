@@ -29,8 +29,8 @@ import { delivery } from './delivery.ts'
 import { notice } from './notice.ts'
 import { send } from './send.ts'
 import type { Device } from '../../shared/events.ts'
-import type { Context } from '@earendil-works/chord'
-import { route, working } from './route.ts'
+import type { Context } from '@earendil-works/chord/context'
+import { reported, route, working } from './route.ts'
 import { projectsSection, remoteAction, remoteReplyAction, tell } from './remote.ts'
 import { branchTool } from './branch.ts'
 export { gist, openQuestionsNote } from './questions.ts'
@@ -201,7 +201,7 @@ export default function messages(host: ExtensionHost) {
     tasks: [delivery(host), route(host), notice(host)],
     hooks: [
       hook(GenerationTask, {
-        // Pi upstream: @earendil-works/pi-durable@1.5.0 — patched transactional beforeInput hook.
+        // Pi upstream: @earendil-works/pi-durable@1.5.2 — patched transactional beforeInput hook.
         beforeInput: (_input, api) => openQuestionsNote(api.tx, api.conversationId, Date.now()),
         onYield: async (_answer, api, ctx) => {
           // A branch's answers go up to its starter; the primary agent's answers to a branch go down to it.
@@ -320,14 +320,22 @@ export default function messages(host: ExtensionHost) {
             return { output: [{ type: 'text', text: `Message ${id} sent.` }] }
           // The message is @ultimate's answer: the run ends here instead of restating it, unless a reply it has read
           // is owed. One still queued gets its own turn. Pi ends the run only when every call of the tool round
-          // terminates, and codemode's nested calls never end it.
+          // terminates, and codemode's nested calls never end it. Nor does it end while a branch whose reply or report
+          // this run read awaits its answer: the final answer goes there (#570368).
+          const inputs =
+            (await host.harness().snapshot(LiveDoc, api.conversationId, ctx))?.run?.inputs ?? []
+          const read = (
+            await Promise.all(
+              inputs.map(async (s) => (await host.harness().submission(s, ctx))?.status(ctx)),
+            )
+          ).flatMap((s) => (s?.type === 'input' && s.entry !== undefined ? [s.entry] : []))
           const owed = await host
             .harness()
             .commit(
               async (tx) =>
                 (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages.some(
                   (m) => m.to === api.conversationId && isOwed(m),
-                ),
+                ) || (await reported(host, tx, api.conversationId, read)).branches.length > 0,
               ctx,
             )
           return {

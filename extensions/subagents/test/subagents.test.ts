@@ -21,7 +21,8 @@ import {
   LiveDoc,
 } from '@earendil-works/pi-durable'
 import type { ConversationId, Extension, Task, ToolRegistration } from '@earendil-works/pi-durable'
-import type { Context, JsonValue } from '@earendil-works/chord'
+import type { Context } from '@earendil-works/chord/context'
+import type { JsonValue } from '@earendil-works/chord/json'
 import { obj } from '@earendil-works/pi-schema'
 import { CodingTools } from '@earendil-works/pi-durable/tools'
 import { ModelRuntime } from '@earendil-works/pi-coding-agent'
@@ -1179,7 +1180,7 @@ describe('subagents', () => {
             (message) =>
               message.role === 'system' && Object.hasOwn(message.sections ?? {}, 'subagent_state'),
           ),
-      ).toMatchObject({ sections: { subagent_state: null } })
+      ).toMatchObject({ sections: { subagent_state: '' } })
       await call(f.opened, { action: 'wait', id })
       expect(await reports(f.opened)).toHaveLength(1)
     },
