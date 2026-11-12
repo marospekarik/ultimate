@@ -1109,6 +1109,7 @@ export function createLander(
           await git(source, 'log', '--oneline', `${mergeAt.base}..${mergeAt.tip}`),
         )
         const paths = lines(await git(source, 'diff', '--name-only', mergeAt.base, mergeAt.tip))
+        const weight = await landingWeight(source, mergeAt.base, mergeAt.tip)
         const needsRestart =
           (await realpath(source)) === (await realpath(host.ultimateRoot)) && restartNeeded(paths)
         return finish(
@@ -1125,7 +1126,8 @@ export function createLander(
             commits,
             paths,
             flaky: [],
-            weight: await weightDelta(source, mergeAt.base, mergeAt.tip),
+            // Left out, not undefined: documents refuse undefined values.
+            ...(weight ? { weight } : {}),
             pr,
             ...(hint ? { hint } : {}),
             ...(needsRestart ? { needsRestart } : {}),
