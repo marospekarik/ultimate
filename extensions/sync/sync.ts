@@ -4,6 +4,7 @@ import { fastForwardUpstream, Refusal, standingUpstream } from '../../lib/fast-f
 import type { Git } from '../../lib/fast-forward.ts'
 import { cloneLock, FETCH_EVERY, fetchedAt, gitPath, withLock } from '../../lib/clone.ts'
 import { conflictsPredicted, mergeUpstream } from '../../lib/merge.ts'
+import { quoteMentions } from '../../lib/mentions.ts'
 import { githubRepo } from '../../lib/project-identity.ts'
 import type { PrResult, PullResult, PushResult, SyncState } from './refs.ts'
 
@@ -209,7 +210,7 @@ export async function openPr(
       refused: `Could not push ${state.branch} to ${remote}, so no PR was opened (${(error as Error).message}). Open PRs need push access to ${state.repo}; forks are not supported`,
     }
   }
-  const title = await git('log', '-1', '--format=%s')
+  const title = quoteMentions(await git('log', '-1', '--format=%s'))
   try {
     const result = await run(
       'gh',

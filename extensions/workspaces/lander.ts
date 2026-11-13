@@ -11,6 +11,7 @@ import { defineEntry, defineTask, ROOT_CONVERSATION_ID } from '@earendil-works/p
 import type { ConversationDocToken, ConversationId, Tx } from '@earendil-works/pi-durable'
 import { git } from '../../lib/git.ts'
 import { needsRestart as restartNeeded } from '../../lib/layers.ts'
+import { quoteMentions } from '../../lib/mentions.ts'
 import { runGroup, sweepPidFiles } from '../../lib/process-group.ts'
 import { landingWeight } from '../../lib/token-weight.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
@@ -689,11 +690,13 @@ export function createLander(
                   '--head',
                   branch,
                   '--title',
-                  title,
+                  quoteMentions(title),
                   '--body',
-                  [subject.summary, `Diverged from the request: ${entry.divergence}`]
-                    .filter(Boolean)
-                    .join('\n\n'),
+                  quoteMentions(
+                    [subject.summary, `Diverged from the request: ${entry.divergence}`]
+                      .filter(Boolean)
+                      .join('\n\n'),
+                  ),
                 ],
                 signal,
               )
