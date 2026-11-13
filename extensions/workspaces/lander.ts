@@ -446,6 +446,7 @@ export function createLander(
             commitCount: commits.length,
             paths: (outcome.paths ?? []).slice(0, 8),
             ...(outcome.pushed ? { pushed: outcome.pushed } : {}),
+            ...(outcome.needsRestart ? { needsRestart: true as const } : {}),
           })
         }
         return {
@@ -553,12 +554,13 @@ export function createLander(
             ...(output ? { output } : {}),
             ...(hint ? { hint } : {}),
           }
-          return landed
-            ? finish(`${summary(landed, landed.sha, ' locally')}\nPush failed: ${detail}`, {
-                ...landedOutcome(landed),
-                ...facts,
-              })
-            : finish(`was not landed: ${detail}`, { outcome: 'failed', ...facts })
+          if (!landed) return finish(`was not landed: ${detail}`, { outcome: 'failed', ...facts })
+          // Landed locally: the running clone changed, whatever became of the push.
+          const needsRestart = await restartFor(landed)
+          return finish(
+            `${summary(landed, landed.sha, ' locally')}\nPush failed: ${detail}${needsRestart ? '\nNeeds restart.' : ''}`,
+            { ...landedOutcome(landed), ...facts, ...(needsRestart ? { needsRestart } : {}) },
+          )
         }
         const retry = (retried = pushRetried) =>
           runtime.commit(
@@ -574,6 +576,10 @@ export function createLander(
             context,
           )
         const { source, target } = entry
+        /** Whether `landed` changed the core of the clone this host runs from. */
+        const restartFor = async (landed: Landed) =>
+          (await realpath(source)) === (await realpath(host.ultimateRoot)) &&
+          restartNeeded(landed.paths)
         const checkContext = withAbortSignal(signal, context)
         /** Push `sha` when configured; on a rejection retry the integration once, then report it. */
         const push = async (settings: Settings, sha: string) => {
@@ -596,9 +602,7 @@ export function createLander(
         const landedReport = async (settings: Settings, landed: Landed, sha: string) => {
           const pushed = await push(settings, sha)
           if (pushed.retry) return pushed.retry
-          const needsRestart =
-            (await realpath(source)) === (await realpath(host.ultimateRoot)) &&
-            restartNeeded(landed.paths)
+          const needsRestart = await restartFor(landed)
           return finish(
             [summary(landed, sha), pushed.text, ...(needsRestart ? ['Needs restart.'] : [])].join(
               '\n',

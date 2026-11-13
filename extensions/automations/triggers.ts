@@ -22,6 +22,8 @@ export const TRIGGER_EVENTS: TriggerEvent[] = [
       title: 'Submission title',
       target: 'Target branch',
       conversationId: 'Submitting conversation',
+      needsRestart:
+        'true when it changed the running clone’s core (server/, shared/, patches/, pnpm-lock.yaml)',
     },
   },
   {

@@ -21,7 +21,8 @@ import { Messages } from './api.ts'
 import type { Message } from './api.ts'
 import { imagesOf } from '../../lib/entries.ts'
 import { append, terminal } from './log.ts'
-import { remoteLabel, servesLine } from './addresses.ts'
+import { remoteLabel, servesLine, Started } from './addresses.ts'
+import { landing } from './landing.ts'
 
 export function delivery(host: ExtensionHost) {
   // A standing recipient is reconfigured from its current definition before each delivery, by name or by number.
@@ -53,6 +54,8 @@ export function delivery(host: ExtensionHost) {
         stopped?: boolean
         /** `servesLine` for the starter reading a branch's reply, decided with the reply. */
         serves?: string
+        /** A branch's reply to its starter while its landing is still to come: placed as a note, not an input. */
+        quiet?: boolean
       },
     null
   >({
@@ -227,6 +230,14 @@ export function delivery(host: ExtensionHost) {
             ...(m.remote ? { remote: m.remote } : {}),
           })
           const line = await servesLine(tx, response.from, response.to)
+          // A coordinator replies "submitted, waiting for the lander" and the landing card wakes its starter again
+          // minutes later; those replies were about a third of @ultimate's wakes, each rereading its whole context
+          // (#31836). The card, or the branch's report when a landing leaves it open, wakes the starter instead.
+          const quiet =
+            !failed &&
+            typeof m.to === 'number' &&
+            (await tx.doc(Started, m.to as ConversationId)).by === m.from &&
+            (await landing(host, tx, m.to as ConversationId))
           return {
             status: 'running',
             checkpoint: {
@@ -235,6 +246,7 @@ export function delivery(host: ExtensionHost) {
               failed,
               ...(stopped ? { stopped } : {}),
               ...(line ? { serves: line } : {}),
+              ...(quiet ? { quiet } : {}),
             },
           }
         }, ctx)
@@ -303,14 +315,15 @@ export function delivery(host: ExtensionHost) {
           }
           const body = `Reply from ${task.input.toLabel} to your message ${m.re}${stopped ? ' (stopped)' : failed ? ' (failed)' : ''}:\n${m.text}${task.state.checkpoint.serves ?? ''}`
           const content = images.length ? [{ type: 'text' as const, text: body }, ...images] : body
+          const requestId = `board-reply:${m.id}`
           await sender?.submit(
-            {
-              type: 'input',
-              requestId: `board-reply:${m.id}`,
-              whenBusy: 'steer',
-              entry,
-              content,
-            },
+            task.state.checkpoint.quiet
+              ? {
+                  type: 'write',
+                  requestId,
+                  entry: { ...entry, model: [{ role: 'user', content, timestamp: Date.now() }] },
+                }
+              : { type: 'input', requestId, whenBusy: 'steer', entry, content },
             ctx,
           )
         }

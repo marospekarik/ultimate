@@ -57,6 +57,8 @@ export type LandedData = {
   paths: string[]
   /** `<remote>/<target>` it was pushed to; absent when not pushed or the push failed. */
   pushed?: string
+  /** Set when it changed the running clone's core (`needsRestart` in `lib/layers.ts`, over every changed path). */
+  needsRestart?: true
 }
 /**
  * The lander landed a submission: the target moved to `sha`. Emitted in the commit that records the outcome, also when

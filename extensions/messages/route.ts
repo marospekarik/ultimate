@@ -16,6 +16,7 @@ import { ConversationsApi } from '../conversations/api.ts'
 import { Subagents } from '../subagents/api.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
 import { Messages } from './api.ts'
+import { landing, live } from './landing.ts'
 import { isOpen } from '../../lib/message-state.ts'
 import { terminal } from './log.ts'
 import type { Message } from './api.ts'
@@ -28,25 +29,6 @@ import type { Serves } from './addresses.ts'
 /** The lander's card in the starter, an input only when the landing concluded the branch (workspaces' lander.ts). */
 const LANDED = 'workspaces.lander-report'
 
-/** Every task state but `terminal`: queried by status, so finished tasks are never scanned. */
-const LIVE = ['pending', 'running', 'waiting', 'sleeping', 'completing'] as const
-/** Live tasks of `kind` in `conversationId` (any conversation when undefined). */
-async function live(tx: Tx, kind: string, conversationId?: ConversationId) {
-  const found = []
-  for (const status of LIVE) {
-    let cursor: Parameters<Tx['scanTasks']>[2]
-    do {
-      const page = await tx.scanTasks(
-        { ...(conversationId === undefined ? {} : { conversationId }), kind, status },
-        100,
-        cursor,
-      )
-      found.push(...page.items)
-      cursor = page.next
-    } while (cursor !== undefined)
-  }
-  return found
-}
 /**
  * Whether `id` runs or has input queued, or one of its tasks will wake it: a subagent's report until its input is
  * admitted, or a waking `notify` on another conversation. Matched by kind, so messages needs neither extension.
@@ -68,14 +50,7 @@ async function underway(host: ExtensionHost, tx: Tx, id: ConversationId): Promis
   // A landing concludes the branch in the commit that ends its report and wakes the starter itself; an answer routed
   // after that, or for a branch concluded by hand, is not a report. Any input that runs the branch resumes it first.
   if ((await host.need(ConversationsApi).concludedIn(tx)).has(id)) return true
-  const queue = (await tx.doc(host.need(WorkspacesApi).doc, ROOT_CONVERSATION_ID)).queue
-  if (queue.some((item) => item.conversationId === id)) return true
-  // A submission leaves the queue in the commit that moves the lander to reporting it.
-  for (const task of await live(tx, 'workspaces.lander')) {
-    const checkpoint = (task.state as { checkpoint?: { phase?: string; conversationId?: number } })
-      .checkpoint
-    if (checkpoint?.phase === 'report' && checkpoint.conversationId === id) return true
-  }
+  if (await landing(host, tx, id)) return true
   return working(tx, id)
 }
 /**

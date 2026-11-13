@@ -31,6 +31,9 @@ report.**
 
 - **Notes.** A one-way message from a subagent to its parent, or from a branch to its starter (`board.started`), is
   written with `delivery: 'note'`: it starts no run; the recipient reads it with its next request.
+- **Replies before a landing.** A branch's reply to its starter while it has a submission the lander has not reported
+  yet is written as a note too: the landing card, or the branch's report when the landing leaves it open, wakes the
+  starter. A failed or stopped reply still wakes it.
 - **Reports.** After each run of a branch, its final answer goes to its starter, unless it already returned as a reply.
   When nothing of the branch is under way (no run, queued input, busy subagent, pending submission or open
   reply-enabled message), it goes as a one-way message with `report: true`, which wakes the starter; otherwise as a
