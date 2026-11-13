@@ -159,6 +159,9 @@ async function hold(host: Host, cause?: Cause) {
     if (!cause || ('held' in cause && cause.held.until === undefined)) doc.manual = true
     if (cause && 'limit' in cause && !doc.limit) doc.limit = cause.limit
     if (cause && 'held' in cause && !doc.held) doc.held = cause.held
+    // A later end joining a timed hold moves it: the pause plays once every cause has ended.
+    else if (cause && 'held' in cause && (cause.held.until ?? 0) > (doc.held?.until ?? Infinity))
+      doc.held!.until = cause.held.until
     if (doc.paused) return
     const runs: NonNullable<PauseDocState['runs']> = {}
     // Sleeping: a generation waiting out its retry backoff, as one that just hit a rate limit does.
