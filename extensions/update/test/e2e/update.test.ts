@@ -1,6 +1,6 @@
 import { mkdir, utimes, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { beforeEach, expect, it } from 'vitest'
+import { expect, it } from 'vitest'
 import { git } from '../../../../lib/git.ts'
 import { fastForward, Refusal, standing } from '../../../../lib/fast-forward.ts'
 import type { Standing } from '../../../../lib/fast-forward.ts'
@@ -10,50 +10,47 @@ import { cloneState, fetchIfDue, layersOf } from '../../clone.ts'
 import { installOwed } from '../../server.ts'
 import { temp } from '../../../../test/helpers.ts'
 
-let upstream: string
-let clone: string
-
-/** Commit `files` upstream; returns the new sha. */
-async function push(files: Record<string, string>, message = 'change') {
-  for (const [name, body] of Object.entries(files)) {
-    const path = join(upstream, name)
-    await mkdir(dirname(path), { recursive: true })
-    await writeFile(path, body)
+async function fixture() {
+  // A beforeEach that timed out kept using the next case's global paths, colliding on index.lock.
+  // Each setup and its push closure must keep their own repositories, even when a timed-out setup is still running.
+  const upstream = await temp('ultimate-update-up-')
+  /** Commit `files` upstream; returns the new sha. */
+  async function push(files: Record<string, string>, message = 'change') {
+    for (const [name, body] of Object.entries(files)) {
+      const path = join(upstream, name)
+      await mkdir(dirname(path), { recursive: true })
+      await writeFile(path, body)
+    }
+    await git(upstream, 'add', '-A')
+    await git(upstream, 'commit', '-q', '-m', message)
+    return git(upstream, 'rev-parse', 'HEAD')
   }
-  await git(upstream, 'add', '-A')
-  await git(upstream, 'commit', '-q', '-m', message)
-  return git(upstream, 'rev-parse', 'HEAD')
-}
-
-/** Commit `files` in the clone, so it has a commit of its own; returns its sha. */
-async function localCommit(files: Record<string, string>, message = 'local') {
-  for (const [name, body] of Object.entries(files)) {
-    const path = join(clone, name)
-    await mkdir(dirname(path), { recursive: true })
-    await writeFile(path, body)
-  }
-  await git(clone, 'add', '-A')
-  await git(clone, 'commit', '-q', '-m', message)
-  return git(clone, 'rev-parse', 'HEAD')
-}
-
-/** Commit `files` upstream and fetch it into the clone, so its `origin/main` moves. */
-async function upstreamChange(files: Record<string, string>) {
-  await push(files)
-  await git(clone, 'fetch', '-q', 'origin')
-}
-
-beforeEach(async () => {
-  upstream = await temp('ultimate-update-up-')
   await git(upstream, 'init', '-q', '-b', 'main')
   await git(upstream, 'config', 'user.email', 'test@example.com')
   await git(upstream, 'config', 'user.name', 'Test')
   await push({ 'README.md': 'hello\n', 'pnpm-lock.yaml': 'lockfileVersion: 9\n' }, 'first')
-  clone = join(await temp('ultimate-update-clone-'), 'clone')
+  const clone = join(await temp('ultimate-update-clone-'), 'clone')
   await git(process.cwd(), 'clone', '-q', upstream, clone)
   await git(clone, 'config', 'user.email', 'test@example.com')
   await git(clone, 'config', 'user.name', 'Test')
-})
+  /** Commit `files` in the clone, so it has a commit of its own; returns its sha. */
+  async function localCommit(files: Record<string, string>, message = 'local') {
+    for (const [name, body] of Object.entries(files)) {
+      const path = join(clone, name)
+      await mkdir(dirname(path), { recursive: true })
+      await writeFile(path, body)
+    }
+    await git(clone, 'add', '-A')
+    await git(clone, 'commit', '-q', '-m', message)
+    return git(clone, 'rev-parse', 'HEAD')
+  }
+  /** Commit `files` upstream and fetch it into the clone, so its `origin/main` moves. */
+  async function upstreamChange(files: Record<string, string>) {
+    await push(files)
+    await git(clone, 'fetch', '-q', 'origin')
+  }
+  return { clone, push, localCommit, upstreamChange }
+}
 
 it('names the layers a range touches', () => {
   expect(layersOf(['extensions/a/web.tsx', 'web/src/x.ts'])).toEqual({
@@ -68,6 +65,7 @@ it('names the layers a range touches', () => {
 })
 
 it('fetches only when the last fetch is an hour old', async () => {
+  const { clone, push } = await fixture()
   const run = gitIn(clone)
   // A fresh clone has never fetched: due at once.
   expect(await fetchIfDue(run, clone, Date.now())).toBeUndefined()
@@ -90,6 +88,7 @@ it('fetches only when the last fetch is an hour old', async () => {
 })
 
 it('Check now fetches although the last fetch is recent, once among simultaneous checks', async () => {
+  const { clone, push } = await fixture()
   const run = gitIn(clone)
   await fetchIfDue(run, clone, Date.now())
   await push({ 'extensions/a/web.tsx': 'x\n' })
@@ -117,6 +116,7 @@ it('Check now fetches although the last fetch is recent, once among simultaneous
 })
 
 it('fast-forwards a clone behind origin and reports the lockfile change', async () => {
+  const { clone, push } = await fixture()
   const tip = await push({
     'server/main.ts': 'x\n',
     'pnpm-lock.yaml': 'lockfileVersion: 9\npackages: {}\n',
@@ -131,6 +131,7 @@ it('fast-forwards a clone behind origin and reports the lockfile change', async 
 })
 
 it('refuses a dirty, switched or diverged clone and leaves it alone', async () => {
+  const { clone, push } = await fixture()
   await push({ 'extensions/a/web.tsx': 'x\n' })
   const run = gitIn(clone)
   const head = await git(clone, 'rev-parse', 'HEAD')
@@ -165,6 +166,7 @@ it('refuses a dirty, switched or diverged clone and leaves it alone', async () =
 })
 
 it('merges a diverged clone with a restore ref, predicting conflicts first', async () => {
+  const { clone, localCommit, upstreamChange } = await fixture()
   const run = gitIn(clone)
   await upstreamChange({ 'extensions/a/web.tsx': 'x\n' })
   const mine = await localCommit({ 'local.txt': 'mine\n' })
@@ -183,6 +185,7 @@ it('merges a diverged clone with a restore ref, predicting conflicts first', asy
 })
 
 it('refuses a predicted conflict without touching the clone, and leaves no restore ref', async () => {
+  const { clone, localCommit, upstreamChange } = await fixture()
   const run = gitIn(clone)
   await upstreamChange({ 'README.md': 'upstream\n' })
   const mine = await localCommit({ 'README.md': 'local\n' })
@@ -196,6 +199,7 @@ it('refuses a predicted conflict without touching the clone, and leaves no resto
 })
 
 it('prunes restore refs older than 30 days when writing a new one', async () => {
+  const { clone, localCommit, upstreamChange } = await fixture()
   const run = gitIn(clone)
   await upstreamChange({ 'extensions/a/web.tsx': 'x\n' })
   const mine = await localCommit({ 'local.txt': 'mine\n' })
@@ -208,6 +212,7 @@ it('prunes restore refs older than 30 days when writing a new one', async () => 
 })
 
 it('hands a diverged clone to the diverged callback instead of refusing', async () => {
+  const { clone, localCommit, upstreamChange } = await fixture()
   const run = gitIn(clone)
   await upstreamChange({ 'extensions/a/web.tsx': 'x\n' })
   const mine = await localCommit({ 'local.txt': 'mine\n' })
@@ -223,6 +228,7 @@ it('hands a diverged clone to the diverged callback instead of refusing', async 
 })
 
 it('admits one holder of the clone lock among simultaneous ones, and recovers a stale sidecar', async () => {
+  const { clone } = await fixture()
   const lock = join(clone, '.git/ultimate-update.lock')
   let inside = 0
   let most = 0
@@ -245,6 +251,7 @@ it('admits one holder of the clone lock among simultaneous ones, and recovers a 
 })
 
 it('owes an install while the lockfile differs from the installed one', async () => {
+  const { clone } = await fixture()
   expect(await installOwed(clone)).toBe(true)
   await mkdir(join(clone, 'node_modules/.pnpm'), { recursive: true })
   await writeFile(join(clone, 'node_modules/.pnpm/lock.yaml'), 'lockfileVersion: 9\n')
