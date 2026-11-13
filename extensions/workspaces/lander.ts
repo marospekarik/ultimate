@@ -446,6 +446,7 @@ export function createLander(
             commitCount: commits.length,
             paths: (outcome.paths ?? []).slice(0, 8),
             ...(outcome.pushed ? { pushed: outcome.pushed } : {}),
+            ...(outcome.needsRestart ? { needsRestart: true as const } : {}),
           })
         }
         return {

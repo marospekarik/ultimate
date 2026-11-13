@@ -1469,6 +1469,24 @@ it("leaves a branch's final answer as a note while its work is under way", async
   ])
   expect(view.entries.filter((e) => e.id > note!.id && e.kind === 'pi.assistant')).toHaveLength(0)
 })
+// #31836: "submitted, waiting for the lander" replies woke @ultimate, and the landing card woke it again minutes later.
+it("leaves a branch's reply to its starter as a note while its landing is still to come", async () => {
+  const f = await fixture()
+  const b = await branched(f)
+  await f.opened.harness.commit(async (tx) => {
+    ;(await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).queue.push({
+      conversationId: b.id,
+    } as never)
+  }, context)
+  await f.send(`#${b.id}`, 'Status?')
+  await until(async () => (await replies(f)).length === 2)
+  await b.settled()
+  const view = await f.opened.root.context(context)
+  const reply = view.entries.findLast((e) => e.kind === 'board.reply')!
+  expect(reply.input).toBeUndefined()
+  expect(view.entries.filter((e) => e.id > reply.id && e.kind === 'pi.assistant')).toHaveLength(0)
+  expect((await f.log())!.messages.at(-1)).toMatchObject({ from: b.id, to: 1, state: 'delivered' })
+})
 it('leaves the final answer of a branch its landing concluded as a note, since the landing woke the starter', async () => {
   const f = await fixture()
   const b = await branched(f)
