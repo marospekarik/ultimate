@@ -14,16 +14,14 @@ import { fauxServer, post, removeTemp, temp, until } from '../../../../test/help
 
 let directory: string
 let server: Awaited<ReturnType<typeof fauxServer>>
+// The first test starts the shared server, like every other server test, inside its own budget: started in
+// beforeAll it outran the 10 s hook limit under the lander's load (landings #23188, #30933, #31059 in #19585).
+let starting: Promise<typeof server> | undefined
 beforeAll(async () => {
   directory = await temp('ultimate-bash-interrupt-')
-  server = await fauxServer({
-    ultimateRoot: resolve('.'),
-    home: join(directory, 'home'),
-    userHome: directory,
-  })
 })
 afterAll(async () => {
-  await server.close()
+  await (await starting)?.close()
   await removeTemp(directory)
 })
 
@@ -38,6 +36,11 @@ const cancel = (callId?: string) =>
   }).then(({ status, data }) => ({ status, error: (data as { error?: string }).error }))
 
 async function run(args: Record<string, unknown>, input?: 'steer' | 'followUp' | 'cancel') {
+  server = await (starting ??= fauxServer({
+    ultimateRoot: resolve('.'),
+    home: join(directory, 'home'),
+    userHome: directory,
+  }))
   const cancels: { status: number; error?: string }[] = []
   let callId: string | undefined
   const started = join(directory, `started-${Math.random()}`)
