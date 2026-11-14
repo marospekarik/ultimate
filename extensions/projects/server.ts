@@ -7,6 +7,8 @@ import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { defineExtension } from '@earendil-works/pi-durable'
 import { implementAction } from '../../lib/actions.ts'
 import { readJson, updateJson } from '../../lib/json-file.ts'
+import { githubRepo, readGithubRepo } from '../../lib/project-identity.ts'
+import type { GithubRepo } from '../../lib/project-identity.ts'
 import { postAction } from '../../lib/remote.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { MessagesApi } from '../messages/api.ts'
@@ -43,19 +45,70 @@ async function counts(name: string, url: string, signal: AbortSignal) {
   return typeof busy === 'number' && typeof questions === 'number' ? { busy, questions } : {}
 }
 
+/**
+ * Each project folder's GitHub repository, once known: read in the background on first sight (`git` here, then one
+ * `gh` call for its visibility) and kept for the process, so a poll never waits on the network.
+ */
+const repos = new Map<string, GithubRepo | null>()
+const reading = new Set<string>()
+function repoOf(root: string | undefined) {
+  if (!root) return undefined
+  if (!repos.has(root) && !reading.has(root)) {
+    reading.add(root)
+    // oxlint-disable-next-line typescript/no-floating-promises -- neither call rejects: githubRepo settles to undefined, readGithubRepo to the repository without its visibility.
+    void (async () => {
+      const key = await githubRepo(root)
+      repos.set(root, key ? await readGithubRepo(key) : null)
+      reading.delete(root)
+    })()
+  }
+  return repos.get(root) ?? undefined
+}
+
+/**
+ * A branch's checkout (`<home>/worktrees/<id>`, as previews run) is named for its project and that conversation,
+ * `ultimate #586869`, as the sidebar heads it, so it shows and colours with its project rather than as a bare number.
+ */
+function checkoutName(name: string, root: string | undefined) {
+  const worktree = /\/\.ultimate\/projects\/(.+)-[\da-f]{8}\/worktrees\/(\d+)$/.exec(root ?? '')
+  return worktree ? `${worktree[1]} #${worktree[2]}` : name
+}
+
+/** Each project's port on the tailnet by its root, from the registry the tailscale extension keeps. */
+async function tailnetPorts(host: ExtensionHost) {
+  type Registry = { ports?: Record<string, { port?: unknown }> }
+  const registry = await readJson<Registry>(
+    join(host.userHome, '.ultimate', 'tailscale.json'),
+    {},
+  ).catch((): Registry => {
+    // Without a readable registry nothing is published on the tailnet: instances are reached over loopback only.
+    return {}
+  })
+  const ports: Record<string, number> = {}
+  for (const [root, entry] of Object.entries(registry.ports ?? {}))
+    if (typeof entry?.port === 'number') ports[root] = entry.port
+  return ports
+}
+
 export async function list(host: ExtensionHost, signal: AbortSignal): Promise<RunningProject[]> {
+  const tailnet = await tailnetPorts(host)
   return Promise.all(
-    (await host.projects()).flatMap(({ name, running, current }) => {
+    (await host.projects()).flatMap(({ name, root, running, current }) => {
       // This server answers whether or not a supervisor wrote its port into the lock (a preview's has none).
       const url = current ? host.system().process.url : running?.url
       if (!url) return []
       return [
-        (async () => ({
-          name,
-          url,
-          current,
-          ...(current ? await own(host) : await counts(name, url, signal)),
-        }))(),
+        (async () => {
+          const repo = repoOf(root)
+          return {
+            name: checkoutName(name, root),
+            url,
+            current,
+            ...(repo && { repo: { name: repo.name, url: repo.url, visibility: repo.visibility } }),
+            ...(root && tailnet[root] ? { tailnetPort: tailnet[root] } : {}),
+            ...(current ? await own(host) : await counts(name, url, signal)),
+          }
+        })(),
       ]
     }),
   )
