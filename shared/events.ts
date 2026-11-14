@@ -58,9 +58,10 @@ export const NoticeEvent = defineEvent<{ extension: string; message: string; lev
 export const StartedEvent = defineEvent<{ generation: number; build: string }>('ultimate.started')
 
 /**
- * The browser a user request came from, `desktop chrome` or `phone safari`, and its Tailscale login and tailnet
- * `address` (`100.64.0.0/10` or `fd7a:115c:a1e0::/48`) when it came through Tailscale Serve. Nothing else of the
- * request is kept.
+ * The browser a user request came from, `desktop chrome` or `phone safari`, and the `login` and `address` the access
+ * rule that admitted it vouches for: Tailscale Serve's login and tailnet address (`100.64.0.0/10` or
+ * `fd7a:115c:a1e0::/48`), Cloudflare Access's email. A direct local request has neither. Nothing else of the request
+ * is kept.
  */
 export type Device = { device: string; login?: string; address?: string }
 

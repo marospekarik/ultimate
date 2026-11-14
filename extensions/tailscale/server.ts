@@ -5,6 +5,7 @@ import { acquireLock, alive } from '../../server/lock.ts'
 import { projectHome } from '../../server/project.ts'
 import { access, mkdir } from 'node:fs/promises'
 import { constants, existsSync } from 'node:fs'
+import { BlockList, isIP } from 'node:net'
 import { join } from 'node:path'
 import { defineExtension } from '@earendil-works/pi-durable'
 import { exec } from '../../lib/exec.ts'
@@ -16,6 +17,24 @@ import { TailscaleApi } from './api.ts'
 import type { Status } from './api.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { RetryAction, StatusAction } from './refs.ts'
+/** Tailscale's address ranges: the CGNAT block it assigns IPv4 addresses from and its IPv6 ULA prefix. */
+const tailnet = new BlockList()
+tailnet.addSubnet('100.64.0.0', 10, 'ipv4')
+tailnet.addSubnet('fd7a:115c:a1e0::', 48, 'ipv6')
+
+/**
+ * The client's tailnet address from `X-Forwarded-For`. Serve is the single hop in front of the server and sets the
+ * header to the peer address it saw, dropping what the client sent; should a proxy ever append instead, the rightmost
+ * entry is still the one the last hop vouches for and anything left of it is the client's claim, so only the rightmost
+ * entry counts, and only inside Tailscale's ranges.
+ */
+function tailnetAddress(header: string | string[] | undefined) {
+  const address = [header ?? []].flat().join(',').split(',').at(-1)?.trim() ?? ''
+  const family = isIP(address)
+  if (!family) return undefined
+  return tailnet.check(address, family === 4 ? 'ipv4' : 'ipv6') ? address : undefined
+}
+
 interface Serve {
   TCP?: Record<string, unknown>
   Web?: Record<string, { Handlers?: Record<string, { Proxy?: string }> }>
@@ -292,7 +311,9 @@ export default function tailscale(host: ExtensionHost) {
               if (allow) ready = { state: 'ready', url, allow }
               if (allow && status.state === 'ready') set(ready!)
             }
-            return allow?.includes(login) ? { login } : undefined
+            if (!allow?.includes(login)) return undefined
+            const address = tailnetAddress(headers['x-forwarded-for'])
+            return { login, ...(address && { address }) }
           },
         })
         ready = allow
