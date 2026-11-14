@@ -25,6 +25,7 @@ import { clampThinkingLevel, getSupportedThinkingLevels } from '@earendil-works/
 import { Metadata } from './metadata.ts'
 import { EVENT_LOG_LABEL, emit } from './events.ts'
 import { UserInputEvent } from '../shared/events.ts'
+import type { Device } from '../shared/events.ts'
 import { admit, deviceOf } from './request-security.ts'
 import type { Access } from './request-security.ts'
 import { conversationIndex } from './project.ts'
@@ -125,6 +126,7 @@ async function runAction(
   extensions: Extensions,
   [, name, key]: RegExpExecArray,
   data: Record<string, unknown>,
+  device: Device,
 ) {
   if (request.headers['sec-fetch-site'] !== 'same-origin' && !request.headers.origin)
     throw new HttpError(403, 'Extension actions require a browser request')
@@ -140,15 +142,7 @@ async function runAction(
   try {
     // Missing args mean none, so `curl -d '{}'` and agents can call argument-free actions.
     const args = (Object.hasOwn(data, 'args') ? data.args : {}) as JsonValue
-    const result = await extensions.invoke(
-      name,
-      key,
-      args,
-      controller.signal,
-      id,
-      'ui',
-      deviceOf(request.headers),
-    )
+    const result = await extensions.invoke(name, key, args, controller.signal, id, 'ui', device)
     reply(response, 200, { result })
   } catch (error) {
     // An aborted action is the client leaving (a newer call, an unmount), not a fault.
@@ -427,10 +421,12 @@ export async function createApi(
       const json = (status: number, data: unknown) => reply(response, status, data)
       try {
         // Local-only does not mean safe from cross-origin browser requests.
-        if (
-          !(await admit(request, new URL(system.current().process.url).port || '80', access.rules))
+        const identity = await admit(
+          request,
+          new URL(system.current().process.url).port || '80',
+          access.rules,
         )
-          throw new HttpError(403, 'Forbidden')
+        if (!identity) throw new HttpError(403, 'Forbidden')
         if (request.method === 'GET' && url.pathname === '/api/events') {
           await stream(request, response)
           return true
@@ -512,7 +508,14 @@ export async function createApi(
             : undefined,
         )
         if (action) {
-          await runAction(request, response, extensions, action, data)
+          await runAction(
+            request,
+            response,
+            extensions,
+            action,
+            data,
+            deviceOf(request.headers, identity),
+          )
           return true
         }
         if (url.pathname === '/api/ui') {
@@ -665,7 +668,7 @@ export async function createApi(
                       ? { submission: submission.id }
                       : { entry: admitted.entry }),
                     length,
-                    ...deviceOf(request.headers),
+                    ...deviceOf(request.headers, identity),
                   }),
                 context,
               )
