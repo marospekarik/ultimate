@@ -509,7 +509,7 @@ export async function createApi(
             extensions,
             action,
             data,
-            deviceOf(request.headers, identity),
+            deviceOf(request.headers['user-agent'], identity),
           )
           return true
         }
@@ -663,7 +663,7 @@ export async function createApi(
                       ? { submission: submission.id }
                       : { entry: admitted.entry }),
                     length,
-                    ...deviceOf(request.headers, identity),
+                    ...deviceOf(request.headers['user-agent'], identity),
                   }),
                 context,
               )

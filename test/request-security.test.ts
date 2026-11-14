@@ -48,20 +48,11 @@ it('labels a request by its browser, with the login of the rule that admitted it
   const iphone =
     'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1'
   const linux = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/141.0 Safari/537.36'
-  expect(deviceOf({ 'user-agent': iphone }, {})).toEqual({ device: 'phone safari' })
-  expect(
-    deviceOf({ 'user-agent': linux }, { login: 'me@example.com', address: '100.64.0.2' }),
-  ).toEqual({ device: 'desktop chrome', login: 'me@example.com', address: '100.64.0.2' })
-  // The request's own identity headers are a claim: only the admitting rule's identity counts.
-  expect(
-    deviceOf(
-      {
-        'user-agent': linux,
-        'tailscale-user-login': 'me@example.com',
-        'x-forwarded-for': '1.2.3.4',
-      },
-      {},
-    ),
-  ).toEqual({ device: 'desktop chrome' })
-  expect(deviceOf({}, {})).toEqual({ device: 'desktop other' })
+  expect(deviceOf(iphone, {})).toEqual({ device: 'phone safari' })
+  expect(deviceOf(linux, { login: 'me@example.com', address: '100.64.0.2' })).toEqual({
+    device: 'desktop chrome',
+    login: 'me@example.com',
+    address: '100.64.0.2',
+  })
+  expect(deviceOf(undefined, {})).toEqual({ device: 'desktop other' })
 })

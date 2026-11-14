@@ -72,11 +72,10 @@ export async function admit(
 }
 
 /**
- * The short label of the browser behind a request, `phone safari` or `desktop chrome`, with the login and address
- * `admit` found for it. Nothing else of the request.
+ * The short label of the browser behind a request's `User-Agent`, `phone safari` or `desktop chrome`, with the login
+ * and address `admit` found for it. Nothing else of the request.
  */
-export function deviceOf(headers: IncomingHttpHeaders, identity: Partial<Identity>): Device {
-  const agent = headers['user-agent'] ?? ''
+export function deviceOf(agent = '', identity: Partial<Identity>): Device {
   const kind = /Mobi|iPhone|Android/.test(agent) ? 'phone' : 'desktop'
   const browser = /Edg\//.test(agent)
     ? 'edge'
