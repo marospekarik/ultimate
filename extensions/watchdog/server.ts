@@ -318,8 +318,14 @@ export default function watchdog(host: ExtensionHost) {
         return
       const child = (await tx.conversation(task.conversationId))!
       const ultimate = (await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate
-      const recipient =
-        child.owner?.conversationId ?? (starter as ConversationId | undefined) ?? ultimate
+      // A starter deleted since, or none, leaves the report with @ultimate.
+      const started =
+        starter !== undefined &&
+        starter !== child.id &&
+        (await tx.conversation(starter as ConversationId))
+          ? (starter as ConversationId)
+          : undefined
+      const recipient = child.owner?.conversationId ?? started ?? ultimate
       if (recipient === undefined)
         throw new Error('Watchdog needs @ultimate to report a failed run')
       if (task.state.status !== 'terminal' || task.state.outcome.status !== 'failed') return
