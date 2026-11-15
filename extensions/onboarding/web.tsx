@@ -1,3 +1,4 @@
+import { ROOT } from '@/sdk'
 import { BlocksIcon, CheckIcon, FolderCogIcon, GitBranchIcon, LoaderCircleIcon } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import {
@@ -40,7 +41,6 @@ function useIsolation() {
   if (busy !== runs.busy) setRuns({ busy, ended: runs.ended + (busy ? 0 : 1) })
   const isolation = useAction(IsolationAction, null, { enabled: workspaces, on: runs.ended })
   useEvent('onboarding:git', () => {
-    // oxlint-disable-next-line typescript/no-floating-promises -- useAction reports failures and resolves undefined rather than rejecting.
     if (workspaces) void isolation.refetch()
   })
   return workspaces ? isolation.data : undefined
@@ -151,7 +151,7 @@ function SetupLink({
   )
 }
 /** Dismissing Start here quiets the setup reminders too; ⌘K Get ready… and the Extensions panel still reach them. */
-const useDismissed = () => useDocOf(1, StartsDoc)?.dismissed === true
+const useDismissed = () => useDocOf(ROOT, StartsDoc)?.dismissed === true
 const useOff = () => useAction(StatusAction).data?.off === true
 function Undecided() {
   const project = useSystem()?.project

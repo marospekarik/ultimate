@@ -1,4 +1,5 @@
 /** Update in the browser: whether the Ultimate clone is behind origin, and updating it. Browser-safe. */
+import type { ConversationId } from '@earendil-works/pi-durable'
 import { actionRef } from '../../shared/extension-api.ts'
 import { defineEvent } from '../../shared/events.ts'
 
@@ -97,7 +98,7 @@ export const UpdateAction = actionRef<null, UpdateResult>('update', 'update')
  * branch — offered when conflicts are predicted — or to fix a merged update whose `pnpm check` failed;
  * @ultimate's conversation id. Only while `merge` is offered.
  */
-export const MergeAction = actionRef<null, { id: number }>('update', 'merge')
+export const MergeAction = actionRef<null, { id: ConversationId }>('update', 'merge')
 
 /**
  * The clone fast-forwarded `from..to` (`commits` commits) touching `layers`; `install` says whether packages

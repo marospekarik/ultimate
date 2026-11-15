@@ -5,6 +5,7 @@
 import { exec } from './exec.ts'
 import type { FastForward, Git, Standing } from './fast-forward.ts'
 import { Refusal } from './fast-forward.ts'
+import { overshadowed, retriedLater } from './errors.ts'
 
 /**
  * Whether merging `remote` into `HEAD` would conflict, predicted by `git merge-tree --write-tree` without
@@ -65,8 +66,8 @@ async function saveRestore(git: Git, head: string): Promise<string> {
   for (const other of others) {
     const stamp = stamped(other)
     if (!stamp || stamp.getTime() >= cutoff) continue
-    // Pruning is best-effort: a ref that cannot be deleted only outlives its pruning.
-    await git('update-ref', '-d', other).catch(() => undefined)
+    // A ref that cannot be deleted now is pruned again by the next merge.
+    await git('update-ref', '-d', other).catch(retriedLater)
   }
   return ref
 }
@@ -99,8 +100,8 @@ export async function mergeUpstream(
       undone = false
     }
     if (undone)
-      // A ref that cannot be deleted only outlives its aborted merge.
-      await git('update-ref', '-d', restore).catch(() => undefined)
+      // A ref that cannot be deleted only outlives its aborted merge, whose refusal is what matters.
+      await git('update-ref', '-d', restore).catch(overshadowed)
     throw new Refusal(
       `the merge of ${state.remote} conflicted; nothing was changed. Redo it by hand, or ask @ultimate to merge it on a branch`,
     )

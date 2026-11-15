@@ -29,8 +29,9 @@ export async function landing(host: ExtensionHost, tx: Tx, id: ConversationId): 
   if (queue.some((item) => item.conversationId === id)) return true
   // A submission leaves the queue in the commit that moves the lander to reporting it.
   for (const task of await live(tx, 'workspaces.lander')) {
-    const checkpoint = (task.state as { checkpoint?: { phase?: string; conversationId?: number } })
-      .checkpoint
+    const checkpoint = (
+      task.state as { checkpoint?: { phase?: string; conversationId?: ConversationId } }
+    ).checkpoint
     if (checkpoint?.phase === 'report' && checkpoint.conversationId === id) return true
   }
   return false

@@ -4,6 +4,8 @@ import { defineExtension } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { isolatable } from '../../lib/git.ts'
+import { meansNone } from '../../lib/errors.ts'
+import { deadline, every } from '../../lib/timers.ts'
 import { ConversationsApi } from '../conversations/api.ts'
 import { SubagentsApi } from '../subagents/api.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
@@ -36,10 +38,8 @@ const shared = (host: ExtensionHost) =>
 
 /** The project's source checkout, or undefined outside a Git repository. */
 async function sourceOf(host: ExtensionHost) {
-  const top = await gitIn(host.projectRoot)('rev-parse', '--show-toplevel').catch(
-    // Not a Git repository: there is nothing to sync, and the item shows nothing.
-    () => undefined,
-  )
+  // Not a Git repository: there is nothing to sync, and the item shows nothing.
+  const top = await gitIn(host.projectRoot)('rev-parse', '--show-toplevel').catch(meansNone)
   return top ? realpath(top) : undefined
 }
 
@@ -139,11 +139,11 @@ export default function sync(host: ExtensionHost) {
         store.ticking = undefined
       })
   }
-  const start = setTimeout(tick, 30_000)
-  const timer = setInterval(tick, TICK)
+  const cancelStart = deadline(30_000, tick)
+  const stopTicking = every(TICK, tick)
   host.onClose(async () => {
-    clearTimeout(start)
-    clearInterval(timer)
+    cancelStart()
+    stopTicking()
     await store.ticking
   })
   return defineExtension({ name: 'sync' })

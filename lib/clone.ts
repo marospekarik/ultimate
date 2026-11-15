@@ -6,8 +6,8 @@ import { stat } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
 import { exec } from './exec.ts'
 import type { Git } from './fast-forward.ts'
-// oxlint-disable-next-line no-restricted-imports -- the core's process-safe lock, shared with secrets and tailscale
-import { acquireLock } from '../server/lock.ts'
+import { acquireLock } from './lock.ts'
+import { meansNone } from './errors.ts'
 
 /** Git in `root`, never prompting: an HTTPS fetch or push without a login must fail rather than hang. */
 export const gitIn =
@@ -36,16 +36,13 @@ export async function gitPath(git: Git, root: string, name: string) {
 
 /** When the repository was last fetched (`FETCH_HEAD`'s mtime), or undefined before the first fetch. */
 export async function fetchedAt(git: Git, root: string) {
-  return stat(await gitPath(git, root, 'FETCH_HEAD')).then(
-    (info) => info.mtimeMs,
-    () => undefined,
-  )
+  return stat(await gitPath(git, root, 'FETCH_HEAD')).then((info) => info.mtimeMs, meansNone)
 }
 
 /**
  * Run `work` holding `lock`, so fetches, merges and installs of one repository never overlap across Ultimates or
  * extensions sharing it; undefined without running while another still holds it after `waitMs`. The lock is the
- * core's SQLite-held one (`server/lock.ts`): the exclusive transaction ends with its process, so a dead holder never
+ * core's SQLite-held one (`lib/lock.ts`): the exclusive transaction ends with its process, so a dead holder never
  * blocks the next.
  */
 export async function withLock<T>(

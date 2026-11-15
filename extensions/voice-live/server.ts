@@ -1,3 +1,12 @@
+import { parseConversationId } from '../../lib/ids.ts'
+import type {
+  TaskId,
+  ConversationId,
+  Cursor,
+  ToolExecutionApi,
+  ToolTaskInput,
+  Tx,
+} from '@earendil-works/pi-durable'
 import { BACKGROUND_CONTEXT as context, awaitWithContext } from '@earendil-works/chord/context'
 import {
   AssistantEntry,
@@ -8,13 +17,6 @@ import {
   GenerationTask,
   hook,
   ROOT_CONVERSATION_ID,
-} from '@earendil-works/pi-durable'
-import type {
-  ConversationId,
-  Cursor,
-  ToolExecutionApi,
-  ToolTaskInput,
-  Tx,
 } from '@earendil-works/pi-durable'
 import type { Context } from '@earendil-works/chord/context'
 import { bool, int, obj, opt, str } from '@earendil-works/pi-schema'
@@ -47,6 +49,7 @@ import type {
   VoiceSession,
 } from './refs.ts'
 import { voiceBrief } from './brief.ts'
+import { safeToRerun } from '../../lib/replay.ts'
 
 const SECRET = 'OPENAI_API_KEY'
 const NO_KEY = `Live voice needs an OpenAI API key: add ${SECRET} in ⌘K → Secrets`
@@ -204,14 +207,18 @@ function questionsText(questions: Question[]) {
 }
 
 /** Who asks `message`, for Voice to say: @ultimate, or the branch by title and id. */
-function askerOf(host: ExtensionHost, message: Pick<Message, 'from'>, main: number | undefined) {
+function askerOf(
+  host: ExtensionHost,
+  message: Pick<Message, 'from'>,
+  main: ConversationId | undefined,
+) {
   if (message.from === main) return '@ultimate'
   const title = host.conversations().find((c) => c.id === message.from)?.title
   return `#${message.from}${title ? ` "${title}"` : ''}`
 }
 
 /** One open question to the user in full, the way Voice reads it out. */
-function questionText(host: ExtensionHost, message: Message, main: number | undefined) {
+function questionText(host: ExtensionHost, message: Message, main: ConversationId | undefined) {
   return [
     `Message ${message.id} from ${askerOf(host, message, main)}, asked ${formatAgo(message.at, Date.now(), { ago: true })}:`,
     message.text,
@@ -242,7 +249,7 @@ async function gistOf(host: ExtensionHost, message: number, ctx: Context) {
 }
 
 /** Voice's spoken line for tool `taskId`, when a tool speaks and ends Voice's turn in one call. */
-const speak = (host: ExtensionHost, id: ConversationId, text: string, taskId: number) =>
+const speak = (host: ExtensionHost, id: ConversationId, text: string, taskId: TaskId) =>
   write(host, id, 'voice.line', { role: 'ultimate', text, speech: true }, `voice:say:${taskId}`)
 
 /** Both writers share one request id, so the first write's time is the one kept. */
@@ -256,12 +263,12 @@ const userLine = (input: { text: string }): VoiceLine => ({
 /** A stable input request id makes answer delivery safe if the task resumes after submitting it. */
 async function answerVoice(
   host: ExtensionHost,
-  voice: number,
+  voice: ConversationId,
   line: number,
   text: string,
   source?: VoiceAnswer['source'],
 ) {
-  const conversation = (await host.harness().conversation(voice as ConversationId, context))!
+  const conversation = (await host.harness().conversation(voice, context))!
   const data: VoiceAnswer = { text, re: line, ...(source ? { source } : {}) }
   await conversation.submit(
     {
@@ -278,8 +285,8 @@ async function answerVoice(
 export function answerTask(host: ExtensionHost) {
   return defineTask<
     {
-      voice: number
-      main: number
+      voice: ConversationId
+      main: ConversationId
       /** Names the user's forwarded line, written once under `voice:line:<request>`. */
       request: string
       text: string
@@ -296,11 +303,11 @@ export function answerTask(host: ExtensionHost) {
     phases: {
       answer: async (task, runtime, ctx) => {
         const input = task.input
-        const main = input.main as ConversationId
+        const main = input.main
         const recipient = (await host.harness().conversation(main, ctx))!
         const line = await write(
           host,
-          input.voice as ConversationId,
+          input.voice,
           'voice.line',
           userLine(input),
           `voice:line:${input.request}`,
@@ -381,7 +388,7 @@ export function answerTask(host: ExtensionHost) {
           // Said out loud too: the user waits by ear, so a silent failure looks like nothing happened.
           await write(
             host,
-            input.voice as ConversationId,
+            input.voice,
             'voice.line',
             {
               role: 'notice',
@@ -724,8 +731,9 @@ export default (host: ExtensionHost) => {
         description:
           'Speak text to the user through GPT-Live. Use for your answer, clarification or brief acknowledgement.',
         parameters: obj({ text: str({ minLength: 1 }) }),
-        // The tool task's request id writes the spoken line once; correlation is memoized.
-        replay: 'safe',
+        ...safeToRerun(
+          "The tool task's request id writes the spoken line once; correlation is memoized.",
+        ),
         async execute({ text }, api, ctx) {
           if (api.conversationId !== (await voiceId(host))) throw new Error('Only Voice speaks')
           // Locate the input this tool round saw, not a later queued/steering input. No model-supplied correlation id.
@@ -781,8 +789,9 @@ export default (host: ExtensionHost) => {
         description:
           'Pass a clear, self-contained request in the user’s words to @ultimate. Its answer returns as input; do not wait here.',
         parameters: obj({ request: str({ minLength: 1 }) }),
-        // A transactional receipt schedules once; the forwarded line has a stable write request id.
-        replay: 'safe',
+        ...safeToRerun(
+          'A transactional receipt schedules once; the forwarded line has a stable write request id.',
+        ),
         async execute({ request }, api, ctx) {
           if (api.conversationId !== (await voiceId(host)))
             throw new Error('Only Voice forwards requests')
@@ -808,8 +817,7 @@ export default (host: ExtensionHost) => {
           message: opt(int()),
           say: opt(str({ minLength: 1 })),
         }),
-        // Stable request ids write each line once.
-        replay: 'safe',
+        ...safeToRerun('Stable request ids write each line once.'),
         async execute({ surface, conversation, message, say }, api, ctx) {
           if (api.conversationId !== (await voiceId(host))) throw new Error('Only Voice navigates')
           if ([surface, conversation, message].filter((v) => v !== undefined).length !== 1)
@@ -825,7 +833,7 @@ export default (host: ExtensionHost) => {
           } else if (conversation !== undefined) {
             const found = host.conversations().find((c) => c.id === conversation)
             if (!found) throw new Error(`No conversation #${conversation}`)
-            go = { conversation }
+            go = { conversation: parseConversationId(conversation) }
             label = `#${conversation}${found.title ? ` ${found.title}` : ''}`
           } else {
             // The page knows its surfaces; it reports one it does not have as a notice.
@@ -853,8 +861,7 @@ export default (host: ExtensionHost) => {
         description:
           'Read the questions waiting on the user. Without `message`: every open one, oldest first (the Inbox order). With `message`: that one in full (who asks, its text, each numbered question with lettered options and the asker’s picks) and, unless `show` is false, its card shown in the Inbox.',
         parameters: obj({ message: opt(int()), show: opt(bool()) }),
-        // Reads, and one navigation line under the tool task's stable request id.
-        replay: 'safe',
+        ...safeToRerun("Reads, and one navigation line under the tool task's stable request id."),
         async execute({ message, show }, api, ctx) {
           if (api.conversationId !== (await voiceId(host)))
             throw new Error('Only Voice reads questions')
@@ -898,9 +905,9 @@ export default (host: ExtensionHost) => {
           text: opt(str({ minLength: 1 })),
           dismiss: opt(bool()),
         }),
-        // A reply or dismissal commits a receipt keyed by this call, so a replay after a crash finds the settlement
-        // instead of the closed question. The forward to @ultimate is memoized.
-        replay: 'safe',
+        ...safeToRerun(
+          'A reply or dismissal commits a receipt keyed by this call, so a replay after a crash finds the settlement instead of the closed question. The forward to @ultimate is memoized.',
+        ),
         async execute({ message, text, dismiss }, api, ctx) {
           if (api.conversationId !== (await voiceId(host)))
             throw new Error('Only Voice answers questions')
@@ -951,8 +958,7 @@ export default (host: ExtensionHost) => {
         deferred: true,
         description: 'Give GPT-Live quiet context, without speaking it.',
         parameters: obj({ text: str({ minLength: 1 }) }),
-        // The tool task's stable request id writes the context note once.
-        replay: 'safe',
+        ...safeToRerun("The tool task's stable request id writes the context note once."),
         async execute({ text }, api) {
           if (api.conversationId !== (await voiceId(host)))
             throw new Error('Only Voice sends thinking notes')

@@ -1,3 +1,4 @@
+import type { ConversationId, ToolExecutionApi, JsonObject } from '@earendil-works/pi-durable'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import {
   cp,
@@ -16,12 +17,10 @@ import {
 import { tmpdir } from 'node:os'
 import { basename, join, relative, resolve as resolvePath } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
-import { setTimeout as sleep } from 'node:timers/promises'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Context } from '@earendil-works/chord/context'
 import { int, nullable, obj, opt, str } from '@earendil-works/pi-schema'
 import { strEnum } from '../../lib/schema.ts'
-import type { ConversationId, ToolExecutionApi } from '@earendil-works/pi-durable'
 import { defineExtension, defineTool, section } from '@earendil-works/pi-durable'
 import type { ExtensionAction } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
@@ -32,12 +31,14 @@ import type { WorkspaceService } from '../workspaces/api.ts'
 import { cleanPreview, sweepPreviews } from './cleanup.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { git, isolatable } from '../../lib/git.ts'
+import { meansNone, overshadowed } from '../../lib/errors.ts'
 import { spawnGroup, stopGroup } from '../../lib/process-group.ts'
+import { every, within } from '../../lib/timers.ts'
+import type { Cancel } from '../../lib/timers.ts'
 import type { Group, GroupProcess } from '../../lib/process-group.ts'
 import { Previews } from '../conversations/api.ts'
 import { ListAction, StartAction, StopAction } from './refs.ts'
 import { setup } from '../../lib/worktree-setup.ts'
-import type { JsonObject } from '@earendil-works/pi-durable'
 import { readSettings, userSettingsPath } from '../../lib/settings.ts'
 import { readFamilies } from '../../lib/families-settings.ts'
 import { BUILTIN_FAMILIES, DEFAULT_FAMILY, FEATURES } from '../../lib/families.ts'
@@ -236,12 +237,12 @@ interface Instance {
   pid: number
   temporary: boolean
   /** The conversation whose workspace it previews, or which started it in the shared checkout. */
-  conversationId?: number
+  conversationId?: ConversationId
   /** A preview the user started (`start` action): its name and the commit it runs. */
   label?: string
   ref?: string
-  /** The idle check of a preview the user started. */
-  idle?: NodeJS.Timeout
+  /** Cancels the idle check of a preview the user started. */
+  idle?: Cancel
   child: GroupProcess
   group: Group
   output: string
@@ -297,8 +298,8 @@ export const stopped = (host: Pick<ExtensionHost, 'resource' | 'home'>) =>
     try {
       const saved = JSON.parse(readFileSync(join(host.home, 'previews.json'), 'utf8')) as Listed[]
       for (const item of saved) byPort.set(portOf(item.url), item)
-    } catch {
-      // No previews stopped in this home yet, or an unreadable file: links to earlier ones stay ordinary links.
+    } catch (error) {
+      meansNone(error)
     }
     return byPort
   })
@@ -323,7 +324,7 @@ function stop(instances: Map<string, Instance>, id: string) {
   return instance.stopping
 }
 async function stopInstance(instances: Map<string, Instance>, instance: Instance) {
-  clearInterval(instance.idle)
+  instance.idle?.()
   // The whole group: the preview and whatever it started without a group of its own. Its unreaped leader proves the
   // group is still ours; once it exited, the group stopped with it.
   if (instance.child.pid !== undefined)
@@ -440,22 +441,25 @@ function watchIdle(
   item: Instance,
 ) {
   let seen = Date.now()
-  // Stopping clears the interval; a failed stop is tried again at the next check.
-  item.idle = setInterval(() => {
-    void pages(item)
-      .then(async (open) => {
-        if (open > 0) seen = Date.now()
-        if (live(item) && Date.now() - seen < idle.limit) return
-        await stop(running(host), item.id)
-        remember(host, item)
-      })
-      .catch((error: unknown) => {
-        // Already stopped by the user's `stop` or by shutdown: nothing failed.
-        if (!running(host).has(item.id)) return
-        host.notice(`Stopping idle preview ${item.label} failed: ${String(error)}`)
-      })
-  }, idle.every)
-  item.idle.unref()
+  // Stopping cancels the check; a failed stop is tried again at the next one.
+  item.idle = every(
+    idle.every,
+    () => {
+      void pages(item)
+        .then(async (open) => {
+          if (open > 0) seen = Date.now()
+          if (live(item) && Date.now() - seen < idle.limit) return
+          await stop(running(host), item.id)
+          remember(host, item)
+        })
+        .catch((error: unknown) => {
+          // Already stopped by the user's `stop` or by shutdown: nothing failed.
+          if (!running(host).has(item.id)) return
+          host.notice(`Stopping idle preview ${item.label} failed: ${String(error)}`)
+        })
+    },
+    { unref: true },
+  )
 }
 
 /**
@@ -506,10 +510,7 @@ async function ultimateCheckout(cwd: string) {
     ['server/main.ts', false, 'Worktree is not Ultimate: missing server/main.ts'],
     ['node_modules', true, 'Worktree has no node_modules; run pnpm install first'],
   ] as const) {
-    const entry = await stat(join(cwd, path)).catch(
-      // An unreadable prerequisite fails the explicit preview validation below.
-      () => undefined,
-    )
+    const entry = await stat(join(cwd, path)).catch(meansNone)
     if (!entry || (directory ? !entry.isDirectory() : !entry.isFile())) throw new Error(message)
   }
 }
@@ -600,11 +601,7 @@ async function start(
     // A stop and a start of the same home in one tool round run side by side (omarchy-config #78009); wait for the
     // stop.
     for (const item of instances.values())
-      if (item.home === home)
-        await item.stopping?.catch(
-          // A failed stop reaches its own caller and leaves the instance live: the check below reports the home owned.
-          () => undefined,
-        )
+      if (item.home === home) await item.stopping?.catch(overshadowed)
     if ([...instances.values()].some((item) => item.home === home && live(item)))
       throw new Error('Home is already owned by an instance')
     context.abortSignal?.throwIfAborted()
@@ -656,49 +653,36 @@ async function start(
         .join('\n')
         .slice(-100000)
     }
-    let stdout = ''
-    child.stdout?.on('data', (chunk: Buffer) => {
-      append(chunk)
-      stdout += chunk.toString()
-      const lines = stdout.split('\n')
-      stdout = lines.pop()!.slice(-10000)
-      for (const line of lines) {
-        const match = /^Ultimate: (http:\/\/127\.0\.0\.1:([1-9]\d*))\r?$/.exec(line)
-        if (match) item.url = match[1]
-      }
+    const notReady = () => new Error(`Instance did not become ready:\n${item.output}`)
+    const serving = new Promise<void>((resolve, reject) => {
+      let stdout = ''
+      child.stdout?.on('data', (chunk: Buffer) => {
+        append(chunk)
+        stdout += chunk.toString()
+        const lines = stdout.split('\n')
+        stdout = lines.pop()!.slice(-10000)
+        for (const line of lines) {
+          const match = /^Ultimate: (http:\/\/127\.0\.0\.1:([1-9]\d*))\r?$/.exec(line)
+          if (match) {
+            item.url = match[1]
+            resolve()
+          }
+        }
+      })
+      child.on('error', (error) => {
+        item.output += String(error)
+        reject(notReady())
+      })
+      child.on('exit', () => reject(notReady()))
+      const signal = context.abortSignal
+      if (signal?.aborted) reject(signal.reason)
+      signal?.addEventListener('abort', () => reject(signal.reason), { once: true })
     })
     child.stderr?.on('data', append)
-    let failed = false
-    child.on('error', (error) => {
-      failed = true
-      item.output += String(error)
-    })
     try {
       output(`Starting ${id}\n`)
-      const deadline = Date.now() + 60000
-      let ready = false
-      while (Date.now() < deadline && child.exitCode === null && child.signalCode === null) {
-        context.abortSignal?.throwIfAborted()
-        if (failed) break
-        try {
-          const response = item.url
-            ? await fetch(`${item.url}/api/models`, {
-                signal: context.abortSignal
-                  ? AbortSignal.any([context.abortSignal, AbortSignal.timeout(1000)])
-                  : AbortSignal.timeout(1000),
-              })
-            : undefined
-          if (response?.ok && !failed && child.exitCode === null && child.signalCode === null) {
-            ready = true
-            break
-          }
-        } catch {
-          /* server is still booting */
-        }
-        await sleep(250, undefined, { signal: context.abortSignal })
-      }
+      await within(60000, serving, notReady, context.abortSignal)
       context.abortSignal?.throwIfAborted()
-      if (!ready) throw new Error(`Instance did not become ready:\n${item.output}`)
       return info(item)
     } catch (error) {
       await stop(instances, id)

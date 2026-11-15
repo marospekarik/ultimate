@@ -3,6 +3,7 @@ import type { Git } from '../../lib/fast-forward.ts'
 import { fetchOrigin, standing } from '../../lib/fast-forward.ts'
 import { FETCH_EVERY, fetchedAt } from '../../lib/clone.ts'
 import { readJson, writeJson } from '../../lib/json-file.ts'
+import { meansNone } from '../../lib/errors.ts'
 import { corePath, packagePath } from '../../lib/layers.ts'
 import { conflictsPredicted } from '../../lib/merge.ts'
 import type { Layers, UpdateState } from './refs.ts'
@@ -122,10 +123,7 @@ export async function summaryFor(
   if (cached.range === range) return cached.lines?.length ? cached.lines : undefined
   // Without `ask` only the cache is read: a status poll never waits for a model.
   if (!ask) return undefined
-  const text = await ask((await log()).slice(0, SUMMARY_INPUT_CAP)).catch(
-    // No summary model, or it failed: the commit list stands in for the summary.
-    () => undefined,
-  )
+  const text = await ask((await log()).slice(0, SUMMARY_INPUT_CAP)).catch(meansNone)
   const lines = text === undefined ? [] : summaryLines(text)
   // A failed or empty answer is cached too: the list stands in, and the range is not asked again.
   await writeJson(file, { range, lines })

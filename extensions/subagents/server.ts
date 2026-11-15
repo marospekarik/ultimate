@@ -1,3 +1,14 @@
+import { parseConversationId } from '../../lib/ids.ts'
+import type {
+  ConversationId,
+  ConversationRecord,
+  Cursor,
+  EntryId,
+  EntryRecord,
+  TaskId,
+  ToolExecutionApi,
+  SubmissionRecord,
+} from '@earendil-works/pi-durable'
 import { existsSync } from 'node:fs'
 import { onCommit } from '../../lib/commits.ts'
 import { readFile } from 'node:fs/promises'
@@ -23,18 +34,8 @@ import {
   ROOT_CONVERSATION_ID,
   section,
 } from '@earendil-works/pi-durable'
-import type {
-  ConversationId,
-  ConversationRecord,
-  Cursor,
-  EntryId,
-  EntryRecord,
-  TaskId,
-  ToolExecutionApi,
-  SubmissionRecord,
-} from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import type { Source } from '../../server/project.ts'
+import type { Source } from '../../lib/project-paths.ts'
 import {
   agentRoots,
   deleteDefinition,
@@ -65,6 +66,7 @@ import {
   SaveDefinitionAction,
   StandingAction,
 } from './refs.ts'
+import { safeToRerun } from '../../lib/replay.ts'
 
 export const docs = [Subagents, Standing, Profile, Runs]
 
@@ -989,8 +991,9 @@ export default function subagents(
         name: 'subagent',
         description:
           'Delegate to a named agent. start returns its answer (foreground) or id (background). Foreground start/message and wait yield on queued steering with details.yielded:true; work continues independently. Stop children explicitly; stopping the parent does not stop them; stop lists files left uncommitted in the child worktree. message steers a busy child (steer false queues a follow-up instead); wait returns the latest answer; stop stops current work; list shows your children; land verifies and fast-forwards a finished worktree child; discard removes its worktree but keeps its branch. start accepts isolate none or worktree, and fork true to inherit parent history before this call (more context cost; prompt caching usually covers the shared prefix). Background answers join the current run after its tool round, or wake you when idle.',
-        // Call-id receipts deduplicate starts/messages; memoized targets and guards protect stop/workspace replays.
-        replay: 'safe',
+        ...safeToRerun(
+          'Call-id receipts deduplicate starts/messages; memoized targets and guards protect stop/workspace replays.',
+        ),
         parameters: obj({
           action: strEnum(['start', 'message', 'wait', 'stop', 'list', 'land', 'discard']),
           agent: opt(
@@ -1061,7 +1064,7 @@ export default function subagents(
             await api.memo('workspace-operation', true, context)
             const operation = args.action
             return finish(
-              JSON.stringify(await workspaces[operation](args.id as ConversationId, context)),
+              JSON.stringify(await workspaces[operation](parseConversationId(args.id!), context)),
             )
           }
           if (args.action === 'start' || args.action === 'message') {
@@ -1113,7 +1116,7 @@ export default function subagents(
             const action = await api.commit(async (tx) => {
               const state = await tx.doc(Subagents, api.conversationId)
               if (state.actions[api.callId]) return { ...state.actions[api.callId] }
-              let conversationId = args.id as ConversationId
+              let conversationId: ConversationId
               if (definition) {
                 await conversations.requestSummary(
                   tx,
@@ -1165,7 +1168,7 @@ export default function subagents(
                     instructions: `${definition.instructions}\nWork only in ${workspace.path} on ${workspace.branch}, cut from ${workspace.base}. Commit your work on this branch with clear messages. Never push and never touch other checkouts.`,
                   })
                 }
-              }
+              } else conversationId = parseConversationId(args.id!)
               const reporter = await tx.createTask(
                 Reporter,
                 {
@@ -1227,7 +1230,7 @@ export default function subagents(
               ),
             )
           }
-          const id = args.id as ConversationId
+          const id = parseConversationId(args.id!)
           const info = details(id, index.agents[String(id)].background)
           await api.details(info, context)
           if (args.action === 'stop') {
@@ -1245,7 +1248,7 @@ export default function subagents(
                 )
                 tasks.push(
                   ...page.items.filter(
-                    (task) => (task.input as { conversation?: number }).conversation === id,
+                    (task) => (task.input as { conversation?: ConversationId }).conversation === id,
                   ),
                 )
                 cursor = page.next
