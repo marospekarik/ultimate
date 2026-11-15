@@ -1,6 +1,7 @@
 import { defineExtension } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { implementAction } from '../../lib/actions.ts'
+import { meansNone } from '../../lib/errors.ts'
 import { openaiError } from '../../lib/openai.ts'
 import { readSecret } from '../../lib/secrets.ts'
 import { StatusAction, TranscribeAction } from './refs.ts'
@@ -53,11 +54,11 @@ async function credentials(host: VoiceHost, signal?: AbortSignal): Promise<Crede
   if (runtime.getProviderAuthStatus(LOGIN).configured) {
     // A provider whose credential cannot be resolved is left out: the other one may still transcribe, and with neither
     // NO_CREDENTIAL names signing in again.
-    const auth = await runtime.getAuth(LOGIN, { signal }).catch(() => undefined)
+    const auth = await runtime.getAuth(LOGIN, { signal }).catch(meansNone)
     if (auth?.auth.apiKey) found.push({ kind: 'login', token: auth.auth.apiKey })
   }
   // The same for the key: a provider whose credential will not resolve leaves the login to transcribe.
-  const key = await apiKey(host, signal).catch(() => undefined)
+  const key = await apiKey(host, signal).catch(meansNone)
   if (key) found.push({ kind: 'key', key })
   return found
 }

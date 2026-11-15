@@ -1,4 +1,6 @@
-import type { EntryRecord } from '@earendil-works/pi-durable'
+import type { EntryRecord, ConversationId } from '@earendil-works/pi-durable'
+import { ROOT } from '@/sdk'
+import { deadline } from '../../lib/timers.ts'
 import {
   ArrowRightIcon,
   AudioLinesIcon,
@@ -72,8 +74,8 @@ const KEYS = 'alt+v'
 const useMode = () => useSyncExternalStore(live.subscribe, live.voiceMode)
 /** @ultimate's conversation and the Voice conversation, once start created it. */
 function useIds() {
-  const main = useDocOf(1, StandingDoc)?.ultimate
-  const voice = useDocOf(1, StandingDoc)?.voice
+  const main = useDocOf(ROOT, StandingDoc)?.ultimate
+  const voice = useDocOf(ROOT, StandingDoc)?.voice
   return { main, voice }
 }
 
@@ -83,7 +85,6 @@ const start = live.start
 function toggleFront(actions: Pick<UltimateActions, 'switchConversation' | 'showSurface'>) {
   const front = !live.voiceMode().front
   live.setFront(front)
-  // oxlint-disable-next-line typescript/no-floating-promises -- an uncaught action failure becomes a notice.
   if (front) void talkToUltimate(actions)
 }
 
@@ -185,7 +186,6 @@ function StartButton() {
             if (status.loading) return
             if (missing) return events.emit('secrets:open', { name: 'OPENAI_API_KEY' })
             if (on) return toggleFront(actions)
-            // oxlint-disable-next-line typescript/no-floating-promises -- open shows its own failures in the indicator.
             void start()
           }}
           // Keeps the editor's focus, so a phone's keyboard neither opens nor closes under the tap.
@@ -354,7 +354,7 @@ const QUIET_MS = 2000
  * have been quiet a moment; never one that was open before. The server takes each message once.
  */
 function Announce() {
-  const log = useDocOf(1, MessagesDoc)
+  const log = useDocOf(ROOT, MessagesDoc)
   const mode = useMode()
   const seen = useRef<Set<number>>(undefined)
   const [due, setDue] = useState<number[]>([])
@@ -377,17 +377,13 @@ function Announce() {
   }, [log])
   useEffect(() => {
     if (!due.length || busy) return undefined
-    const timer = setTimeout(
-      () => {
-        setDue([])
-        for (const message of due)
-          api
-            .action(AskedAction, { message })
-            .catch((error: unknown) => console.warn('Voice announce failed', error))
-      },
-      Math.max(0, quietSince + QUIET_MS - Date.now()),
-    )
-    return () => clearTimeout(timer)
+    return deadline(Math.max(0, quietSince + QUIET_MS - Date.now()), () => {
+      setDue([])
+      for (const message of due)
+        api
+          .action(AskedAction, { message })
+          .catch((error: unknown) => console.warn('Voice announce failed', error))
+    })
   }, [due, busy, quietSince])
   return null
 }
@@ -420,6 +416,8 @@ function SpeakNew({ voice }: { voice: number }) {
   const loading = useConversation((conversation) => conversation.loading)
   const actions = useUltimate()
   const commands = useCommands()
+  const navigation = useRef({ actions, commands })
+  navigation.current = { actions, commands }
   const seen = useRef<number>(undefined)
   useEffect(() => {
     if (loading) return
@@ -443,10 +441,10 @@ function SpeakNew({ voice }: { voice: number }) {
       const line = entry.data as unknown as VoiceLine
       if (line.role === 'ultimate' && line.speech) live.hear(line.text, entry.id)
       else if (line.role === 'note') live.note(line.text)
-      else if (line.role === 'action' && line.go) navigate(line.go, actions, commands)
+      else if (line.role === 'action' && line.go)
+        navigate(line.go, navigation.current.actions, navigation.current.commands)
     }
     seen.current = Math.max(seen.current, last)
-    // oxlint-disable-next-line react-hooks/exhaustive-deps -- only new entries act; actions and commands are read then.
   }, [entries, loading])
   // A new Voice conversation starts counting afresh.
   useEffect(() => () => (seen.current = undefined), [voice])
@@ -485,8 +483,7 @@ function Stage() {
   if (inFront && !shown) setShown(true)
   useEffect(() => {
     if (inFront) return undefined
-    const timer = setTimeout(() => setShown(false), duration + 60)
-    return () => clearTimeout(timer)
+    return deadline(duration + 60, () => setShown(false))
   }, [inFront])
 
   useLayoutEffect(() => {
@@ -1204,7 +1201,7 @@ function Asked({ text }: { text: string }) {
 }
 
 /** @ultimate on it: the phase the sidebar shows for it (else working, or waiting its turn) and the time so far. */
-function Working({ main, since }: { main: number; since?: number }) {
+function Working({ main, since }: { main: ConversationId; since?: number }) {
   const busy = useConversationSummary(main)?.busy
   const now = useNow(1000, since !== undefined)
   return (
@@ -1439,7 +1436,6 @@ function Spoken({ entry, text }: { entry: number; text: string }) {
   return words.map((word, index) => (
     <span
       className={cn('transition-opacity duration-300', index >= speaking.words && 'opacity-25')}
-      // oxlint-disable-next-line react/no-array-index-key -- Word positions track spoken progress in this line.
       key={index}
     >
       {index ? ' ' : ''}
@@ -1472,7 +1468,6 @@ function LiveTurn() {
         >
           <span>
             {text.split(' ').map((word, index) => (
-              // oxlint-disable-next-line react/no-array-index-key -- Existing word positions stay mounted as speech streams.
               <span className="animate-fade-in" key={index}>
                 {index ? ' ' : ''}
                 {word}

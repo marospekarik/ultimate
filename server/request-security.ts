@@ -1,5 +1,6 @@
 import type { IncomingHttpHeaders, IncomingMessage } from 'node:http'
 import type { Device } from '../shared/events.ts'
+import { meansNone } from '../lib/errors.ts'
 
 /** Who an access rule vouches a request came from: its login, and the client's address if the rule knows it. */
 export type Identity = { login: string; address?: string }
@@ -64,8 +65,9 @@ export async function admit(
       const identity = await rule.verify(request)
       if (identity?.login && rules.has(rule))
         return { login: identity.login, ...(identity.address && { address: identity.address }) }
-    } catch {
+    } catch (error) {
       // A failed identity provider cannot admit a request.
+      meansNone(error)
     }
   }
   return undefined

@@ -146,9 +146,7 @@ export async function openQuestionsNote(
     if (
       primary ||
       m.from === conversationId ||
-      (front &&
-        typeof m.from === 'number' &&
-        (await tx.doc(Started, m.from as ConversationId)).by === conversationId)
+      (front && typeof m.from === 'number' && (await tx.doc(Started, m.from)).by === conversationId)
     )
       open.push(m)
   if (!open.length) return undefined

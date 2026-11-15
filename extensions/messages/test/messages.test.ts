@@ -1,3 +1,4 @@
+import type { ConversationId, Task, TaskId, EntryId } from '@earendil-works/pi-durable'
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import {
   eventHost,
@@ -26,7 +27,6 @@ import {
   LiveDoc,
   ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
-import type { ConversationId, Task, TaskId } from '@earendil-works/pi-durable'
 import type { Context } from '@earendil-works/chord/context'
 import type { JsonValue } from '@earendil-works/chord/json'
 import { afterEach, expect, it } from 'vitest'
@@ -48,7 +48,7 @@ import { Branch, Roots } from '../../lineage/api.ts'
 import { Standing, Subagents } from '../../subagents/api.ts'
 import { Workspaces } from '../../workspaces/workspaces.ts'
 import { concludedIn } from '../../conversations/server.ts'
-import { UiState } from '../../../server/ui-state.ts'
+import { UiState } from '../../../shared/ui-state.ts'
 
 const homes: string[] = []
 const hosts: OpenHost[] = []
@@ -151,7 +151,7 @@ async function fixture(
             ? { concludedIn }
             : name === 'lineage'
               ? {
-                  rootOf: (id: number, ctx: Context) => rootOf(host, id, ctx),
+                  rootOf: (id: number, ctx: Context) => rootOf(host, id as ConversationId, ctx),
                   branch: (input: BranchInput, ctx: Context) => startBranch(host, input, ctx),
                 }
               : undefined
@@ -277,7 +277,11 @@ async function fixture(
     if (last.role === 'user' && text.startsWith('Reply from #') && text.includes('STALL'))
       return fauxAssistantMessage([fauxToolCall('hold', {})], { stopReason: 'toolUse' })
     // @ultimate answers a branch's reply with only a message to the user.
-    if (last.role === 'user' && text.startsWith('Reply from #') && text.includes('TELLUSER'))
+    if (
+      last.role === 'user' &&
+      (text.startsWith('Reply from #') || text.startsWith('Automation ')) &&
+      text.includes('TELLUSER')
+    )
       return fauxAssistantMessage(
         [fauxToolCall('message', { to: 'user', text: 'Correction', reply: false })],
         { stopReason: 'toolUse' },
@@ -548,7 +552,7 @@ it("turns @ultimate's message to the user it owes an answer into that answer and
       log.messages.push({
         id: log.next++,
         from: 'user',
-        to: 1,
+        to: 1 as ConversationId,
         text,
         at: 0,
         reply: true,
@@ -583,7 +587,7 @@ it("never lets the user's queued reply block @ultimate's message to them", async
     log.messages.push({
       id: log.next++,
       from: 'user',
-      to: 1,
+      to: 1 as ConversationId,
       text: '1a',
       at: 0,
       reply: true,
@@ -877,7 +881,7 @@ it('refuses self, unknown ids, tally roots and unknown names with valid names', 
   expect(f.observed.join('\n')).toContain('@scout')
   await f.opened.harness.commit(async (tx) => {
     ;(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots.push(f.recipient.id)
-    ;(await tx.doc(Tally, f.recipient.id)).since = 2
+    ;(await tx.doc(Tally, f.recipient.id)).since = 2 as EntryId
   }, context)
   await f.send(String(f.recipient.id))
   expect(f.observed.join('\n')).toContain('use note')
@@ -902,8 +906,8 @@ it('bounds the log and exposes no user posting action', async () => {
     for (let id = 1; id <= 300; id++)
       log.messages.push({
         id,
-        from: 1,
-        to: 2,
+        from: 1 as ConversationId,
+        to: 2 as ConversationId,
         text: String(id),
         at: id,
         reply: false,
@@ -1131,7 +1135,7 @@ it.each([false, true])(
       (candidate) => candidate.name === 'branch',
     )!
     await f.opened.harness.commit(async (tx) => {
-      ;(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots = [1]
+      ;(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots = [1 as ConversationId]
       await configure(tx, f.opened.root.id, { modelTools: { add: [tool] } })
     }, context)
     await f.opened.root.submit(
@@ -1320,7 +1324,7 @@ async function branched(f: Awaited<ReturnType<typeof fixture>>, prompt = 'Explor
     (candidate) => candidate.name === 'branch',
   )
   await f.opened.harness.commit(async (tx) => {
-    ;(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots = [1]
+    ;(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots = [1 as ConversationId]
     if (tool) await configure(tx, f.opened.root.id, { modelTools: { add: [tool] } })
   }, context)
   await f.opened.root.submit(
@@ -1411,7 +1415,7 @@ it('forwards images into a new branch with its prompt', async () => {
   const f = await fixture()
   const tool = (await f.opened.root.agent(context)).deferred.find((t) => t.name === 'branch')!
   await f.opened.harness.commit(async (tx) => {
-    ;(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots = [1]
+    ;(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots = [1 as ConversationId]
     await configure(tx, f.opened.root.id, { modelTools: { add: [tool] } })
   }, context)
   await submitWithImages(
@@ -1596,7 +1600,7 @@ it('lets a front start a branch, steer it and route its weigh-in down, as @ultim
   const agent = await f.opened.root.agent(context)
   const tool = agent.deferred.find((t) => t.name === 'branch')!
   await f.opened.harness.commit(async (tx) => {
-    ;(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots = [1]
+    ;(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots = [ROOT_CONVERSATION_ID]
     ;(await tx.doc(Standing, ROOT_CONVERSATION_ID)).maros = front.id
     await configure(tx, front.id, { tools: [...agent.tools, tool], modelTools: { add: [tool] } })
   }, context)
@@ -1631,7 +1635,7 @@ it("sends @ultimate's answer to a branch it concluded to the agent whose request
   const f = await fixture()
   const tool = (await f.opened.root.agent(context)).deferred.find((t) => t.name === 'branch')!
   await f.opened.harness.commit(async (tx) => {
-    ;(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots = [1]
+    ;(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots = [1 as ConversationId]
     await configure(tx, f.opened.root.id, { modelTools: { add: [tool] } })
   }, context)
   const branch = 'BRANCH ' + JSON.stringify({ prompt: 'Research STALL', isolated: false })
@@ -1663,6 +1667,55 @@ it("sends @ultimate's answer to a branch it concluded to the agent whose request
     }),
   ])
 })
+it("sends @ultimate's answer to a run its automation woke to the agent whose request the automation served", async () => {
+  // ultimate-eval #53: @ultimate answered "I've started the A/B" to another Ultimate's request and made automation A8;
+  // the result, written in the run A8's fire woke (#53/5281), reached no one.
+  const f = await fixture()
+  await f.send('@scout', 'SEND ' + JSON.stringify({ to: '#1', text: 'Run the A/B' }), {
+    reply: false,
+  })
+  const request = async () =>
+    (await f.log())!.messages.find((m) => m.from === f.recipient.id && m.to === 1)
+  // @ultimate's early answer ("started") settles the request.
+  await until(async () => {
+    const id = (await request())?.id
+    return id !== undefined && (await f.log())!.messages.some((m) => m.re === id)
+  })
+  const asked = (await request())!
+  const fired = (serves?: { message: number; from: number }) =>
+    f.opened.root.submit(
+      {
+        type: 'input',
+        // It tells the user first: that message must not end the run before its answer to the asker.
+        content: `Automation A8 "ab done" fired: AB-DONE${serves ? ' TELLUSER' : ''}`,
+        entry: {
+          kind: 'automations.fired',
+          data: {
+            id: 'A8',
+            name: 'ab done',
+            text: 'AB-DONE',
+            // @ultimate's message to #scout before the fire is no answer of this run.
+            ...(serves ? { serves, at: Date.now() } : {}),
+          },
+        },
+      },
+      context,
+    )
+  await (await fired({ message: asked.id, from: f.recipient.id })).wait(context)
+  // A later fire carries no request: its answer stays here.
+  await (await fired()).wait(context)
+  await until(async () =>
+    (await f.log())!.messages.some((m) => m.from === 1 && m.to === f.recipient.id && m.routed),
+  )
+  await f.opened.root.waitForIdle(context)
+  expect((await f.log())!.messages.filter((m) => m.from === 1 && m.routed)).toEqual([
+    expect.objectContaining({
+      to: f.recipient.id,
+      reply: false,
+      text: `Result of automation A8 "ab done", which worked on your message ${asked.id}:\n\nDone`,
+    }),
+  ])
+})
 it("routes @ultimate's answer to a branch whose reply it read even when it messaged the user first", async () => {
   // omarchy-config #69721: @ultimate read #70136's assessment and only messaged the user; the run ended there, no
   // answer went down, and #70136 waited 35 minutes.
@@ -1684,7 +1737,9 @@ it("routes @ultimate's final answer to every branch whose reply shared its run",
   const a = await branched(f)
   const b = await branched(f)
   const ask = (to: number, text: string) =>
-    sendMessage(f.host, 1, { to: `#${to}`, text, reply: true }, context, { requestId: `ask:${to}` })
+    sendMessage(f.host, 1 as ConversationId, { to: `#${to}`, text, reply: true }, context, {
+      requestId: `ask:${to}`,
+    })
   await ask(a.id, 'STALL')
   await until(f.holding)
   await ask(b.id, 'WEIGH')
@@ -1706,9 +1761,15 @@ it("routes @ultimate's final answer to a branch whose reply shared its run with 
   // project's Ultimate; the weigh-in reached no one and the branch waited 36 minutes.
   const f = await remoteFixture()
   const b = await branched(f)
-  await sendMessage(f.host, 1, { to: `#${b.id}`, text: 'STALL', reply: true }, context, {
-    requestId: 'ask',
-  })
+  await sendMessage(
+    f.host,
+    1 as ConversationId,
+    { to: `#${b.id}`, text: 'STALL', reply: true },
+    context,
+    {
+      requestId: 'ask',
+    },
+  )
   await until(f.holding)
   const queued = async () =>
     (await f.opened.harness.snapshot(InboxDoc, f.opened.root.id, context))!.items.length

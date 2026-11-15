@@ -16,6 +16,7 @@ export {
   provide,
   RunStart,
 } from './types.ts'
+export { ROOT } from './api.ts'
 export { events, useEvent } from './events.ts'
 export { resumed } from './resume.ts'
 export type {
@@ -91,6 +92,7 @@ export type { ActionOptions, Api } from './api.ts'
 export type { UseActionOptions } from './hooks.ts'
 /** Typed refs for a project extension's own documents and actions; built-ins keep theirs in `refs.ts`. */
 export { actionRef, docRef } from '../../../shared/extension-api.ts'
+export { keepLast } from '../../../lib/errors.ts'
 export type { ActionRef, DocRef } from '../../../shared/extension-api.ts'
 export {
   getConversation,

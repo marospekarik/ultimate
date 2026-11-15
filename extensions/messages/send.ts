@@ -1,11 +1,11 @@
+import type { ConversationId, EntryId, TaskId } from '@earendil-works/pi-durable'
 /** `send()`: validating, admitting and logging a message, and starting its delivery. */
 import type { Context } from '@earendil-works/chord/context'
 import { defineDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
-import type { ConversationId, EntryId, TaskId } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { Standing } from '../subagents/api.ts'
 import { Messages, MessageSent } from './api.ts'
-import type { Question } from './api.ts'
+import type { Message, Question } from './api.ts'
 import type { Via } from './refs.ts'
 import { checkQuestions, gist, openQuestion } from './questions.ts'
 import { isOwed } from '../../lib/message-state.ts'
@@ -54,7 +54,7 @@ const answerSummary = (text: string) => {
 
 export async function send(
   host: ExtensionHost,
-  from: number | 'user',
+  from: ConversationId | 'user',
   input: {
     to: string
     text: string
@@ -93,7 +93,7 @@ export async function send(
 ) {
   const { taskId, callId, requestId, answerId, device, via } = options
   if (requestId !== undefined && from !== 'user') {
-    const sent = await host.harness().snapshot(Requests, from as ConversationId, ctx)
+    const sent = await host.harness().snapshot(Requests, from, ctx)
     if (sent?.ids[requestId] !== undefined) return sent.ids[requestId]
   }
   if (taskId !== undefined) {
@@ -125,7 +125,7 @@ export async function send(
     )
   const to = await resolve(host, input.to, from, ctx)
   // A side chat settles as its main.
-  const settlerId = via ? await actingAs(host, via.conversation as ConversationId, ctx) : undefined
+  const settlerId = via ? await actingAs(host, via.conversation, ctx) : undefined
   const settler = settlerId === undefined ? undefined : await senderName(host, settlerId, ctx)
   const fromLabel = via
     ? `user (settled for them by ${settler}, from what they said in its chat)`
@@ -139,7 +139,7 @@ export async function send(
       : from === 'user' && answerId !== undefined
         ? to
         : undefined
-  let pointerTo: number | undefined
+  let pointerTo: ConversationId | undefined
   if (
     typeof asker === 'number' &&
     asker !== primaryId &&
@@ -151,9 +151,7 @@ export async function send(
   return host.harness().commit(async (tx) => {
     const receipt = taskId === undefined ? undefined : await tx.doc(Sent, taskId)
     const requests =
-      requestId === undefined || from === 'user'
-        ? undefined
-        : await tx.doc(Requests, from as ConversationId)
+      requestId === undefined || from === 'user' ? undefined : await tx.doc(Requests, from)
     if (requestId !== undefined && requests?.ids[requestId] !== undefined)
       return requests.ids[requestId]
     if (callId !== undefined && receipt?.ids[callId] !== undefined) return receipt.ids[callId]
@@ -164,12 +162,12 @@ export async function send(
       if (!original || !openQuestion(original))
         throw new Error('These questions are no longer open')
     }
-    if (input.images !== undefined && from === 'user')
-      throw new Error('your images go along with what you submit, not with a message')
-    const images =
-      input.images === undefined
-        ? undefined
-        : await resolveImages(tx, input.imagesFrom ?? (from as ConversationId), input.images)
+    let images: Message['images']
+    if (input.images !== undefined) {
+      if (from === 'user')
+        throw new Error('your images go along with what you submit, not with a message')
+      images = await resolveImages(tx, input.imagesFrom ?? from, input.images)
+    }
     // Only a Reply answers a question to the user, and only the one it replies to; a dismissal closes it unanswered.
     if (from === 'user' && input.re !== undefined)
       for (const m of (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages)
@@ -285,7 +283,7 @@ export async function send(
           notice(host),
           { to: pointerTo, ...notification },
           {
-            conversationId: pointerTo as ConversationId,
+            conversationId: pointerTo,
             ownership: { kind: 'conversation' },
             background: true,
           },

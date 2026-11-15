@@ -1,4 +1,5 @@
 /** Sync in the browser: where the project checkout's branch stands against its upstream. Browser-safe. */
+import type { ConversationId } from '@earendil-works/pi-durable'
 import { actionRef } from '../../shared/extension-api.ts'
 
 export type SyncState = {
@@ -54,4 +55,4 @@ export const PushAction = actionRef<null, PushResult>('sync', 'push')
 /** The user's: `gh pr create` for the branch against the base, pushing it first when needed. */
 export const PrAction = actionRef<null, PrResult>('sync', 'pr')
 /** The user's: ask @ultimate to merge the upstream into the branch on a coordinator branch; its conversation id. */
-export const MergeAction = actionRef<null, { id: number }>('sync', 'merge')
+export const MergeAction = actionRef<null, { id: ConversationId }>('sync', 'merge')

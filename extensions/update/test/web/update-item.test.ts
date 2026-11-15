@@ -70,6 +70,7 @@ vi.mock('@/sdk', () => ({
   defineWebExtension: (extension: unknown) => extension,
   events: { emit: () => {} },
   formatAgo: () => 'just now',
+  keepLast: () => undefined,
   useAction: () => ({ data: shell.state, refetch: async () => undefined }),
   useRestart: () => ({ busy: false, run: () => {} }),
   useSystem: () => undefined,

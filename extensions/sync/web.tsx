@@ -9,7 +9,16 @@ import {
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { api, cn, defineWebExtension, events, formatAgo, useAction, useUltimate } from '@/sdk'
+import {
+  api,
+  cn,
+  defineWebExtension,
+  events,
+  formatAgo,
+  keepLast,
+  useAction,
+  useUltimate,
+} from '@/sdk'
 import { itemOf, warns } from './item.ts'
 import { CheckAction, MergeAction, PrAction, PullAction, PushAction, StateAction } from './refs.ts'
 import type { SyncState } from './refs.ts'
@@ -211,7 +220,7 @@ function Sync() {
     StateAction,
     null,
     // A failed poll keeps the last state; the next one tries again.
-    { onError: () => {}, every: 60_000 },
+    { onError: keepLast, every: 60_000 },
   )
   const [busy, setBusy] = useState<string>()
   const [checking, setChecking] = useState(false)
