@@ -514,6 +514,8 @@ export const actions = {
       ...(fast ? { fast } : {}),
       ...(!summaries ? { summaries } : {}),
       // The form has no control for these: a save keeps them as discovery read them.
+      // Only a standing agent fronts: turning Standing off ends it.
+      ...(existing?.front && resident ? { front: true } : {}),
       ...(existing?.title ? { title: existing.title } : {}),
       ...(existing?.icon ? { icon: existing.icon } : {}),
       ...(existing?.tint ? { tint: existing.tint } : {}),
@@ -641,7 +643,11 @@ export default function subagents(
       await reconfigure(tx, id, definition, parentAgent, modelRuntime)
     },
     async residents(_ctx) {
-      return (await residentDefinitions()).map(({ name, description }) => ({ name, description }))
+      return (await residentDefinitions()).map(({ name, description, front }) => ({
+        name,
+        description,
+        ...(front ? { front } : {}),
+      }))
     },
     async standing(name, ctx) {
       const root = (await host.harness().conversation(ROOT_CONVERSATION_ID, ctx))!

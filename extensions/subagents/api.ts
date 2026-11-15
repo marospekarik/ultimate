@@ -86,8 +86,11 @@ export const Profile = defineDoc<{ definition?: string; adhoc?: true }>({
 })
 
 export type SubagentsService = {
-  /** The standing agents that run in this home, by name and description; use it to list valid `@name` addresses. */
-  residents(ctx: Context): Promise<{ name: string; description: string }[]>
+  /**
+   * The standing agents that run in this home, by name and description, and whether each fronts a person; use it to list
+   * valid `@name` addresses.
+   */
+  residents(ctx: Context): Promise<{ name: string; description: string; front?: boolean }[]>
   /** The conversation of standing agent `name`, created or refreshed from its definition; throws for unknown names. */
   standing(name: string, ctx: Context): Promise<ConversationId>
   /** Create, inside `tx`, a child conversation configured from a definition or as a copy of the parent's agent. */

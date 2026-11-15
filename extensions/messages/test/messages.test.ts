@@ -656,7 +656,7 @@ it('refuses messages to the user from non-branch conversations other than @ultim
   await until(async () => (await replies(f)).length === 1)
   expect((await f.log())!.messages).toHaveLength(2)
   expect(f.observed.join('\n')).toContain(
-    'Only @ultimate and branches message the user; send this to the conversation that started you.',
+    'Only @ultimate, fronts and branches message the user; send this to the conversation that started you.',
   )
   await f.send('user', 'Relayed update')
   expect((await f.log())!.messages.at(-1)).toMatchObject({
@@ -867,7 +867,7 @@ it('lets a subagent message only the conversation that started it', async () => 
   const run = await child(false)
   await send(run, 'user')
   expect((await f.log())!.messages).toHaveLength(1)
-  expect(f.observed.join('\n')).toContain('Only @ultimate and branches message the user')
+  expect(f.observed.join('\n')).toContain('Only @ultimate, fronts and branches message the user')
 })
 it('refuses self, unknown ids, tally roots and unknown names with valid names', async () => {
   const f = await fixture()
@@ -1585,6 +1585,45 @@ it("routes @ultimate's final answer to a branch's reply back to the branch, once
     [1, undefined, undefined],
     [undefined, true, true],
   ])
+})
+it('lets a front start a branch, steer it and route its weigh-in down, as @ultimate does', async () => {
+  const f = await fixture()
+  const front = f.recipient
+  f.provided.set('subagents', {
+    residents: async () => [{ name: 'maros', description: 'Front', front: true }],
+    standing: async () => front.id,
+  })
+  const agent = await f.opened.root.agent(context)
+  const tool = agent.deferred.find((t) => t.name === 'branch')!
+  await f.opened.harness.commit(async (tx) => {
+    ;(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots = [1]
+    ;(await tx.doc(Standing, ROOT_CONVERSATION_ID)).maros = front.id
+    await configure(tx, front.id, { tools: [...agent.tools, tool], modelTools: { add: [tool] } })
+  }, context)
+  await (
+    await front.submit(
+      {
+        type: 'input',
+        content: 'BRANCH ' + JSON.stringify({ prompt: 'Explore, then WEIGH', isolated: false }),
+      },
+      context,
+    )
+  ).wait(context)
+  await until(async () =>
+    (await f.log())!.messages.some((m) => m.from === front.id && m.routed !== undefined),
+  )
+  const log = (await f.log())!.messages
+  const branch = log.find((m) => m.from === front.id)!.to as number
+  expect(log.filter((m) => m.from === front.id).map((m) => [m.to, m.reply, !!m.routed])).toEqual([
+    [branch, true, false],
+    [branch, false, true],
+  ])
+  const sent = await eventHost(() => f.opened.harness, 'test').eventLog.recent({
+    events: [MessageSent],
+  })
+  expect(sent.find((event) => event.data.from === front.id)?.data.steer).toBe(true)
+  // Nothing of it reached @ultimate.
+  expect(log.filter((m) => m.to === 1 || m.from === 1)).toEqual([])
 })
 it("sends @ultimate's answer to a branch it concluded to the agent whose request the branch worked on", async () => {
   // danielgriesser.com: @writer asked @ultimate for a briefing, got "I've started branch #14919", and the briefing,

@@ -24,6 +24,7 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { rateLimited } from '../../lib/rate-limit.ts'
 import { Messages } from '../messages/api.ts'
 import { Standing, Subagents } from '../subagents/api.ts'
+import { Branches } from '../workspaces/api.ts'
 import { idleNote } from './idle.ts'
 import { WatchdogApi } from './api.ts'
 import type { ReportedFailure } from './api.ts'
@@ -292,6 +293,8 @@ export default function watchdog(host: ExtensionHost) {
         cursor = page.next
       } while (cursor)
     }
+    // A branch has no owner: its failure goes to the conversation that started it, @ultimate or a front.
+    const starter = await host.want(Branches)?.starter(task.conversationId, context)
     await host.harness().commit(async (tx) => {
       const receipts = await tx.doc(Receipts, ROOT_CONVERSATION_ID)
       if (task.id <= (receipts.highWater ?? Infinity) || receipts.tasks[String(task.id)]) return
@@ -315,7 +318,8 @@ export default function watchdog(host: ExtensionHost) {
         return
       const child = (await tx.conversation(task.conversationId))!
       const ultimate = (await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate
-      const recipient = child.owner?.conversationId ?? ultimate
+      const recipient =
+        child.owner?.conversationId ?? (starter as ConversationId | undefined) ?? ultimate
       if (recipient === undefined)
         throw new Error('Watchdog needs @ultimate to report a failed run')
       if (task.state.status !== 'terminal' || task.state.outcome.status !== 'failed') return

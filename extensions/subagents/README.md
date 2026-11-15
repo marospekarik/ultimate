@@ -81,6 +81,9 @@ Fields (others are errors):
   select tools; they are not a shell sandbox.
 - `denyTools`: tool names removed from `tools` or the inherited ones; unknown names are ignored.
 - `isolate`: `none` or `worktree`. `resident: true` makes it a standing agent.
+- `front: true`, only with `resident: true`: a person's front agent, which acts as @ultimate does toward the branches
+  it starts ([messages](../messages/README.md#fronts)). The Agents panel has no control for it; a save keeps it while the
+  agent stays standing.
 - `fast`: the priority tier for `openai-codex/` and `openai/` models (see the fast README).
 - `summaries: false` turns off automatic titles, summaries, reply activity lines and tree abstracts for its
   conversations; explicit summary calls still work ([conversations](../conversations/README.md)).
@@ -133,7 +136,7 @@ ordinary one.
 
 `host.want(SubagentsApi)` (`api.ts`):
 
-- `residents(ctx)` → `{name, description}[]`, read fresh.
+- `residents(ctx)` → `{name, description, front?}[]`, read fresh.
 - `standing(name, ctx)` creates or returns the standing conversation and reconfigures it from the current definition;
   unknown and non-resident names fail with the available names. The `standing {name}` action does the same.
 - `createChild(…)`: used by automations to start a run from a definition.

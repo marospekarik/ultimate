@@ -93,6 +93,8 @@ async function fixture(
   const onClose: (() => Promise<void>)[] = []
   const notices: string[] = []
   let service: WatchdogService | undefined
+  /** Who started each branch, as messages records it. */
+  const starters = new Map<number, ConversationId>()
   const host = {
     implement: (_api: unknown, implementation: WatchdogService) => {
       service = implementation
@@ -107,6 +109,10 @@ async function fixture(
       storage.scanSubmissions(...args),
     need: (api: { name: string }) =>
       api.name === 'conversations' ? { concludedIn } : { doc: Workspaces },
+    want: (api: { name: string }) =>
+      api.name === 'workspaces.branches'
+        ? { starter: async (id: number) => starters.get(id) }
+        : undefined,
   } as unknown as ExtensionHost
   const original = watchdog(host)
   const backend = {
@@ -241,6 +247,7 @@ async function fixture(
     root,
     registry,
     host,
+    starters,
     failures: (since: number) => service!.failures(since),
     ultimate,
     notices,
@@ -347,6 +354,19 @@ it('reports a branch failure once, with its title, error and last tool step; rep
     },
   ])
   expect(await f.failures(1_000_001)).toEqual([])
+})
+
+it('reports a branch failure to the conversation that started it', async () => {
+  const f = await fixture((transcript) =>
+    inputText(transcript) === 'fail' ? error() : fauxAssistantMessage('ok'),
+  )
+  const front = await f.conversation('@front')
+  const branch = await f.conversation('Fix the build')
+  f.starters.set(branch, front)
+  await (await f.submit(branch, 'fail')).wait(context)
+  await until(async () => (await f.entries(front)).length === 1)
+  expect((await f.entries(front))[0].data).toMatchObject({ conversation: branch })
+  expect(await f.entries()).toEqual([])
 })
 
 it('routes an owned child failure only to its parent', async () => {

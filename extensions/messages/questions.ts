@@ -11,6 +11,9 @@ import { formatAgo } from '../../lib/ago.ts'
 import { openQuestion } from '../../lib/message-state.ts'
 import { Messages } from './api.ts'
 import { Standing } from '../subagents/api.ts'
+import type { Context } from '@earendil-works/chord/context'
+import type { ExtensionHost } from '../../server/extensions.ts'
+import { isFront, Started } from './addresses.ts'
 import type { Message } from './api.ts'
 import type { Question } from './refs.ts'
 
@@ -124,12 +127,30 @@ export const gist = (message: Pick<Message, 'text' | 'questions'>) => {
  * The input that starts a run of the conversation that asked the user questions goes in after a line naming those still
  * open, so the agent treats them as unanswered. A per-input entry, not a system-prompt section, keeps the prompt cached.
  */
-export async function openQuestionsNote(tx: Tx, conversationId: ConversationId, now: number) {
-  // @ultimate sees every open question to the user, since it settles those the user decides in its chat.
-  const primary = (await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate === conversationId
-  const open = (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages.filter(
-    (m) => openQuestion(m) && (primary || m.from === conversationId),
-  )
+export async function openQuestionsNote(
+  host: ExtensionHost,
+  tx: Tx,
+  conversationId: ConversationId,
+  now: number,
+  ctx: Context,
+) {
+  const all = (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages.filter(openQuestion)
+  if (!all.length) return undefined
+  // @ultimate sees every open question to the user, since it settles those the user decides in its chat; a front sees
+  // those of the branches it started, which it settles the same way.
+  const index = await tx.doc(Standing, ROOT_CONVERSATION_ID)
+  const primary = index.ultimate === conversationId
+  const front = !primary && (await isFront(host, index, conversationId, ctx))
+  const open = []
+  for (const m of all)
+    if (
+      primary ||
+      m.from === conversationId ||
+      (front &&
+        typeof m.from === 'number' &&
+        (await tx.doc(Started, m.from as ConversationId)).by === conversationId)
+    )
+      open.push(m)
   if (!open.length) return undefined
   const asker = (m: Message) => (m.from === conversationId ? '' : ` from #${m.from}`)
   const text = `Open questions to the user, unanswered until they answer or dismiss them:\n${open
@@ -139,7 +160,7 @@ export async function openQuestionsNote(tx: Tx, conversationId: ConversationId, 
     )
     .join(
       '\n',
-    )}${primary ? `\nWhen the user decides one in your chat, settle it with ultimate.action('messages', 'settle', { messageId, text }).` : ''}`
+    )}${primary || front ? `\nWhen the user decides one in your chat, settle it with ultimate.action('messages', 'settle', { messageId, text }).` : ''}`
   return {
     entries: [
       {

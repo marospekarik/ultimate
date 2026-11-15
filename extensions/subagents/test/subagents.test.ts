@@ -146,6 +146,7 @@ async function fixture(
         metadata: Metadata,
         implement: () => {},
         need: idleNeed,
+        want: () => undefined,
         notice: (message: string) => errors.push(message),
         onOpen: (callback: () => Promise<void>) => {
           onOpen.push(callback)

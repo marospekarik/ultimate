@@ -9,12 +9,13 @@ import type { Question } from './api.ts'
 import type { Via } from './refs.ts'
 import { checkQuestions, gist, openQuestion } from './questions.ts'
 import { isOwed } from '../../lib/message-state.ts'
+import { actingAs } from '../../lib/acting-as.ts'
 import { UserInputEvent } from '../../shared/events.ts'
 import type { Device } from '../../shared/events.ts'
 import { resolveImages } from './images.ts'
 import type { ImagesRef } from './images.ts'
 import { append } from './log.ts'
-import { parentOf, resolve, senderName, starterOf } from './addresses.ts'
+import { isFront, parentOf, resolve, senderName, starterOf } from './addresses.ts'
 import { delivery } from './delivery.ts'
 import { notice } from './notice.ts'
 
@@ -101,15 +102,17 @@ export async function send(
   }
   const standing = await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, ctx)
   const primaryId = standing?.ultimate
-  // The primary agent's messages to a busy conversation almost always steer it: new scope, a decision, a stop.
-  const steer = input.steer ?? (from !== 'user' && from === primaryId)
+  const front = from !== primaryId && (await isFront(host, standing, from, ctx))
+  // The primary agent's and a front's messages to a busy conversation almost always steer it: new scope, a decision, a
+  // stop.
+  const steer = input.steer ?? (from !== 'user' && (from === primaryId || front))
   // Checked before resolving, which may create a standing agent's conversation.
   const parent = from === 'user' ? undefined : await parentOf(host, from, ctx)
   const starter = parent ?? (await starterOf(host, from, ctx))
   if (input.to === 'user') {
-    if (from !== primaryId && !(parent === undefined && starter !== undefined))
+    if (from !== primaryId && !front && !(parent === undefined && starter !== undefined))
       throw new Error(
-        'Only @ultimate and branches message the user; send this to the conversation that started you.',
+        'Only @ultimate, fronts and branches message the user; send this to the conversation that started you.',
       )
   }
   if (!input.text.trim()) throw new Error('Message text must not be empty')
@@ -121,10 +124,30 @@ export async function send(
       `Subagents report to the conversation that started them: message only #${parent}. Your final answer reaches it anyway.`,
     )
   const to = await resolve(host, input.to, from, ctx)
+  // A side chat settles as its main.
+  const settlerId = via ? await actingAs(host, via.conversation as ConversationId, ctx) : undefined
+  const settler = settlerId === undefined ? undefined : await senderName(host, settlerId, ctx)
   const fromLabel = via
-    ? `user (settled for them by @ultimate, from what they said in its chat)`
+    ? `user (settled for them by ${settler}, from what they said in its chat)`
     : await senderName(host, from, ctx)
   const toLabel = await senderName(host, to, ctx)
+  // The asker of a question to the user, or of the one the user's answer settles. @ultimate and fronts keep their own
+  // questions; a branch's also show as pointers where its starter is when that is a front, else in @ultimate.
+  const asker =
+    to === 'user' && input.reply !== false
+      ? from
+      : from === 'user' && answerId !== undefined
+        ? to
+        : undefined
+  let pointerTo: number | undefined
+  if (
+    typeof asker === 'number' &&
+    asker !== primaryId &&
+    !(asker === from ? front : await isFront(host, standing, asker, ctx))
+  ) {
+    const by = await starterOf(host, asker, ctx)
+    pointerTo = by !== undefined && (await isFront(host, standing, by, ctx)) ? by : primaryId
+  }
   return host.harness().commit(async (tx) => {
     const receipt = taskId === undefined ? undefined : await tx.doc(Sent, taskId)
     const requests =
@@ -219,10 +242,10 @@ export async function send(
       reply: message.reply,
       steer,
     })
-    if (primaryId !== undefined) {
-      const asked = to === 'user' && message.reply && from !== primaryId && typeof from === 'number'
+    if (pointerTo !== undefined) {
+      const asked = to === 'user' && typeof from === 'number' && asker === from
       const answered =
-        from === 'user' && answerId !== undefined && typeof to === 'number' && to !== primaryId
+        from === 'user' && answerId !== undefined && typeof to === 'number' && asker === to
       const notification = asked
         ? {
             kind: 'board.asked' as const,
@@ -251,7 +274,7 @@ export async function send(
                     }),
               },
               content: via
-                ? `You settled #${to}'s questions (message ${answerId}) for the user${input.dismiss ? ', closed without an answer' : ''}.`
+                ? `${settlerId === pointerTo ? 'You' : settler} settled #${to}'s questions (message ${answerId}) for the user${input.dismiss ? ', closed without an answer' : ''}.`
                 : input.dismiss
                   ? `The user dismissed #${to}'s questions (message ${answerId}).`
                   : `The user answered #${to}'s questions (message ${answerId}):\n${input.text}`,
@@ -260,9 +283,9 @@ export async function send(
       if (notification)
         await tx.createTask(
           notice(host),
-          { to: primaryId, ...notification },
+          { to: pointerTo, ...notification },
           {
-            conversationId: primaryId,
+            conversationId: pointerTo as ConversationId,
             ownership: { kind: 'conversation' },
             background: true,
           },

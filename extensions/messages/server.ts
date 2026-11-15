@@ -24,7 +24,7 @@ import { implementAction } from '../../lib/actions.ts'
 import { isOwed } from '../../lib/message-state.ts'
 import { actingAs } from '../../lib/acting-as.ts'
 import { imagesParameter, SCAN_PAGE } from './images.ts'
-import { parentOf, Started, starterOf } from './addresses.ts'
+import { isFront, parentOf, Started, starterOf } from './addresses.ts'
 import { delivery } from './delivery.ts'
 import { notice } from './notice.ts'
 import { receiptOf, send } from './send.ts'
@@ -42,7 +42,7 @@ async function openMessage(host: ExtensionHost, messageId: number, ctx: Context)
   if (!message || !openQuestion(message)) throw new Error('These questions are no longer open')
   return message
 }
-/** The user's answer `text` to open message `messageId`, or @ultimate's on their behalf (`via`). */
+/** The user's answer `text` to open message `messageId`, or @ultimate's or a front's on their behalf (`via`). */
 async function answer(
   host: ExtensionHost,
   messageId: number,
@@ -50,7 +50,7 @@ async function answer(
   ctx: Context,
   options: {
     device?: Device
-    via?: { via: Via; primary: number }
+    via?: { via: Via; settler: number }
     call?: { taskId: TaskId; callId: string }
   } = {},
 ) {
@@ -59,8 +59,8 @@ async function answer(
     if (id !== undefined) return id
   }
   const message = await openMessage(host, messageId, ctx)
-  // @ultimate settling its own question has the answer already: a one-way note, not another turn.
-  const own = options.via !== undefined && message.from === options.via.primary
+  // @ultimate or a front settling its own question has the answer already: a one-way note, not another turn.
+  const own = options.via !== undefined && message.from === options.via.settler
   return send(
     host,
     'user',
@@ -154,19 +154,27 @@ export const actions = {
     if (closing !== undefined && typeof closing !== 'boolean')
       throw new Error('dismiss must be a boolean')
     const ctx = BACKGROUND_CONTEXT
-    const primary = (await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, ctx))?.ultimate
-    if (
-      conversationId === undefined ||
-      primary === undefined ||
-      (await actingAs(host, conversationId as ConversationId, ctx)) !== primary
-    )
-      throw new Error("Only @ultimate settles the user's questions")
+    if (conversationId === undefined) throw new Error("Only @ultimate settles the user's questions")
+    const standing = await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, ctx)
+    const settler = await actingAs(host, conversationId as ConversationId, ctx)
+    // A front settles its own questions and those of the branches it started, as @ultimate settles every one.
+    if (settler !== standing?.ultimate) {
+      const asker = (await openMessage(host, messageId as number, ctx)).from
+      if (
+        !(await isFront(host, standing, settler, ctx)) ||
+        (asker !== settler &&
+          (typeof asker !== 'number' || (await starterOf(host, asker, ctx)) !== settler))
+      )
+        throw new Error(
+          "Only @ultimate, or the front that asked or started the asking branch, settles the user's questions",
+        )
+    }
     const entry = await runInput(host, conversationId as ConversationId, ctx)
     const via = { conversation: conversationId, ...(entry === undefined ? {} : { entry }) }
     return {
       id: closing
         ? await dismiss(host, messageId as number, ctx, { via, reason: text.trim() })
-        : await answer(host, messageId as number, text.trim(), ctx, { via: { via, primary } }),
+        : await answer(host, messageId as number, text.trim(), ctx, { via: { via, settler } }),
     }
   }),
   remote: remoteAction,
@@ -221,14 +229,17 @@ export default function messages(host: ExtensionHost) {
     hooks: [
       hook(GenerationTask, {
         // Pi upstream: @earendil-works/pi-durable@1.5.2 — patched transactional beforeInput hook.
-        beforeInput: (_input, api) => openQuestionsNote(api.tx, api.conversationId, Date.now()),
+        beforeInput: (_input, api, ctx) =>
+          openQuestionsNote(host, api.tx, api.conversationId, Date.now(), ctx),
         onYield: async (_answer, api, ctx) => {
-          // A branch's answers go up to its starter; the primary agent's answers to a branch go down to it.
+          // A branch's answers go up to its starter; the primary agent's or a front's answers to a branch go down to it.
           let by = (await api.snapshot(Started, api.conversationId, ctx))?.by
+          const standing =
+            by === undefined ? await api.snapshot(Standing, ROOT_CONVERSATION_ID, ctx) : undefined
           const down =
             by === undefined &&
-            (await api.snapshot(Standing, ROOT_CONVERSATION_ID, ctx))?.ultimate ===
-              api.conversationId
+            (standing?.ultimate === api.conversationId ||
+              (await isFront(host, standing, api.conversationId, ctx)))
           if (down) by = api.conversationId
           if (by === undefined) return undefined
           await host.harness().commit(async (tx) => {
@@ -267,7 +278,7 @@ export default function messages(host: ExtensionHost) {
           starter === undefined
             ? ''
             : ` #${starter} started you: when you stop with nothing under way (no subagent, landing or reply pending), your final answer goes to it and wakes it; while work is under way it arrives as a note, and so do your one-way messages to it.`
-        return `Use message to contact #id or @name. @ultimate and branches may message user. Messages wake their recipient; its answer returns as a reply and wakes you. End your turn instead of waiting. A one-way message (reply: false) gets no answer; use reply: true when you need one. Inputs identify their sender; answer here and your answer is sent to the sender automatically; do not use message to reply. A message to an agent whose message you still owe an answer becomes that answer and ends your run; use it only to attach images.${upward}\n${agents.map((a) => `@${a.name} — ${a.description}`).join('\n')}`
+        return `Use message to contact #id or @name. @ultimate, fronts (standing agents whose definition says front: true) and branches may message user. Messages wake their recipient; its answer returns as a reply and wakes you. End your turn instead of waiting. A one-way message (reply: false) gets no answer; use reply: true when you need one. Inputs identify their sender; answer here and your answer is sent to the sender automatically; do not use message to reply. A message to an agent whose message you still owe an answer becomes that answer and ends your run; use it only to attach images.${upward}\n${agents.map((a) => `@${a.name} — ${a.description}`).join('\n')}`
       }),
       // Only @ultimate can tell; the list changes when a project or a standing agent is added, not per turn.
       section('projects', async (input, ctx) => {
@@ -281,7 +292,7 @@ export default function messages(host: ExtensionHost) {
       defineTool({
         name: 'message',
         description:
-          'Send a message to #id or @name; it returns immediately. A busy recipient gets it after its current run, or during it with steer: true (the default for @ultimate). images forwards screenshots or other images from your conversation, to an agent or to the user. To an agent or the user whose message you owe an answer, it is that answer (with its images and questions). One to an agent ends your run; one to the user ends it too, unless an agent still waits for your answer or a branch whose reply or report you read in this run does. Sent from codemode or beside other calls in its tool round, it never ends the run.',
+          'Send a message to #id or @name; it returns immediately. A busy recipient gets it after its current run, or during it with steer: true (the default for @ultimate and fronts). images forwards screenshots or other images from your conversation, to an agent or to the user. To an agent or the user whose message you owe an answer, it is that answer (with its images and questions). One to an agent ends your run; one to the user ends it too, unless an agent still waits for your answer or a branch whose reply or report you read in this run does. Sent from codemode or beside other calls in its tool round, it never ends the run.',
         parameters: obj({
           to: str(),
           text: str({ minLength: 1 }),

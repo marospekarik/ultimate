@@ -7,12 +7,12 @@ Durable messages between conversations, standing agents and the user. Built in a
 `message { to, text, reply?: true, steer?, images?, questions? }` returns the message id at once. Address a
 conversation as `#123` or `123`, a standing agent as `@name`, or `user`.
 
-- **Who may message whom.** Only @ultimate and branches may message `user`. A subagent may message only its parent, so
+- **Who may message whom.** Only @ultimate, [fronts](#fronts) and branches may message `user`. A subagent may message only its parent, so
   its work reaches the user through its coordinator. Automation runs and other top-level conversations may message any
   agent. Self-messages, unknown conversations and tallies (use `note`) are refused, as is the lander, which takes no
   messages; an unknown standing name lists the valid ones.
 - **Delivery.** An idle recipient wakes. A busy one gets a follow-up after its current run, or steering with
-  `steer: true`, the default for @ultimate's messages and `false` for everyone else. A message to a concluded
+  `steer: true`, the default for @ultimate's and fronts' messages and `false` for everyone else. A message to a concluded
   conversation resumes it.
 - **Answers.** With `reply` (the default) the recipient's final answer returns as a `board.reply`, steering the sender;
   an unanswered input returns a `failed` reply, or `stopped` when a person pressed Stop. Answer directly instead of
@@ -39,7 +39,7 @@ report.**
   reply-enabled message), it goes as a one-way message with `report: true`, which wakes the starter; otherwise as a
   note, since the branch will run again. A landing concludes the branch and wakes the starter itself, asking through
   the `workspaces.branches` point this extension provides (`starter`, `underway`).
-- **Answers back down.** The primary agent's final answer goes to each branch whose reply or report was an input of
+- **Answers back down.** The primary agent's or a front's final answer goes to each branch whose reply or report was an input of
   that run (not concluded, not messaged in the run) with `routed: true`, so a weigh-in reaches the branch. The run's
   other inputs (the user's, another Ultimate's, a card) neither receive it nor keep it from a branch.
 - **Results to the asker.** A branch started while its starter owed an agent an answer records it as `serves`; once the
@@ -62,12 +62,12 @@ another.
 A reply-expected message to the user stays open, and its sender shows as awaiting reply, until the user answers that
 message: a Reply with `re` (the answer card or a typed Reply). The delivered input reads `Answer to message N:` before
 the reply, so an asker with several cards open never guesses which one it answers; a spoken (voice) reply answers no
-card while several are open. Dismissing it closes it with a one-way note to the sender. A branch's question also puts an attention pointer (`board.asked`) in @ultimate's conversation, and the user's
+card while several are open. Dismissing it closes it with a one-way note to the sender. A branch's question also puts an attention pointer (`board.asked`) in @ultimate's conversation, or its front's, and the user's
 answer a `board.answered` note there; neither starts a run. A branch with an open question shows as `waits on you`.
 
 `questions` (checked in `questions.ts`) render under the message as the questions extension's answer card; see
 [Questions](../questions/README.md). While a sender has questions open, its next input is preceded by a `board.open`
-line listing them; @ultimate's lists every open question to the user and names `settle`.
+line listing them; @ultimate's lists every open question to the user and names `settle`, a front's its branches' too.
 
 `/?conversation=<c>&message=<m>`, such as a notification's link, opens at that question while it is still open, as
 `messages:open {conversation, message}` does; otherwise it opens the conversation.
@@ -86,6 +86,18 @@ recorded in `board.started`.
 
 A branch's decisions go to @ultimate first, which weighs in; the branch then asks the user with a reply-expected message
 with `questions` in its own conversation. Reports that need no answer use `reply: false`.
+
+### Fronts
+
+A standing agent whose definition says `front: true` (with `resident: true`; see
+[subagents](../subagents/README.md)) fronts a person, as @ultimate fronts the user, on a host several people share.
+Toward the branches it starts it acts as @ultimate does: it may message `user` with `questions`, its messages steer by
+default, its final answer routes down to its branches, their questions' `board.asked` and `board.answered` pointers land
+in its conversation instead of @ultimate's, its `board.open` line lists them, and it may `settle` them. Its own cards
+put no pointer in @ultimate. A branch's watchdog failure goes to whoever started it. It is a front only while it is in
+the standing agents' index and its current definition says so, read fresh, so no tool call or subagent makes itself one.
+To start branches its definition names `branch` (and `message`) in `tools`. @ultimate still sees and may settle every
+open question, and `tell`, `remember`, side chats and hands-off goals stay @ultimate's.
 
 ## Other projects' Ultimates
 
@@ -122,8 +134,8 @@ are a conversation id, `'user'` or `'remote'`; `state` is `sent`, `delivered`, `
 
 - `addresses({}) → { agents, conversations }`: resident names and descriptions, with an id once created, and up to 50
   recent top-level conversation summaries.
-- `settle({ messageId, text, dismiss? }) → { id }`: from @ultimate's conversation or its side chat, settles the user's
-  open question for them from what they said there. `text` is their answer (with `dismiss`, why it no longer matters);
+- `settle({ messageId, text, dismiss? }) → { id }`: from @ultimate's conversation or its side chat, or from a front's
+  for its own questions and its branches', settles the user's open question for them from what they said there. `text` is their answer (with `dismiss`, why it no longer matters);
   the reply records `via`, so the card reads "@ultimate answered for you". Refused for other callers and closed
   messages.
 

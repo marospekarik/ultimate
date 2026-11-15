@@ -17,7 +17,8 @@ import { CodingTools } from '@earendil-works/pi-durable/tools'
 import { prepareHarness } from '../../../server/harness.ts'
 import { emit } from '../../../server/events.ts'
 import type { OpenHost } from '../../../server/harness.ts'
-import subagents from '../server.ts'
+import subagents, { actions } from '../server.ts'
+import type { ActionContext } from '../../../server/actions.ts'
 import { Profile, Standing, Started } from '../api.ts'
 import type { SubagentsService } from '../api.ts'
 import { Metadata } from '../../../server/metadata.ts'
@@ -198,6 +199,38 @@ it('parses and saves the resident field, refusing non-booleans', async () => {
   )
   expect(saved.resident).toBe(true)
   expect(parseDefinition(await readFile(saved.path, 'utf8'), saved.path).resident).toBe(true)
+})
+
+it('reads front only on a resident definition, lists it, and keeps it through an Agents panel save', async () => {
+  const { service, prepared, path, file } = await fixture()
+  expect(() => parseDefinition(definition('Instructions', 'front: yes\n'), 'test')).toThrow(
+    'front must be a boolean',
+  )
+  const notResident = definition('Instructions', 'front: true\n').replace(
+    'resident: true',
+    'resident: false',
+  )
+  expect(() => parseDefinition(notResident, 'test')).toThrow('front needs resident: true')
+  await writeFile(file, definition('Instructions', 'front: true\n'))
+  expect(await service.residents(ctx)).toEqual([{ name: 'x', description: 'Test', front: true }])
+  // The form has no control for it: a save keeps it, and turning Standing off ends it.
+  const action = { host: { ...prepared, projectRoot: path } } as unknown as ActionContext
+  const form = {
+    name: 'x',
+    scope: 'user',
+    frontmatter: { description: 'Edited', resident: true },
+    instructions: 'Instructions',
+  }
+  expect(await actions.saveDefinition(form, action)).toMatchObject({ front: true })
+  const off = { ...form, frontmatter: { description: 'Edited', resident: false } }
+  expect(await actions.saveDefinition(off, action)).not.toHaveProperty('front')
+  // An overlay that ends a front's residency fails like the file would; the saves above wrote that file whole.
+  await writeFile(
+    join(path, '.ultimate/agents/x.md'),
+    '---\nname: x\naddTools: []\nresident: false\n---\n',
+  )
+  const { errors } = await discoverAgents(path, path, path, prepared.modelRuntime)
+  expect(errors.map((error) => error.error)).toEqual(['Error: front needs resident: true'])
 })
 
 it('reads, saves and publishes a standing agent mark and title', async () => {

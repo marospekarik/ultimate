@@ -41,6 +41,22 @@ export async function servesLine(
   const asker = serves.from === 'remote' ? remoteLabel(serves.remote!) : `#${serves.from}`
   return `\n#${from} works on ${asker}'s message ${serves.message}. Once #${from} is concluded, your final answer to it goes to ${asker} instead.`
 }
+/**
+ * Whether conversation `id` fronts a person: it is a standing agent (in `index`, the `Standing` document) whose current
+ * definition says `front: true`. Toward the branches it starts it acts as the primary agent does. Only the subagents
+ * service indexes standing agents, from discovered definitions, so no tool call or subagent makes itself one.
+ */
+export async function isFront(
+  host: ExtensionHost,
+  index: Readonly<Record<string, ConversationId>> | undefined,
+  id: number | 'user',
+  ctx: Context,
+) {
+  const name = Object.keys(index ?? {}).find((candidate) => index![candidate] === id)
+  if (name === undefined || name === 'ultimate') return false
+  const residents = await host.need(SubagentsApi).residents(ctx)
+  return residents.some((agent) => agent.name === name && agent.front === true)
+}
 /** The conversation that started `id` as a subagent, which is the only one it may message. */
 export async function parentOf(host: ExtensionHost, id: number, ctx: Context) {
   const owner = (await host.harness().commit((tx) => tx.conversation(id as ConversationId), ctx))

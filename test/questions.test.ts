@@ -86,8 +86,12 @@ async function fixture() {
       throw new Error(message)
     },
   } as unknown as ExtensionHost
-  // Messages’ core dependencies: no standing agents to list, no worktrees, no concluded conversations.
-  services.set('subagents', { residents: async () => [] } satisfies Partial<SubagentsService>)
+  // Messages’ core dependencies: only the fronts `front` makes as standing agents, no worktrees, no concluded
+  // conversations.
+  const residents: { name: string; description: string; front?: boolean }[] = []
+  services.set('subagents', {
+    residents: async () => residents,
+  } satisfies Partial<SubagentsService>)
   services.set('workspaces', { doc: Workspaces })
   services.set('conversations', { concludedIn: async () => new Set() })
   prepared.registry.install(messagesExtension(host))
@@ -140,6 +144,20 @@ async function fixture() {
     }, context)
     return conversation.id
   }
+  /** A new conversation registered as standing agent `name`, whose definition says `front: true`. */
+  const front = async (name: string) => {
+    const conversation = await opened.harness.createConversation(
+      { ownership: { kind: 'ownerless' } },
+      context,
+    )
+    const agent = await opened.root.agent(context)
+    await opened.harness.commit(async (tx) => {
+      await configure(tx, conversation.id, { model: agent.model, tools: agent.tools })
+      ;(await tx.doc(Standing, ROOT_CONVERSATION_ID))[name] = conversation.id
+    }, context)
+    residents.push({ name, description: 'A front', front: true })
+    return conversation.id
+  }
   const type = async (id: ConversationId, content: string) => {
     const conversation = (await opened.harness.conversation(id, context))!
     return (await conversation.submit({ type: 'input', content }, context)).wait(context)
@@ -180,6 +198,7 @@ async function fixture() {
     opened,
     hear: (fn: typeof heard) => (heard = fn),
     ultimate,
+    front,
     branch,
     type,
     ask,
@@ -417,7 +436,7 @@ describe('settling for the user', () => {
     const asker = await f.branch(id)
     const { message } = await f.ask(asker, { text: 'Ship it?', questions: [decisions[2]] })
     await expect(f.settle(asker, { messageId: message!.id, text: 'Yes' })).rejects.toThrow(
-      "Only @ultimate settles the user's questions",
+      "Only @ultimate, or the front that asked or started the asking branch, settles the user's questions",
     )
     // Its turn starts with the branch's question by id, and the action that settles it.
     f.hear(async (text) =>
@@ -445,12 +464,83 @@ describe('settling for the user', () => {
     expect(
       f.observed.some(
         (text) =>
-          text.includes('settled for them by @ultimate') && text.includes('3: Yes, ship it'),
+          text.includes(`settled for them by #${id} (@ultimate)`) &&
+          text.includes('3: Yes, ship it'),
       ),
     ).toBe(true)
     await expect(f.settle(id, { messageId: message!.id, text: 'No' })).rejects.toThrow(
       'These questions are no longer open',
     )
+  })
+})
+
+describe('a front', () => {
+  it("gets its branch's question and the user's answer in its own chat, not in @ultimate's", async () => {
+    const f = await fixture()
+    const ultimate = await f.ultimate()
+    const front = await f.front('maros')
+    const asker = await f.branch(front)
+    const kinds = async (id: ConversationId) =>
+      (await f.entries(id)).filter((e) => e.kind === 'board.asked' || e.kind === 'board.answered')
+    const { message } = await f.ask(asker, { text: 'Ship it?', questions: [decisions[2]] })
+    expect((await kinds(front)).map((e) => [e.kind, e.data])).toEqual([
+      ['board.asked', expect.objectContaining({ message: message!.id, from: asker })],
+    ])
+    await f.answer({ messageId: message!.id, answers: [{ question: 'Land it?', answer: 'Yes' }] })
+    await f.settled()
+    expect((await f.log()).messages.find((m) => m.re === message!.id)).toMatchObject({
+      from: 'user',
+      to: asker,
+      text: '3: Yes',
+    })
+    expect((await kinds(front)).map((e) => e.kind)).toEqual(['board.asked', 'board.answered'])
+    expect(await kinds(ultimate)).toEqual([])
+  })
+
+  it("settles its own branches' questions from its chat, and asks the user its own", async () => {
+    const f = await fixture()
+    const ultimate = await f.ultimate()
+    const front = await f.front('maros')
+    const other = await f.front('jana')
+    const asker = await f.branch(front)
+    const { message } = await f.ask(asker, { text: 'Ship it?', questions: [decisions[2]] })
+    // Another front did not start it, and a branch @ultimate started is not this front's either.
+    await expect(f.settle(other, { messageId: message!.id, text: 'No' })).rejects.toThrow(
+      'Only @ultimate, or the front that asked or started the asking branch',
+    )
+    const elsewhere = await f.branch(ultimate)
+    const foreign = (await f.ask(elsewhere, { text: 'Rename it?' })).message!
+    await expect(f.settle(front, { messageId: foreign.id, text: 'No' })).rejects.toThrow(
+      'Only @ultimate, or the front that asked or started the asking branch',
+    )
+    f.hear(async (text) =>
+      text === 'yes, ship it'
+        ? f.settle(front, { messageId: message!.id, text: '3: Yes' })
+        : undefined,
+    )
+    await f.type(front, 'yes, ship it')
+    await f.settled()
+    // Its turn starts with its branch's question, not @ultimate's branch's, and the action that settles it.
+    const note = (await f.entries(front)).find((e) => e.kind === 'board.open')!
+    expect(note.data).toEqual({ ids: [message!.id] })
+    expect(note.model?.[0]?.content).toContain("ultimate.action('messages', 'settle'")
+    expect((await f.log()).messages.find((m) => m.re === message!.id)).toMatchObject({
+      to: asker,
+      via: { conversation: front },
+    })
+    expect(f.observed.some((text) => text.includes(`settled for them by #${front} (@maros)`))).toBe(
+      true,
+    )
+    // Its own card stays with its person: no pointer in @ultimate.
+    const own = await f.ask(front, { text: 'Your call', questions: [decisions[2]] })
+    expect(own.error).toBeUndefined()
+    expect(own.message).toMatchObject({ state: 'delivered', questions: [decisions[2]] })
+    await f.settled()
+    expect(
+      (await f.entries(ultimate))
+        .filter((e) => e.kind === 'board.asked')
+        .map((e) => (e.data as { from: number }).from),
+    ).toEqual([elsewhere])
   })
 })
 

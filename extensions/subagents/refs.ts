@@ -27,6 +27,8 @@ export type Definition = {
   denyTools?: string[]
   isolate?: 'none' | 'worktree'
   resident?: boolean
+  /** A standing agent that fronts a person toward the branches it starts. */
+  front?: boolean
   fast?: boolean
   summaries?: boolean
   /** Overlay files merged into it, in order; saving it writes an overlay, not a whole copy. */

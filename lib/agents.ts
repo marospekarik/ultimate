@@ -36,6 +36,8 @@ export interface AgentDefinition {
   isolate?: 'none' | 'worktree'
   /** A standing agent: one conversation per project, started on first use. */
   resident?: boolean
+  /** A standing agent that fronts a person: toward the branches it starts it acts as @ultimate does (messages). */
+  front?: boolean
   /** Requests on an `openai-codex/` or `openai/` model go on the priority (fast) tier; the fast extension reads it. */
   fast?: boolean
   /** `false`: its conversations get no automatic summaries (intent, title, reply activity, spawn refresh, abstract). */
@@ -270,6 +272,7 @@ const fields = new Set([
   'denyTools',
   'isolate',
   'resident',
+  'front',
   'fast',
   'summaries',
   'title',
@@ -286,6 +289,7 @@ function parseSettings(frontmatter: Record<string, unknown>): Partial<
     | 'family'
     | 'isolate'
     | 'resident'
+    | 'front'
     | 'fast'
     | 'summaries'
     | 'denyTools'
@@ -303,6 +307,7 @@ function parseSettings(frontmatter: Record<string, unknown>): Partial<
     family,
     isolate,
     resident,
+    front,
     fast,
     summaries,
     denyTools,
@@ -324,6 +329,7 @@ function parseSettings(frontmatter: Record<string, unknown>): Partial<
     throw new Error('isolate must be none or worktree')
   if (resident !== undefined && typeof resident !== 'boolean')
     throw new Error('resident must be a boolean')
+  if (front !== undefined && typeof front !== 'boolean') throw new Error('front must be a boolean')
   if (fast !== undefined && typeof fast !== 'boolean') throw new Error('fast must be a boolean')
   if (summaries !== undefined && typeof summaries !== 'boolean')
     throw new Error('summaries must be a boolean')
@@ -340,6 +346,7 @@ function parseSettings(frontmatter: Record<string, unknown>): Partial<
     ...(family ? { family: family } : {}),
     ...(isolate ? { isolate: isolate } : {}),
     ...(resident !== undefined ? { resident: resident } : {}),
+    ...(front !== undefined ? { front } : {}),
     ...(fast !== undefined ? { fast } : {}),
     ...(summaries !== undefined ? { summaries } : {}),
     ...(denyTools !== undefined ? { denyTools } : {}),
@@ -348,6 +355,9 @@ function parseSettings(frontmatter: Record<string, unknown>): Partial<
     ...(tint !== undefined ? { tint } : {}),
   }
 }
+
+/** A front is a person's standing agent: one conversation, so only a resident definition can be one. */
+const FRONT_RESIDENT = 'front needs resident: true'
 
 const isTools = (tools: unknown): tools is string[] =>
   Array.isArray(tools) && tools.every((tool) => typeof tool === 'string')
@@ -374,6 +384,7 @@ export function parseDefinition(
   if (!description) throw new Error('description is required')
   if (tools !== undefined && !isTools(tools)) throw new Error('tools must be a list of tool names')
   if (!body) throw new Error('Instructions are required')
+  if (settings.front && !settings.resident) throw new Error(FRONT_RESIDENT)
   return {
     name,
     description,
@@ -489,7 +500,7 @@ export async function discoverAgents(
           const heading = source === 'user' ? 'User additions' : 'Project additions'
           // A family without a model of its own replaces the model an earlier file pins.
           const { model: _pin, ...unpinned } = base
-          definitions.set(overlay.name, {
+          const merged = {
             ...(overlay.settings.family && !overlay.settings.model ? unpinned : base),
             ...overlay.settings,
             ...(overlay.settings.denyTools
@@ -509,7 +520,9 @@ export async function discoverAgents(
               ? `${base.instructions}\n\n## ${heading}\n\n${overlay.instructions}`
               : base.instructions,
             overlays: [...(base.overlays ?? []), path],
-          })
+          }
+          if (merged.front && !merged.resident) throw new Error(FRONT_RESIDENT)
+          definitions.set(overlay.name, merged)
           continue
         }
         const definition = readDefinition(text, path, modelRuntime)
@@ -545,6 +558,7 @@ export interface DefinitionFields {
   denyTools?: string[]
   isolate?: 'none' | 'worktree'
   resident?: boolean
+  front?: boolean
   fast?: boolean
   summaries?: boolean
   title?: string
@@ -582,6 +596,7 @@ export function serializeDefinition(
     ...(frontmatter.denyTools?.length ? [`denyTools: ${toolList(frontmatter.denyTools)}`] : []),
     ...(frontmatter.isolate === 'worktree' ? ['isolate: worktree'] : []),
     ...(frontmatter.resident !== undefined ? [`resident: ${frontmatter.resident}`] : []),
+    ...(frontmatter.front ? ['front: true'] : []),
     ...(frontmatter.fast ? ['fast: true'] : []),
     ...(frontmatter.summaries === false ? ['summaries: false'] : []),
     ...(frontmatter.title ? [`title: ${scalar(frontmatter.title)}`] : []),
@@ -675,6 +690,8 @@ export async function saveOverlay(
     settings.push(`isolate: ${form.isolate ?? 'none'}`)
   if ((form.resident ?? false) !== (base.resident ?? false))
     settings.push(`resident: ${form.resident ?? false}`)
+  if ((form.front ?? false) !== (base.front ?? false))
+    settings.push(`front: ${form.front ?? false}`)
   if ((form.fast ?? false) !== (base.fast ?? false)) settings.push(`fast: ${form.fast ?? false}`)
   if ((form.summaries ?? true) !== (base.summaries ?? true))
     settings.push(`summaries: ${form.summaries ?? true}`)
