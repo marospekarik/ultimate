@@ -31,8 +31,8 @@ import type { WorkspaceService } from '../workspaces/api.ts'
 import { cleanPreview, sweepPreviews } from './cleanup.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { git, isolatable } from '../../lib/git.ts'
-import { meansNone, overshadowed } from '../../lib/errors.ts'
-import { spawnGroup, stopGroup } from '../../lib/process-group.ts'
+import { inProcess, rebuiltOnOpen, meansNone, overshadowed } from '../../lib/errors.ts'
+import { spawnGroup, stopGroup, sweepPidFiles } from '../../lib/process-group.ts'
 import { every, within } from '../../lib/timers.ts'
 import type { Cancel } from '../../lib/timers.ts'
 import type { Group, GroupProcess } from '../../lib/process-group.ts'
@@ -208,9 +208,13 @@ interface Instance {
   idle?: Cancel
   child: GroupProcess
   group: Group
+  pidFile: string
   output: string
   stopping?: RetryableStopInFlight
 }
+
+const previewPids = (home: string) => join(home, 'preview-pids')
+const startedByThisProcess = (name: string) => name.startsWith(`${process.pid}-`)
 
 const info = ({ id, url, home, pid, conversationId, label, ref }: Instance) => ({
   id,
@@ -282,7 +286,11 @@ async function stopInstance(instances: Map<string, Instance>, instance: Instance
   instance.idle?.()
   const unreapedGroupLeaderPid = instance.child.pid
   if (unreapedGroupLeaderPid !== undefined)
-    await stopGroup(unreapedGroupLeaderPid, { leader: instance.group, grace: 5000 })
+    await stopGroup(unreapedGroupLeaderPid, {
+      leader: instance.group,
+      grace: 5000,
+      pidFile: instance.pidFile,
+    })
   if (instance.temporary) {
     await unlink(join(instance.home, 'ultimate.lock')).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== 'ENOENT') throw error
@@ -377,17 +385,20 @@ function watchIdle(
   item.idle = every(
     idle.every,
     () => {
-      void pages(item)
-        .then(async (open) => {
-          if (open > 0) seen = Date.now()
-          if (live(item) && Date.now() - seen < idle.limit) return
-          await stop(running(host), item.id)
-          remember(host, item)
-        })
-        .catch((error: unknown) => {
-          if (!running(host).has(item.id)) return
-          host.notice(`Stopping idle preview ${item.label} failed: ${String(error)}`)
-        })
+      inProcess(
+        'the idle watch of a preview child dies with this process',
+        pages(item)
+          .then(async (open) => {
+            if (open > 0) seen = Date.now()
+            if (live(item) && Date.now() - seen < idle.limit) return
+            await stop(running(host), item.id)
+            remember(host, item)
+          })
+          .catch((error: unknown) => {
+            if (!running(host).has(item.id)) return
+            host.notice(`Stopping idle preview ${item.label} failed: ${String(error)}`)
+          }),
+      )
     },
     { unref: true },
   )
@@ -534,10 +545,13 @@ async function start(
       model: args.model === undefined ? await previewModelSetting(host) : (args.model ?? undefined),
       git: await previewGit(project, home),
     })
+    await mkdir(previewPids(host.home), { recursive: true })
+    const pidFile = join(previewPids(host.home), `${process.pid}-${randomUUID()}.pid`)
     const group = spawnGroup(process.execPath, ['server/main.ts'], {
       cwd,
       env,
       grace: 5000,
+      pidFile,
     })
     const { child } = group
     const id = randomUUID()
@@ -550,6 +564,7 @@ async function start(
       ...listedAs,
       child,
       group,
+      pidFile,
       output: '',
     }
     instances.set(id, item)
@@ -635,9 +650,15 @@ export default function instanceExtension(
   const instances = running(host)
   const projectIsUltimateSource = host.projectRoot === host.ultimateRoot
   host.onOpen(async () => {
-    void sweepPreviews(tmpdir(), host.notice).catch((error: unknown) => {
-      host.notice(`Preview sweep failed: ${String(error)}`)
+    await sweepPidFiles(previewPids(host.home), startedByThisProcess).catch((error: unknown) => {
+      host.notice(`Stopping previews a crash left running failed: ${String(error)}`)
     })
+    rebuiltOnOpen(
+      'every open sweeps preview directories again',
+      sweepPreviews(tmpdir(), host.notice).catch((error: unknown) => {
+        host.notice(`Preview sweep failed: ${String(error)}`)
+      }),
+    )
   })
 
   async function toolWorkspace(

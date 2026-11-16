@@ -38,7 +38,7 @@ import { receiptOf, send } from './send.ts'
 import type { Device } from '../../shared/events.ts'
 import type { Context } from '@earendil-works/chord/context'
 import { answerRemoteRequest, reported, route, working } from './route.ts'
-import { projectsSection, remoteAction, remoteReplyAction, tell } from './remote.ts'
+import { projectsSection, remoteAction, remoteReplyAction, Tell, tell } from './remote.ts'
 import { branchTool } from './branch.ts'
 import { remoteProgress } from './progress.ts'
 import { safeToRerun } from '../../lib/replay.ts'
@@ -236,7 +236,7 @@ export default function messages(host: ExtensionHost) {
       ),
     dismiss: (messageId, ctx, device, call) => dismiss(host, messageId, ctx, { device, call }),
     send: (from, input, requestId, ctx) => send(host, from, input, ctx, { requestId }),
-    tell: (from, input, ctx, signal) => tell(host, from, input, ctx, signal),
+    tell: (from, input, ctx) => tell(host, from, input, ctx),
     owed,
     dropped: async (tx, by, serves, why, fired) => {
       if (serves.from === 'remote' && !(await stillServedAfter(tx, serves, fired)))
@@ -245,7 +245,7 @@ export default function messages(host: ExtensionHost) {
   })
   return defineExtension({
     name: 'messages',
-    tasks: [delivery(host), route(host), notice(host)],
+    tasks: [delivery(host), route(host), notice(host), Tell],
     hooks: [
       hook(GenerationTask, {
         // Pi upstream: @earendil-works/pi-durable@1.5.2 — patched transactional beforeInput hook.
@@ -298,7 +298,7 @@ export default function messages(host: ExtensionHost) {
           starter === undefined
             ? ''
             : ` #${starter} started you: when you stop with nothing under way (no subagent, landing or reply pending), your final answer goes to it and wakes it; while work is under way it arrives as a note, and so do your one-way messages to it.`
-        return `Use message to contact #id or @name. @ultimate, fronts (standing agents whose definition says front: true) and branches may message user. Messages wake their recipient; its answer returns as a reply and wakes you. End your turn instead of waiting. A one-way message (reply: false) gets no answer; use reply: true when you need one. Inputs identify their sender; answer here and your answer is sent to the sender automatically; do not use message to reply. A message to an agent whose message you still owe an answer becomes that answer and ends your run; use it only to attach images.${upward}\n${agents.map((a) => `@${a.name} — ${a.description}`).join('\n')}`
+        return `Use message to contact #id or @name. @ultimate, standing agents and branches may message user. Messages wake their recipient; its answer returns as a reply and wakes you. End your turn instead of waiting. A one-way message (reply: false) gets no answer; use reply: true when you need one. Inputs identify their sender; answer here and your answer is sent to the sender automatically; do not use message to reply. A message to an agent whose message you still owe an answer becomes that answer and ends your run; use it only to attach images.${upward}\n${agents.map((a) => `@${a.name} — ${a.description}`).join('\n')}`
       }),
 
       section('projects', async (input, ctx) => {
