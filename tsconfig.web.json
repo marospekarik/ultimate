@@ -37,6 +37,7 @@
     "extensions/conversations/summary-model-ref.ts",
     "extensions/models/switches.ts",
     "extensions/context/breakdown.ts",
+    "extensions/docs/limits.ts",
     "extensions/status-line/context.ts",
     "extensions/status-line/turns.ts",
     "extensions/sounds/cues.ts",
