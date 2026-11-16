@@ -26,12 +26,21 @@ some.
    - `.ultimate/settings.json`: model families hold colours only (models are per person), the lander checks run one
      after the other with 2 test workers, `lander.push` is `fork`. Take new upstream keys.
    - `.ultimate/agents/coordinator.md` and the other files under `.ultimate/`.
-5. Run `pnpm install --frozen-lockfile` when the lockfile changed, `pnpm check`, and the tests of every file you
+5. Upstream's `ultimate/no-comments` lint rejects comments in product code. Where our side carried a comment, say it in
+   code (a name, a small function) instead of keeping or merely deleting the comment.
+6. Run `pnpm install --frozen-lockfile` when the lockfile changed, `pnpm check`, and the tests of every file you
    resolved, fast and e2e (`pnpm test <path>`, `pnpm test:e2e <path>`). Then `workspace submit`.
-6. Report:
+7. Report:
    - how each conflict was resolved, and what was dropped;
    - whether `server/`, `shared/`, `patches/` or `pnpm-lock.yaml` changed (a restart), and whether `bin/` did (a
      human `pnpm start`).
+
+## Setup errors right after a merge
+
+While a landed merge reloads, the host can briefly report setup errors that are only an in-between state, such as
+"Unknown field: skills" (agent definitions arriving before the code that reads them) or an extension failing with
+"document is not defined" mid-reload. Recheck once after the restart or reload has settled; investigate only an error
+that is still there.
 
 ## When the lander fails
 
