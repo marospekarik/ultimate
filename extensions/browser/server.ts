@@ -25,7 +25,7 @@ import { fetchAssets, sourceFrames } from '../../lib/source-frames.ts'
 import { watchSteer } from '../../lib/steer.ts'
 import { within as withinDeadline } from '../../lib/timers.ts'
 import { safeToRerun } from '../../lib/replay.ts'
-import { errnoCode, ignoring, meansNone } from '../../lib/errors.ts'
+import { errnoCode, inProcess, ignoring, meansNone } from '../../lib/errors.ts'
 
 export async function playwrightChromiums(
   home: string,
@@ -198,7 +198,7 @@ export default function browserExtension(host: ExtensionHost) {
       defineTool({
         name: 'browser',
         description:
-          "Drive a fresh browser page with clicks, fills, keys, waits and JavaScript; report outcomes and optionally an image. Each step times out after 30 s. On an Ultimate page (this UI or a preview), `send` submits a prompt without the composer and `until` waits on Ultimate's state, never a guessed time: 'idle' (that conversation's turn is done), 'quiet' (nothing is busy, branches and subagents included), {entry: kind} or {event: name, where}; until defaults to 5 min (timeoutMs) and on timeout says what was still busy. Click and fill only to test the interaction itself. Scope selectors to one card or panel ('[data-entry-id=\"42\"] button:has-text(\"Retry\")', not 'button:has-text(\"Retry\")', which hits the first match on the page).",
+          "Drive a fresh browser page with clicks, fills, keys, waits and JavaScript; report outcomes and optionally an image. Each step times out after 30 s. On an Ultimate page (this UI or a preview), `send` submits a prompt without the composer and `until` waits on Ultimate's state, never a guessed time: 'idle' (that conversation's turn is done), 'quiet' (nothing is busy, branches and subagents included), {entry: kind} or {event: name, where}; until defaults to 5 min (timeoutMs) and on timeout says what was still busy. Click and fill only to test the interaction itself. Scope selectors to one card or panel ('[data-entry-id=\"42\"] button:has-text(\"Retry\")', not 'button:has-text(\"Retry\")', which fails when it matches several).",
         parameters: obj({
           ...base,
           steps: arr(
@@ -413,11 +413,14 @@ export default function browserExtension(host: ExtensionHost) {
                 state.launched = undefined
                 state.browser = undefined
               }
-              owner
-                .then(killDisconnectedBrowserGroup)
-                .catch((error: unknown) =>
-                  host.notice(`Killing a disconnected browser failed: ${String(error)}`),
-                )
+              inProcess(
+                'the disconnected browser was launched by this process',
+                owner
+                  .then(killDisconnectedBrowserGroup)
+                  .catch((error: unknown) =>
+                    host.notice(`Killing a disconnected browser failed: ${String(error)}`),
+                  ),
+              )
             })
             return browser
           })

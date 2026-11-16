@@ -15,6 +15,7 @@ import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import type { ChildMessage, SupervisorMessage } from './supervisor-protocol.ts'
 
 import { alive } from '../lib/lock.ts'
+import { inProcess } from '../lib/errors.ts'
 import { every } from '../lib/timers.ts'
 import { realpath } from 'node:fs/promises'
 import { extensionModules } from './vite-extensions.ts'
@@ -74,35 +75,38 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
   let api: Awaited<ReturnType<typeof createApi>> | undefined
   let web: Awaited<ReturnType<typeof createWeb>> | undefined
   const http = createHttpServer((request, response) => {
-    void (async () => {
-      const port =
-        new URL(
-          options.publicUrl ??
-            `http://127.0.0.1:${(http.address() as import('node:net').AddressInfo).port}`,
-        ).port || '80'
-      compress(request, response)
-      if (!(await admit(request, port, access.rules))) {
-        response.writeHead(403)
-        response.end('Forbidden')
-        return
-      }
-      if (!api) {
-        response.writeHead(503)
-        response.end('Preparing')
-        return
-      }
-      response.setHeader('Content-Security-Policy', loopbackPreviewFrameAncestors)
-      if (await api.handle(request, response)) return
-      if (request.method !== 'GET' && request.method !== 'HEAD') {
-        response.writeHead(405)
-        response.end()
-        return
-      }
-      await web!.handle(request, response)
-    })().catch(() => {
-      if (!response.headersSent) response.writeHead(500)
-      response.end('Internal server error')
-    })
+    inProcess(
+      'a request handler: the HTTP response dies with the process',
+      (async () => {
+        const port =
+          new URL(
+            options.publicUrl ??
+              `http://127.0.0.1:${(http.address() as import('node:net').AddressInfo).port}`,
+          ).port || '80'
+        compress(request, response)
+        if (!(await admit(request, port, access.rules))) {
+          response.writeHead(403)
+          response.end('Forbidden')
+          return
+        }
+        if (!api) {
+          response.writeHead(503)
+          response.end('Preparing')
+          return
+        }
+        response.setHeader('Content-Security-Policy', loopbackPreviewFrameAncestors)
+        if (await api.handle(request, response)) return
+        if (request.method !== 'GET' && request.method !== 'HEAD') {
+          response.writeHead(405)
+          response.end()
+          return
+        }
+        await web!.handle(request, response)
+      })().catch(() => {
+        if (!response.headersSent) response.writeHead(500)
+        response.end('Internal server error')
+      }),
+    )
   })
   const restarted = new Set<(watcher: ViteDevServer['watcher']) => void>()
   reportCore({ type: 'web', state: 'preparing' })
@@ -128,7 +132,10 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
   })
   const restartViteOnConfigChangeWithoutHmr = (file: string) => {
     if (file === vite.config.configFile)
-      vite.restart().catch((error: unknown) => console.error('Restarting Vite failed:', error))
+      inProcess(
+        'the Vite server belongs to this process',
+        vite.restart().catch((error: unknown) => console.error('Restarting Vite failed:', error)),
+      )
   }
   const watch: Watch = (attach) => {
     let detach = attach(vite.watcher)
@@ -256,7 +263,10 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
       const stopped = new Promise<void>((resolve, reject) =>
         http.close((error) => (error ? reject(error) : resolve())),
       )
+      if (opened) await extensions.released()
       await api?.close()
+      await opened?.close()
+      opened = undefined
       await extensions.close()
       await web?.close()
       await system?.close()
@@ -264,7 +274,6 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
       reportCore({ type: 'web', state: 'stopped' })
       http.closeAllConnections()
       await stopped
-      await opened?.close()
     },
   }
 }
@@ -290,38 +299,51 @@ if (process.argv[1] && resolvePath(process.argv[1]) === fileURLToPath(import.met
   let sharedTeardown: Promise<void> | undefined
   const close = () => (sharedTeardown ??= Promise.resolve(server?.close()))
   const shutdown = () => {
-    void close().then(
-      () => process.exit(0),
-      (error: unknown) => {
-        console.error('Server shutdown failed:', error)
-        process.exit(1)
-      },
+    inProcess(
+      'shutdown only closes this process',
+      close().then(
+        () => process.exit(0),
+        (error: unknown) => {
+          console.error('Server shutdown failed:', error)
+          process.exit(1)
+        },
+      ),
     )
   }
-  process.on('SIGINT', shutdown)
-  process.on('SIGTERM', shutdown)
   if (process.env.ULTIMATE_SUPERVISED === '1' && process.send) {
+    const refuse = (signal: NodeJS.Signals) =>
+      reportCore({
+        type: 'log',
+        level: 'warn',
+        source: 'core',
+        text: `Ignored ${signal} sent to core pid ${process.pid}: the supervisor stops its core itself. Either Ultimate is stopping through its service (the signal went to the whole group), or a process outside it killed by port or name`,
+      })
+    process.on('SIGINT', refuse)
+    process.on('SIGTERM', refuse)
     try {
       server = await prepareServer({ port: 0, publicUrl: process.env.ULTIMATE_PUBLIC_URL })
       process.on('message', (message: SupervisorMessage) => {
-        void (async () => {
-          if (message.type === 'go' || message.type === 'reacquire') {
-            await server!.go(message.type === 'reacquire' ? message.error : undefined)
-            send({ type: 'ready' })
-          }
-          if (message.type === 'release') {
-            await server!.release()
-            send({ type: 'released' })
-          }
-          if (message.type === 'exit') {
-            await close()
-            process.exit(0)
-          }
-        })().catch((error) => {
-          send({ type: 'failed', error: String(error) })
-          console.error(error)
-          process.exit(1)
-        })
+        inProcess(
+          'the supervisor message controls this process lifecycle',
+          (async () => {
+            if (message.type === 'go' || message.type === 'reacquire') {
+              await server!.go(message.type === 'reacquire' ? message.error : undefined)
+              send({ type: 'ready' })
+            }
+            if (message.type === 'release') {
+              await server!.release()
+              send({ type: 'released' })
+            }
+            if (message.type === 'exit') {
+              await close()
+              process.exit(0)
+            }
+          })().catch((error) => {
+            send({ type: 'failed', error: String(error) })
+            console.error(error)
+            process.exit(1)
+          }),
+        )
       })
       process.on('disconnect', shutdown)
       send({ type: 'prepared', port: server.port })
@@ -331,6 +353,8 @@ if (process.argv[1] && resolvePath(process.argv[1]) === fileURLToPath(import.met
       process.exit(1)
     }
   } else {
+    process.on('SIGINT', shutdown)
+    process.on('SIGTERM', shutdown)
     server = await prepareServer()
     await server.go()
     console.log(`Ultimate: ${server.url}`)
