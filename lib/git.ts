@@ -28,6 +28,10 @@ const COMMAND_SCOPE_PROGRAM_RUNNING_CONFIG_OFF = [
 const GLOBAL_PROGRAM_RUNNING_KEY =
   /^(core\.sshCommand|credential\.helper|credential\..*\.helper|filter\..*\.(smudge|clean|process)|merge\..*\.driver)$/i
 
+const singleQuotedProgramPath = (path: string) => `'${path.replaceAll("'", "'\\''")}'`
+const gitDefaultSsh = () =>
+  process.env.GIT_SSH ? singleQuotedProgramPath(process.env.GIT_SSH) : 'ssh'
+
 type GlobalProgramConfig = { args: string[]; keys: Set<string> }
 let globalProgramConfig: Promise<GlobalProgramConfig> | undefined
 let globalProgramConfigFile: string | undefined
@@ -53,7 +57,7 @@ async function reappliedGlobalProgramConfig(): Promise<GlobalProgramConfig> {
       args.push('-c', `${name}=${value}`)
       keys.add(name)
     }
-    if (!keys.has('core.sshcommand')) args.push('-c', 'core.sshcommand=')
+    if (!keys.has('core.sshcommand')) args.push('-c', `core.sshcommand=${gitDefaultSsh()}`)
     return { args, keys }
   })()
   return globalProgramConfig
