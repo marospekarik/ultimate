@@ -2,7 +2,6 @@ import type { IncomingHttpHeaders, IncomingMessage } from 'node:http'
 import type { Device } from '../shared/events.ts'
 import { meansNone } from '../lib/errors.ts'
 
-/** Who an access rule vouches a request came from: its login, and the client's address if the rule knows it. */
 export type Identity = { login: string; address?: string }
 
 export interface AccessRule {
@@ -31,10 +30,6 @@ export function createAccess(changed: () => void = () => {}) {
 }
 export type Access = ReturnType<typeof createAccess>
 
-/**
- * Whether a request may come in, and as whom: `{}` for a direct local client, else the identity of the access rule that
- * admitted it. Only that rule vouches for a login, so a request's own identity headers count only through it.
- */
 export async function admit(
   request: Pick<IncomingMessage, 'headers' | 'method' | 'url'>,
   port: string,
@@ -48,16 +43,14 @@ export async function admit(
   )
     return {}
   const site = request.headers['sec-fetch-site']
-  const navigation =
+  const viewOnlyRootNavigation =
     (site === 'cross-site' || site === 'same-site') &&
     request.method === 'GET' &&
     (request.url === '/' || request.url?.startsWith('/?') === true) &&
     request.headers['sec-fetch-mode'] === 'navigate' &&
     request.headers['sec-fetch-dest'] === 'document' &&
     request.headers.upgrade === undefined
-  // Root navigation relaxes only fetch metadata, not origin or identity verification.
-  // Any site can now open the UI with any query, so query parameters must only select views, never act.
-  if (site !== undefined && site !== 'same-origin' && site !== 'none' && !navigation)
+  if (site !== undefined && site !== 'same-origin' && site !== 'none' && !viewOnlyRootNavigation)
     return undefined
   for (const rule of rules) {
     if (host !== new URL(rule.origin).host || (origin && origin !== rule.origin)) continue
@@ -66,17 +59,12 @@ export async function admit(
       if (identity?.login && rules.has(rule))
         return { login: identity.login, ...(identity.address && { address: identity.address }) }
     } catch (error) {
-      // A failed identity provider cannot admit a request.
       meansNone(error)
     }
   }
   return undefined
 }
 
-/**
- * The short label of the browser behind a request's `User-Agent`, `phone safari` or `desktop chrome`, with the login
- * and address `admit` found for it. Nothing else of the request.
- */
 export function deviceOf(agent = '', identity: Partial<Identity>): Device {
   const kind = /Mobi|iPhone|Android/.test(agent) ? 'phone' : 'desktop'
   const browser = /Edg\//.test(agent)

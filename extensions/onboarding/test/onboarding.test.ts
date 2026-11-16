@@ -49,7 +49,7 @@ describe('onboarding settings', () => {
       JSON.stringify({
         defaultSurface: 'workbench',
         custom: { keep: 1 },
-        extensions: { disable: ['automations'], extra: 'keep' },
+        extensions: { disable: ['plan'], extra: 'keep' },
       }),
     )
     options = {
@@ -95,7 +95,7 @@ describe('onboarding settings', () => {
         extensions: ['x'],
         replaces: [],
         enable: [],
-        disable: ['automations'],
+        disable: ['plan'],
       },
     })
     expect(server.system.current().project).toMatchObject({
@@ -104,8 +104,8 @@ describe('onboarding settings', () => {
       settings: {},
     })
     expect(enabled('x')).toBe(false)
-    expect(enabled('automations')).toBe(true)
-    expect(await tools()).toContain('automation')
+    expect(enabled('plan')).toBe(true)
+    expect(await tools()).toContain('plan')
     expect(server.system.current().skills.some((skill) => skill.name === 'local-skill')).toBe(false)
     expect(
       (await action('extensions')).find((entry: { name: string }) => entry.name === 'x'),
@@ -138,8 +138,8 @@ describe('onboarding settings', () => {
     expect(denied.data.error).toContain('local setup')
     await action('decide', { local: true })
     expect(enabled('x')).toBe(true)
-    expect(enabled('automations')).toBe(false)
-    expect(await tools()).not.toContain('automation')
+    expect(enabled('plan')).toBe(false)
+    expect(await tools()).not.toContain('plan')
     expect((await web()).some((path) => path.endsWith('/x/web.tsx'))).toBe(true)
     expect(server.system.current().skills.some((skill) => skill.name === 'local-skill')).toBe(true)
     expect(projectDecision(project, home)).toBe(true)
@@ -159,7 +159,7 @@ describe('onboarding settings', () => {
     expect(projectSettings).toMatchObject({
       custom: { keep: 1 },
       defaultSurface: 'workbench',
-      extensions: { extra: 'keep', enable: ['splash'], disable: ['automations'] },
+      extensions: { extra: 'keep', enable: ['splash'], disable: ['plan'] },
     })
     await Promise.all(
       ['info', 'documents'].map((name) =>
@@ -196,8 +196,8 @@ describe('onboarding settings', () => {
     ).toBe('user')
     await action('decide', { local: false })
     expect(enabled('x')).toBe(false)
-    expect(enabled('automations')).toBe(true)
-    expect(await tools()).toContain('automation')
+    expect(enabled('plan')).toBe(true)
+    expect(await tools()).toContain('plan')
     expect((await web()).some((path) => path.endsWith('/x/web.tsx'))).toBe(false)
     expect(server.system.current().skills.some((skill) => skill.name === 'local-skill')).toBe(false)
     const adoptDenied = await post(server, '/api/extensions/onboarding/actions/adoptProjectSetup', {
@@ -207,10 +207,10 @@ describe('onboarding settings', () => {
     await action('decide', { local: true })
     await action('adoptProjectSetup')
     await action('decide', { local: false })
-    expect(enabled('automations')).toBe(false)
+    expect(enabled('plan')).toBe(false)
     expect(JSON.parse(await readFile(userFile, 'utf8'))).toMatchObject({
       custom: 'user',
-      extensions: { extra: 2, enable: ['splash'], disable: ['sounds', 'automations'] },
+      extensions: { extra: 2, enable: ['splash'], disable: ['sounds', 'plan'] },
     })
   })
   it('skips the first run on request and keeps the decision across a reboot', async () => {

@@ -13,7 +13,7 @@ import { stripVTControlCharacters } from 'node:util'
 import { copyJson } from '@earendil-works/chord/json'
 import type { Context } from '@earendil-works/chord/context'
 import { withAbortSignal } from '@earendil-works/chord/context'
-import { defineEntry, defineTask, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import { defineTask, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import { debounce, deadline } from '../../lib/timers.ts'
 import { git } from '../../lib/git.ts'
 import { overshadowed, retriedLater, settled } from '../../lib/errors.ts'
@@ -28,14 +28,10 @@ import type { Gh, PrState } from './pr.ts'
 import { setup } from '../../lib/worktree-setup.ts'
 import { addCheckout, treePath } from './tree.ts'
 import type { Landed, LanderEntry, LanderOutcome, QueueEntry, WorkspaceIndex } from './types.ts'
+import { LanderLog } from './entries.ts'
+import { LanderReportEntry } from './refs.ts'
 
-/** One line of the lander conversation's log; it carries no model message, so no model ever sees it. */
-export const LanderLog = defineEntry<LanderEntry>('ultimate.lander')
-/** The entry kind of a submission's report: its outcome card, in the submitter and in whoever started it. */
-export const LanderReportEntry = 'workspaces.lander-report'
-/** Outcomes kept in the index for submit cards; older ones live on in the lander conversation. */
-const kept = 50
-/** The lander's own detached checkout of `source`, also its conversation's cwd. */
+const recentSubmitCardOutcomeLimit = 50
 export async function landerPath(home: string, source: string, settings: JsonObject) {
   const configured = await treePath(settings, landerName(source))
   if (configured) return configured
@@ -44,13 +40,8 @@ export async function landerPath(home: string, source: string, settings: JsonObj
 }
 const landerHash = (source: string) =>
   createHash('sha256').update(source).digest('hex').slice(0, 12)
-/** The name a configured `isolates.worktree` layout gives the lander's checkout of `source`. */
 const landerName = (source: string) => `ult-lander-${landerHash(source)}`
-const checkouts = new Map<string, Promise<string>>()
-/**
- * The lander's checkout of `source`, created detached at `tip` when it is not a registered worktree yet; an existing one
- * stays as it is. Serialize creation per path so another caller cannot remove a checkout being created.
- */
+const checkoutCreationQueues = new Map<string, Promise<string>>()
 export async function landerCheckout(
   home: string,
   source: string,
@@ -58,29 +49,24 @@ export async function landerCheckout(
   tip = 'HEAD',
 ) {
   const path = await landerPath(home, source, settings)
-  const queued = settled(checkouts.get(path) ?? Promise.resolve()).then(async () => {
+  const queued = settled(checkoutCreationQueues.get(path) ?? Promise.resolve()).then(async () => {
     const registered = (await git(source, 'worktree', 'list', '--porcelain'))
       .split('\n\n')
       .some((entry) => entry.split('\n').includes(`worktree ${path}`))
     if (!registered) {
-      // The directory is the lander's own; a crash may have left it half created.
       await rm(path, { recursive: true, force: true })
       await git(source, 'worktree', 'prune')
       await addCheckout(settings, source, path, landerName(source), ['--detach', tip])
     }
     return path
   })
-  checkouts.set(path, queued)
+  checkoutCreationQueues.set(path, queued)
   try {
     return await queued
   } finally {
-    if (checkouts.get(path) === queued) checkouts.delete(path)
+    if (checkoutCreationQueues.get(path) === queued) checkoutCreationQueues.delete(path)
   }
 }
-/**
- * Append a log line about `entry`, a draft of its queue entry, to the lander conversation `id`; a step also joins the
- * entry's `steps`, which the submitter's cards show.
- */
 export const log = (
   tx: Tx,
   id: ConversationId,
@@ -126,48 +112,32 @@ type Host = Pick<
   | 'emit'
   | 'resource'
 >
-/** One check command, with its own total limit in seconds when set, and its own no-output limit. */
-type Check = { command: string; timeout?: number; stall?: number }
-/** Checks run in order; an array is a group whose commands run concurrently. */
+type Seconds = number
+type Check = { command: string; timeout?: Seconds; stall?: Seconds }
+type ConcurrentCheckGroup = Check[]
 type Settings = {
-  checks: (Check | Check[])[]
+  checks: (Check | ConcurrentCheckGroup)[]
   push?: string
   /** Pull request mode: push the conversation's branch to `remote` and open a PR against its `base`. */
   pr?: { remote: string; base: string }
 }
-/** How long the lander waits before asking GitHub again about open pull requests. */
-const pollInterval = 5 * 60 * 1000
-/** Bounded retries when the target moves while a submission is integrated. */
-const attempts = 3
-/** Seconds without output and total seconds allowed for one check, unless the check sets its own limits. */
-type CheckLimits = { stall: number; total: number }
-const checkLimits: CheckLimits = { stall: 2 * 60, total: 10 * 60 }
-/**
- * A check's limits: its `timeout` replaces the total and its `stall` the no-output limit; neither exceeds the total.
- * A suite whose cold start is legitimately silent needs its own `stall` — the full e2e suite prints nothing for its
- * first minute or more while vitest collects it cold, which the 2-minute default cut mid-transform in the lander's
- * fresh checkout (#12346), and the kill left the transform cache cold for every retry.
- */
+const pullRequestPollIntervalMs = 5 * 60 * 1000
+const maxTargetMoveAttempts = 3
+type CheckLimits = { stall: Seconds; total: Seconds }
+const defaultCheckLimitsSeconds: CheckLimits = { stall: 2 * 60, total: 10 * 60 }
 export const limitsFor = (check: Check, limits: CheckLimits): CheckLimits => {
   const total = check.timeout ?? limits.total
   const stall = Math.min(check.stall ?? limits.stall, total)
   return { stall, total }
 }
-/** Lines naming failed tests (vitest's `FAIL`, `×` and `✗` marks), kept from a check's whole output. */
-const failedLine = /^\s*(FAIL|×|✗)\s/
+const vitestFailureLine = /^\s*(FAIL|×|✗)\s/
 const seconds = (value: number) => (value < 60 ? `${value} s` : `${+(value / 60).toFixed(1)} min`)
 
-/** Where running checks record their process groups, so a host that crashed mid-check stops them on its next open. */
 export const checkPids = (home: string) => join(home, 'lander-checks')
-/**
- * Stop the checks a previous process left running. Pi resumes a lander task before extensions open, so files of
- * this process name live checks, never leftovers.
- */
 export const sweepChecks = async (home: string) => {
-  await sweepPidFiles(checkPids(home), (name) => name.startsWith(`${process.pid}-`))
-  // Temporary directories of checks whose process stopped; a live check of this process made none yet.
+  const isResumedProcessCheck = (name: string) => name.startsWith(`${process.pid}-`)
+  await sweepPidFiles(checkPids(home), isResumedProcessCheck)
   const names = await readdir(checkTemp(home)).catch((error: NodeJS.ErrnoException) => {
-    // No check ever ran in this home.
     if (error.code === 'ENOENT') return []
     throw error
   })
@@ -175,28 +145,17 @@ export const sweepChecks = async (home: string) => {
     if (!name.startsWith(`${process.pid}-`))
       await rm(join(checkTemp(home), name), { recursive: true, force: true })
 }
-/**
- * Where checks keep temporary files: on disk under the project home, not in `/tmp`, which is often a small tmpfs
- * that test suites fill (EDQUOT) when interrupted runs leave their directories behind.
- */
 export const checkTemp = (home: string) => join(home, 'lander-tmp')
 
-/**
- * Run `command` with bash in its own process group, recorded in `pids` while it runs, with `TMPDIR` set to a fresh
- * directory in `temp` that is removed when it ends. The watchdog and task cancellation both stop the whole group:
- * TERM, then KILL after a short grace.
- */
 export async function runLanderCheck(
   path: string,
   command: string,
   context: Context,
   pids: string,
   temp: string,
-  limits: CheckLimits = checkLimits,
+  limits: CheckLimits = defaultCheckLimitsSeconds,
 ) {
-  // Synchronous, so the watchdog's timers start in the same tick as the call.
-  mkdirSync(temp, { recursive: true })
-  const tmp = mkdtempSync(join(temp, `${process.pid}-`))
+  const tmp = createTempBeforeWatchdog(temp)
   let output = ''
   let partial = ''
   const failed = new Set<string>()
@@ -217,7 +176,6 @@ export async function runLanderCheck(
   const cancelTotal = deadline(limits.total * 1000, () =>
     stop(`Timed out after ${seconds(limits.total)}`),
   )
-  /** A failure report: what ended the check, the failed tests seen (at most 20), then the output tail. */
   const report = (reason: string, heading: string) => {
     const tests = [...failed].slice(-20)
     return [reason, ...(tests.length ? [heading, ...tests] : []), output].join('\n').trim()
@@ -228,7 +186,7 @@ export async function runLanderCheck(
     partial = split.pop()!.slice(-1000)
     for (const line of split) {
       const plain = stripVTControlCharacters(line).trim()
-      if (failedLine.test(plain)) failed.add(plain.slice(0, 300))
+      if (vitestFailureLine.test(plain)) failed.add(plain.slice(0, 300))
     }
     stallDeadline()
   }
@@ -261,7 +219,11 @@ export async function runLanderCheck(
   }
 }
 
-/** A check from settings: a command, or `{ command, timeout, stall }` with positive seconds. */
+function createTempBeforeWatchdog(temp: string) {
+  mkdirSync(temp, { recursive: true })
+  return mkdtempSync(join(temp, `${process.pid}-`))
+}
+
 const parseCheck = (value: unknown): Check | undefined => {
   if (typeof value === 'string') return { command: value }
   if (!value || typeof value !== 'object') return undefined
@@ -305,11 +267,13 @@ export const landerSettings = async (host: Pick<Host, 'projectSettings'>): Promi
     throw new Error(
       'lander.pr and lander.push cannot both be set: pr pushes the branch and opens a pull request, push moves the target',
     )
+  const outsidePreview = !process.env.ULTIMATE_PREVIEW_BRANCH
+  const pushOutsidePreview = lander?.push && outsidePreview ? lander.push : undefined
+  const prOutsidePreview = pr && outsidePreview ? pr : undefined
   return {
     checks: checks as Settings['checks'],
-    // A preview never pushes; its git hooks refuse it too (extensions/instance).
-    ...(lander?.push && !process.env.ULTIMATE_PREVIEW_BRANCH ? { push: lander.push } : {}),
-    ...(pr && !process.env.ULTIMATE_PREVIEW_BRANCH ? { pr } : {}),
+    ...(pushOutsidePreview ? { push: pushOutsidePreview } : {}),
+    ...(prOutsidePreview ? { pr: prOutsidePreview } : {}),
   }
 }
 export const contains = (cwd: string, ancestor: string, descendant: string) =>
@@ -324,12 +288,11 @@ const failure = (error: unknown) => {
     .trim()
     .slice(-3000)
 }
-/** Run a network git command in `cwd`; longer than git()'s local timeout. */
 const remote = (cwd: string, signal: AbortSignal, ...args: string[]) =>
   git({ cwd, signal, timeout: 300000 }, ...args)
 
 type Runtime = TaskRuntime<{ source: string }, State, null, object>
-type Prepared = {
+type CheckedIntegration = {
   base: string
   integrated: string
   flaky: string[]
@@ -343,59 +306,57 @@ const landedOutcome = (landed: Landed): LanderOutcome => ({
   flaky: landed.flaky,
   ...(landed.weight ? { weight: landed.weight } : {}),
 })
+type CommittedDeliveryDecision = {
+  phase: 'deliver'
+  id: string
+  conversationId: ConversationId
+  text: string
+  outcome: WorkspaceIndex['results'][string]
+  concluded: boolean
+  starter?: ConversationId
+}
+type ConcludedBranchRelease = { phase: 'release'; conversationId: ConversationId }
+
+type BranchReportHeldAsNote = ConversationId
+type UnderwayReportPhase = {
+  phase: 'report'
+  id: string
+  conversationId: BranchReportHeldAsNote
+  text: string
+  outcome: WorkspaceIndex['results'][string]
+}
+
 type State =
   | { phase: 'next' }
-  /** A rejected push integrates again once. */
   | { phase: 'land'; id: string; attempt: number; pushRetried?: boolean }
-  /** `pr` mode: ask GitHub about the open pull requests of this source; sleep when none ended. */
   | { phase: 'poll' }
-  | {
-      phase: 'report'
-      id: string
-      conversationId: ConversationId
-      text: string
-      outcome: WorkspaceIndex['results'][string]
-    }
-  /** The landing's decision, made once: tell `starter` (waking it only when the branch `concluded`), then release it. */
-  | {
-      phase: 'deliver'
-      id: string
-      conversationId: ConversationId
-      text: string
-      outcome: WorkspaceIndex['results'][string]
-      concluded: boolean
-      starter?: ConversationId
-    }
-  /** A landed branch concluded in the report's last commit: free its checkout. */
-  | { phase: 'release'; conversationId: ConversationId }
+  | UnderwayReportPhase
+  | CommittedDeliveryDecision
+  | ConcludedBranchRelease
 
 export function createLander(
   host: Host,
   Workspaces: ConversationDocToken<WorkspaceIndex>,
-  /** Serializes source checkout writes with synchronous landing. */
-  serial: <T>(source: string, operation: () => Promise<T>) => Promise<T>,
-  /** What a landing needs from the rest of Ultimate: who started a branch, whether it has work under way, conclude, release. */
+  serializeSourceWrites: <T>(source: string, operation: () => Promise<T>) => Promise<T>,
   after: {
     starter: (id: ConversationId, context: Context) => Promise<ConversationId | undefined>
     working: (tx: Tx, id: ConversationId) => Promise<boolean>
     conclude: (tx: Tx, id: ConversationId) => Promise<void>
     release: (id: ConversationId, context: Context) => Promise<unknown>
   },
-  limits: CheckLimits = checkLimits,
+  limits: CheckLimits = defaultCheckLimitsSeconds,
 ) {
-  async function checkout(source: string, tip: string) {
+  async function resetTrackedIntegration(source: string, tip: string) {
     const path = await landerCheckout(host.home, source, await host.projectSettings(), tip)
-    // Every attempt starts from a clean checkout at the target tip; ignored files such as installs stay.
     await git(path, 'reset', '--hard', '-q')
     await git(path, 'checkout', '-q', '--detach', '--force', tip)
     await git(path, 'clean', '-fdq')
     return path
   }
 
-  /** Record the outcome of `entry`, log it and report it to the submitter, in one commit. */
-  function finisher(runtime: Runtime, context: Context, entry: QueueEntry) {
+  function landingOutcomeCommitter(runtime: Runtime, context: Context, entry: QueueEntry) {
     const id = entry.id
-    const finish = (text: string, outcome: LanderOutcome) =>
+    const commitLandingOutcome = (text: string, outcome: LanderOutcome) =>
       runtime.commit(async (tx) => {
         const draft = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
         const steps = draft.queue.find((item) => item.id === id)!.steps
@@ -412,7 +373,8 @@ export function createLander(
           conversationId: entry.conversationId,
           ...(entry.subject ? { subject: entry.subject } : {}),
         }
-        for (const old of Object.keys(draft.results).slice(0, -kept)) delete draft.results[old]
+        for (const old of Object.keys(draft.results).slice(0, -recentSubmitCardOutcomeLimit))
+          delete draft.results[old]
         await log(tx, runtime.conversationId, entry, outcome)
         if (outcome.outcome === 'failed')
           await host.emit(tx, SubmissionFailed, {
@@ -457,7 +419,7 @@ export function createLander(
           },
         }
       }, context)
-    return finish
+    return commitLandingOutcome
   }
 
   const Lander = defineTask<{ source: string }, State, null>({
@@ -485,16 +447,10 @@ export function createLander(
         const { signal } = runtime
         const index = (await runtime.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!
         const entry = index.queue.find((item) => item.id === id)!
-        /** What this submission's fast-forward landed, if it happened yet. */
-        const recorded = async () =>
+        const recordedFirstFastForward = async () =>
           (await runtime.snapshot(Workspaces, ROOT_CONVERSATION_ID, context))!.queue.find(
             (item) => item.id === id,
           )?.landed
-        /**
-         * Log a step; a check's `output` tail goes to the lander log only, not the submission's steps. A run check's
-         * step also emits `workspaces.check`, with `ran` its duration and whether a watchdog stopped it. A step that
-         * starts a check names its command in `runs`.
-         */
         const step = (
           text: string,
           {
@@ -528,7 +484,7 @@ export function createLander(
                 ms: Math.round(ran.ms),
               })
           }, context)
-        const finish = finisher(runtime, context, entry)
+        const commitLandingOutcome = landingOutcomeCommitter(runtime, context, entry)
         const summary = (landed: Landed, sha: string, how = '') =>
           [
             landed.commits.length
@@ -537,12 +493,8 @@ export function createLander(
             ...(landed.commits.length ? [`Commits:\n${landed.commits.join('\n')}`] : []),
             ...landed.flaky.map((command) => `Flaky: ${command}`),
           ].join('\n')
-        /**
-         * Report `reason`, with `output` (conflicting paths, a check's output tail) and what to do next.
-         * Once the submission landed locally, a later failure only means its push failed.
-         */
         const fail = async (reason: string, output?: string, hint?: string) => {
-          const landed = await recorded()
+          const landed = await recordedFirstFastForward()
           const detail = [output ? `${reason}:\n${output}` : reason, ...(hint ? [hint] : [])].join(
             '\n',
           )
@@ -551,10 +503,13 @@ export function createLander(
             ...(output ? { output } : {}),
             ...(hint ? { hint } : {}),
           }
-          if (!landed) return finish(`was not landed: ${detail}`, { outcome: 'failed', ...facts })
-          // Landed locally: the running clone changed, whatever became of the push.
-          const needsRestart = await restartFor(landed)
-          return finish(
+          if (!landed)
+            return commitLandingOutcome(`was not landed: ${detail}`, {
+              outcome: 'failed',
+              ...facts,
+            })
+          const needsRestart = await clonedCoreChanged(landed)
+          return commitLandingOutcome(
             `${summary(landed, landed.sha, ' locally')}\nPush failed: ${detail}${needsRestart ? '\nNeeds restart.' : ''}`,
             { ...landedOutcome(landed), ...facts, ...(needsRestart ? { needsRestart } : {}) },
           )
@@ -573,18 +528,22 @@ export function createLander(
             context,
           )
         const { source, target } = entry
-        /** Whether `landed` changed the core of the clone this host runs from. */
-        const restartFor = async (landed: Landed) =>
+        const clonedCoreChanged = async (landed: Landed) =>
           (await realpath(source)) === (await realpath(host.ultimateRoot)) &&
           restartNeeded(landed.paths)
         const checkContext = withAbortSignal(signal, context)
-        /** Push `sha` when configured; on a rejection retry the integration once, then report it. */
-        const push = async (settings: Settings, sha: string) => {
+        const push = async (settings: Settings, checkedCommit: string) => {
           if (!settings.push) return { text: 'Not pushed.' }
           await step(`pushing to ${settings.push}`)
           try {
-            // Push the checked commit, not whatever the branch points to by now.
-            await remote(source, signal, 'push', '-q', settings.push, `${sha}:refs/heads/${target}`)
+            await remote(
+              source,
+              signal,
+              'push',
+              '-q',
+              settings.push,
+              `${checkedCommit}:refs/heads/${target}`,
+            )
             return {
               remote: `${settings.push}/${target}`,
               text: `Pushed to ${settings.push}/${target}.`,
@@ -595,12 +554,11 @@ export function createLander(
             return { retry: fail(`${settings.push} rejected the push`, failure(error)) }
           }
         }
-        /** Push what landed and report it: commits, flaky checks, push, restart hint. */
         const landedReport = async (settings: Settings, landed: Landed, sha: string) => {
           const pushed = await push(settings, sha)
           if (pushed.retry) return pushed.retry
-          const needsRestart = await restartFor(landed)
-          return finish(
+          const needsRestart = await clonedCoreChanged(landed)
+          return commitLandingOutcome(
             [summary(landed, sha), pushed.text, ...(needsRestart ? ['Needs restart.'] : [])].join(
               '\n',
             ),
@@ -728,33 +686,31 @@ export function createLander(
         }
         try {
           const settings = await landerSettings(host)
-          // An earlier lander task fast-forwarded this submission and then ended (a reload or fault before its push):
-          // nothing to merge or check again, push exactly what landed and report that landing.
+          const landingFromEarlierTask = entry.landed
           if (
-            entry.landed &&
+            landingFromEarlierTask &&
             attempt === 1 &&
             !pushRetried &&
-            (await contains(source, entry.landed.sha, `refs/heads/${target}`))
+            (await contains(source, landingFromEarlierTask.sha, `refs/heads/${target}`))
           )
-            return await landedReport(settings, entry.landed, entry.landed.sha)
-          // A crash after the checks keeps the integrated commit: go straight to fast-forwarding it.
-          let prepared = await runtime.memo<Prepared>(`prepared:${id}:${attempt}`, context)
-          if (!prepared) {
-            // A crash after the merges resumes on the same merged commit instead of merging again.
-            let merged = await runtime.memo<{ base: string; sha: string }>(
+            return await landedReport(settings, landingFromEarlierTask, landingFromEarlierTask.sha)
+          let checkedIntegration = await runtime.memo<CheckedIntegration>(
+            `prepared:${id}:${attempt}`,
+            context,
+          )
+          if (!checkedIntegration) {
+            let mergedBeforeChecks = await runtime.memo<{ base: string; sha: string }>(
               `merged:${id}:${attempt}`,
               context,
             )
-            const path = await checkout(
+            const path = await resetTrackedIntegration(
               source,
-              merged?.sha ?? (await git(source, 'rev-parse', `refs/heads/${target}`)),
+              mergedBeforeChecks?.sha ?? (await git(source, 'rev-parse', `refs/heads/${target}`)),
             )
-            if (!merged) {
+            if (!mergedBeforeChecks) {
               await step('preparing')
-              // The target tip the integration started from: what a fast-forward expects to find.
-              const localTip = await git(path, 'rev-parse', 'HEAD')
-              /** Merge `commit` into the checkout; true when it conflicted and the submission failed. */
-              const merge = async (
+              const localTargetTipBeforeIntegration = await git(path, 'rev-parse', 'HEAD')
+              const mergeOrReportConflict = async (
                 commit: string,
                 message: string,
                 reason: string,
@@ -779,7 +735,7 @@ export function createLander(
                   if (!(await contains(path, fetched, 'HEAD'))) {
                     await step(`merging ${settings.push}/${target}`)
                     if (
-                      await merge(
+                      await mergeOrReportConflict(
                         fetched,
                         `Merge ${settings.push}/${target}`,
                         `${settings.push}/${target} conflicts with local ${target} in`,
@@ -802,23 +758,24 @@ export function createLander(
               }
               await step('merging')
               if (
-                await merge(
+                await mergeOrReportConflict(
                   entry.tip,
-                  // The trailer labels the landing in first-parent catch-up rows (lineage/catchup.ts).
                   `Merge ${entry.tip.slice(0, 7)} from #${entry.conversationId} into ${target}\n\nUltimate-Conversation: ${entry.conversationId}`,
                   `it conflicts with ${target} in`,
                   `Merge ${target} into your workspace, resolve, verify and submit again.`,
                 )
               )
                 return
-              merged = await runtime.memo(
+              mergedBeforeChecks = await runtime.memo(
                 `merged:${id}:${attempt}`,
-                { base: localTip, sha: await git(path, 'rev-parse', 'HEAD') },
+                {
+                  base: localTargetTipBeforeIntegration,
+                  sha: await git(path, 'rev-parse', 'HEAD'),
+                },
                 context,
               )
             }
-            const { base } = merged
-            // Setup prepares the merged revision, for example installs its lockfile.
+            const { base } = mergedBeforeChecks
             await step('setting up')
             await setup(source, path, await host.projectSettings(), signal)
             const flaky: string[] = []
@@ -834,30 +791,34 @@ export function createLander(
                   checkTemp(host.home),
                   limitsFor(members[member], limits),
                 )
-              /** One command: its first run, then one rerun when that failed; its output tail if it failed twice. */
-              const settle = async (command: string, member: number) => {
-                // Outcomes are durable (memos are first-writer-wins, so the rerun has its own key): a resume
-                // neither reruns a passed check nor grants another rerun, and keeps the flaky note.
-                const key = `check:${id}:${attempt}:${Array.isArray(group) ? `${position}.${member}` : position}`
-                let first = await runtime.memo<'passed' | 'failed'>(key, context)
-                if (!first) {
+              const runCheckWithOneDurableRerun = async (command: string, member: number) => {
+                const attemptMemoKey = `check:${id}:${attempt}:${Array.isArray(group) ? `${position}.${member}` : position}`
+                let memoizedFirstRun = await runtime.memo<'passed' | 'failed'>(
+                  attemptMemoKey,
+                  context,
+                )
+                if (!memoizedFirstRun) {
                   await step(`checking: ${command}`, { runs: command })
                   const began = performance.now()
                   const ran = await run(command, member)
-                  const result = ran.failure === undefined ? 'passed' : 'failed'
-                  // Logged before the memo: a crash in between reruns the check and logs it again, as it ran.
-                  // A failure keeps its output tail, so a check that passes on its rerun can still be diagnosed.
-                  await step(`checked: ${command}`, {
-                    result: { command, result, ...(ran.summary ? { summary: ran.summary } : {}) },
+                  const unmemoizedResult = ran.failure === undefined ? 'passed' : 'failed'
+                  const logAttemptBeforeMemo = step
+                  await logAttemptBeforeMemo(`checked: ${command}`, {
+                    result: {
+                      command,
+                      result: unmemoizedResult,
+                      ...(ran.summary ? { summary: ran.summary } : {}),
+                    },
                     output: ran.failure,
                     ran: { ms: performance.now() - began, timedOut: ran.timedOut },
                   })
-                  first = await runtime.memo(key, result, context)
+                  memoizedFirstRun = await runtime.memo(attemptMemoKey, unmemoizedResult, context)
                 }
-                if (first === 'passed') return {}
-                // The rerun's outcome is durable either way: a resume while the group's other commands still run
-                // neither grants a third run nor loses the failure.
-                let rerun = await runtime.memo<{ failure?: string }>(`${key}:rerun`, context)
+                if (memoizedFirstRun === 'passed') return {}
+                let rerun = await runtime.memo<{ failure?: string }>(
+                  `${attemptMemoKey}:rerun`,
+                  context,
+                )
                 if (!rerun) {
                   await step(`rerunning: ${command}`, { runs: command })
                   const began = performance.now()
@@ -882,16 +843,17 @@ export function createLander(
                       })
                     }, context)
                   rerun = await runtime.memo<{ failure?: string }>(
-                    `${key}:rerun`,
+                    `${attemptMemoKey}:rerun`,
                     ran.failure === undefined ? {} : { failure: ran.failure },
                     context,
                   )
                 }
                 return rerun.failure === undefined ? { flaky: true } : { failure: rerun.failure }
               }
-              // Every command settles before a failure hands over, so none still runs in the checkout.
-              const outcomes = await Promise.allSettled(commands.map(settle))
-              const results = outcomes.map((outcome) => {
+              const settledCheckGroup = await Promise.allSettled(
+                commands.map(runCheckWithOneDurableRerun),
+              )
+              const results = settledCheckGroup.map((outcome) => {
                 if (outcome.status === 'rejected') throw outcome.reason
                 return outcome.value
               })
@@ -904,39 +866,40 @@ export function createLander(
                 )
               flaky.push(...commands.filter((_command, member) => results[member].flaky))
             }
-            // Only the commit every check ran on lands: nothing may have moved or touched the checkout meanwhile.
-            if (
-              (await git(path, 'rev-parse', 'HEAD')) !== merged.sha ||
+            const checkedTreeChanged =
+              (await git(path, 'rev-parse', 'HEAD')) !== mergedBeforeChecks.sha ||
               (await git(path, 'status', '--porcelain'))
-            )
+            if (checkedTreeChanged)
               return await fail(
                 'the integration checkout changed during checks',
                 `${await git(path, 'log', '--oneline', '-3')}\n${await git(path, 'status', '--short')}`.trim(),
                 'Submit again.',
               )
-            prepared = await runtime.memo<Prepared>(
+            checkedIntegration = await runtime.memo<CheckedIntegration>(
               `prepared:${id}:${attempt}`,
-              { base, integrated: merged.sha, flaky },
+              { base, integrated: mergedBeforeChecks.sha, flaky },
               context,
             )
           }
-          const { base, integrated, flaky } = prepared
+          const { base, integrated, flaky } = checkedIntegration
           if (settings.pr) return await openPullRequest(settings.pr, integrated)
           await step('fast-forwarding')
           let refused: string | undefined
-          const moved = await serial(source, async () => {
+          const moved = await serializeSourceWrites(source, async () => {
             const current = await git(source, 'rev-parse', `refs/heads/${target}`)
-            // A replay after the fast-forward finds exactly the integrated commit; anything else moved.
-            if (current === integrated) return false
+            const replayAfterFastForward = current === integrated
+            if (replayAfterFastForward) return false
             if (current !== base) return true
             try {
-              // Fast-forward the checkout that has the target checked out, so its files follow the branch.
-              const worktree = (await git(source, 'worktree', 'list', '--porcelain'))
+              const checkoutHoldingTargetBranch = (
+                await git(source, 'worktree', 'list', '--porcelain')
+              )
                 .split('\n\n')
                 .map((record) => record.split('\n'))
                 .find((record) => record.includes(`branch refs/heads/${target}`))?.[0]
                 .slice('worktree '.length)
-              if (worktree) await git(worktree, 'merge', '-q', '--ff-only', integrated)
+              if (checkoutHoldingTargetBranch)
+                await git(checkoutHoldingTargetBranch, 'merge', '-q', '--ff-only', integrated)
               else await git(source, 'update-ref', `refs/heads/${target}`, integrated, base)
             } catch (error) {
               refused = failure(error)
@@ -949,27 +912,23 @@ export function createLander(
               refused,
             )
           if (moved) {
-            if (attempt < attempts) return retry()
-            return fail(`${target} kept moving during ${attempts} attempts.`)
+            if (attempt < maxTargetMoveAttempts) return retry()
+            return fail(`${target} kept moving during ${maxTargetMoveAttempts} attempts.`)
           }
-          // The first fast-forward decides what the submission landed, durably on its queue entry with the target's
-          // new tip, so any later lander task reports that landing; a push retry integrates again from there.
           const weight = await landingWeight(source, base, integrated)
-          const candidate: Landed = {
+          const firstFastForwardCandidate: Landed = {
             sha: integrated,
             base,
             commits: lines(await git(source, 'log', '--oneline', `${base}..${integrated}`)),
             paths: lines(await git(source, 'diff', '--name-only', base, integrated)),
             flaky,
-            // Left out, not undefined: documents refuse undefined values.
             ...(weight ? { weight } : {}),
           }
-          let landed = candidate
+          let landed = firstFastForwardCandidate
           await runtime.commit(async (tx) => {
             const draft = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
             const saved = draft.queue.find((item) => item.id === id)!
-            saved.landed ??= candidate
-            // A copy: the draft is gone once the commit settles.
+            saved.landed ??= firstFastForwardCandidate
             landed = copyJson(saved.landed) as Landed
             draft.items[String(entry.conversationId)].landed = integrated
           }, context)
@@ -979,10 +938,6 @@ export function createLander(
           return fail('it failed', failure(error))
         }
       },
-      /**
-       * Ask GitHub about each open pull request of this source. One that ended is finished like a landing (the
-       * report phase follows and returns to `next`); with none ended, sleep and ask again.
-       */
       poll: async (task, runtime, context) => {
         const { source } = task.input
         const { signal } = runtime
@@ -1001,8 +956,6 @@ export function createLander(
         const prRemote = (await landerSettings(host)).pr?.remote
         if (!prRemote)
           return runtime.commit(async (tx) => {
-            // The setting vanished while pull requests wait: nothing can be polled or completed, so say so loudly
-            // and keep waiting; restoring it resumes the polls with the next sleep.
             const draft = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
             for (const item of draft.queue.filter(
               (entry) => entry.source === source && entry.state === 'pr',
@@ -1011,10 +964,9 @@ export function createLander(
                 output: 'lander.pr is no longer set; its pull requests are not being polled',
               })
             host.notice('lander.pr is no longer set; open pull requests are not being polled')
-            // Sleep, not `next`: the queue holds only these entries, and next would return here at once.
             return {
               status: 'sleeping',
-              until: runtime.now() + pollInterval,
+              until: runtime.now() + pullRequestPollIntervalMs,
               checkpoint: { phase: 'next' },
             }
           }, context)
@@ -1031,23 +983,29 @@ export function createLander(
             states[item.id] = view.state
           } catch (error) {
             if (signal.aborted) throw error
-            // A failed lookup waits for the next poll; the PR stays open in the queue meanwhile.
             host.notice(`Polling PR #${item.pr!.number} failed: ${String(error)}`)
           }
         const decided = decidePolls(open, states)
         const ended = decided.merged[0] ?? decided.closed[0]
         if (ended === undefined)
-          return runtime.sleepUntil(runtime.now() + pollInterval, { phase: 'next' }, context)
+          return runtime.sleepUntil(
+            runtime.now() + pullRequestPollIntervalMs,
+            { phase: 'next' },
+            context,
+          )
         const entry = open.find((item) => item.id === ended)!
-        const finish = finisher(runtime, context, entry)
+        const commitLandingOutcome = landingOutcomeCommitter(runtime, context, entry)
         const pr = entry.pr!
         if (decided.closed[0] === ended)
-          return finish(`was not landed: PR #${pr.number} was closed without merging`, {
-            outcome: 'failed',
-            pr,
-            reason: `PR #${pr.number} was closed without merging`,
-            hint: 'Rework the branch and submit again to open a new pull request.',
-          })
+          return commitLandingOutcome(
+            `was not landed: PR #${pr.number} was closed without merging`,
+            {
+              outcome: 'failed',
+              pr,
+              reason: `PR #${pr.number} was closed without merging`,
+              hint: 'Rework the branch and submit again to open a new pull request.',
+            },
+          )
         const settings = await landerSettings(host)
         const { remote: name, base: branch } = settings.pr!
         const target = entry.target
@@ -1062,14 +1020,16 @@ export function createLander(
           )
         } catch (error) {
           if (signal.aborted) throw error
-          // A transient network failure must not fault the lander and stop polling: try again after the sleep.
           host.notice(
             `Fetching ${name}/${branch} for merged PR #${pr.number} failed: ${String(error)}`,
           )
-          return runtime.sleepUntil(runtime.now() + pollInterval, { phase: 'next' }, context)
+          return runtime.sleepUntil(
+            runtime.now() + pullRequestPollIntervalMs,
+            { phase: 'next' },
+            context,
+          )
         }
         const fetched = await git(source, 'rev-parse', `refs/remotes/${name}/${branch}`)
-        // Decided once: after the fast-forward the local target no longer shows where it started.
         const start = await runtime.memo<{ tip: string; base: string }>(
           `pr-merged:${entry.id}`,
           context,
@@ -1082,14 +1042,13 @@ export function createLander(
               tip: fetched,
               base:
                 (await git(source, 'merge-base', `refs/heads/${target}`, fetched).catch(
-                  // No common ancestor: the target's own tip is the best "from" there is.
                   () => '',
                 )) || (await git(source, 'rev-parse', `refs/heads/${target}`)),
             },
             context,
           ))
         let hint: string | undefined
-        await serial(source, async () => {
+        await serializeSourceWrites(source, async () => {
           const current = await git(source, 'rev-parse', `refs/heads/${target}`)
           if (current === mergeAt.tip) return
           if (!(await contains(source, current, mergeAt.tip))) {
@@ -1115,7 +1074,7 @@ export function createLander(
         const weight = await landingWeight(source, mergeAt.base, mergeAt.tip)
         const needsRestart =
           (await realpath(source)) === (await realpath(host.ultimateRoot)) && restartNeeded(paths)
-        return finish(
+        return commitLandingOutcome(
           [
             `was merged as PR #${pr.number} (${mergeAt.tip.slice(0, 7)} on ${name}/${branch}).`,
             ...(commits.length ? [`Commits:\n${commits.join('\n')}`] : []),
@@ -1129,7 +1088,6 @@ export function createLander(
             commits,
             paths,
             flaky: [],
-            // Left out, not undefined: documents refuse undefined values.
             ...(weight ? { weight } : {}),
             pr,
             ...(hint ? { hint } : {}),
@@ -1137,15 +1095,10 @@ export function createLander(
           },
         )
       },
-      /**
-       * A failure wakes the submitter, which fixes it and submits again. A landing is the end of the branch's work: the
-       * submitter gets the card as a note, the branch is concluded unless work is still under way, and whoever started
-       * it wakes with the same card. Each write has its request id, so a resume never sends one twice.
-       */
       report: async (task, runtime, context) => {
         const { id, conversationId, text, outcome } = task.state.checkpoint
         const branch = conversationId
-        const entry = { kind: LanderReportEntry, data: { id, outcome } }
+        const entry = { kind: LanderReportEntry.kind, data: { id, outcome } }
         const next = { status: 'running', checkpoint: { phase: 'next' } } as const
         if (outcome.outcome === 'failed') {
           await (
@@ -1174,17 +1127,13 @@ export function createLander(
           context,
         )
         const starter = await after.starter(branch, context)
-        // Decided once, with the conversation's state, in the commit that leaves this phase: input admitted after it
-        // resumes the branch, and a replay delivers what was decided. While this phase lasts, the branch's own report
-        // waits as a note (messages counts this phase as under way); once decided, a branch left open reports when it stops.
         await runtime.commit(async (tx) => {
-          let concluded = false
+          let concludedInThisCommit = false
           if (!(await after.working(tx, branch)))
             try {
               await after.conclude(tx, branch)
-              concluded = true
+              concludedInThisCommit = true
             } catch (error) {
-              // Roots and standing agents refuse before any write; they stay open by design.
               host.notice(`Not concluding #${branch} after landing: ${String(error)}`)
             }
           return {
@@ -1195,23 +1144,28 @@ export function createLander(
               conversationId,
               text,
               outcome,
-              concluded,
+              concluded: concludedInThisCommit,
               ...(starter !== undefined && starter !== branch ? { starter } : {}),
             },
           }
         }, context)
       },
-      // The starter wakes once when the branch's work ends: here when the landing concluded it, else with the branch's
-      // own report when it stops, so the card goes as a note.
       deliver: async (task, runtime, context) => {
-        const { id, conversationId, text, outcome, concluded, starter } = task.state.checkpoint
-        const entry = { kind: LanderReportEntry, data: { id, outcome } }
-        const content = `${text}\nDiverged: ${outcome.divergence}\n${concluded ? `#${conversationId} is concluded.` : `#${conversationId} still has work under way; it reports when it stops.`}`
+        const {
+          id,
+          conversationId,
+          text,
+          outcome,
+          concluded: conclusionCommitted,
+          starter,
+        } = task.state.checkpoint
+        const entry = { kind: LanderReportEntry.kind, data: { id, outcome } }
+        const content = `${text}\nDiverged: ${outcome.divergence}\n${conclusionCommitted ? `#${conversationId} is concluded.` : `#${conversationId} still has work under way; it reports when it stops.`}`
         if (starter !== undefined)
           await (
             await host.harness().conversation(starter, context)
           )?.submit(
-            concluded
+            conclusionCommitted
               ? { type: 'input', content, entry, whenBusy: 'followUp', requestId: `lander:${id}` }
               : {
                   type: 'write',
@@ -1226,18 +1180,18 @@ export function createLander(
         await runtime.commit(
           () => ({
             status: 'running',
-            checkpoint: concluded ? { phase: 'release', conversationId } : { phase: 'next' },
+            checkpoint: conclusionCommitted
+              ? { phase: 'release', conversationId }
+              : { phase: 'next' },
           }),
           context,
         )
       },
-      // At least once, like the Conclude action's release: it frees only what a concluded, idle branch holds.
       release: async (task, runtime, context) => {
         await after
           .release(task.state.checkpoint.conversationId, context)
           .catch((error: unknown) => {
             context.abortSignal?.throwIfAborted()
-            // The landing stands; the next open's reconciliation frees the checkout instead.
             host.notice(
               `Releasing #${task.state.checkpoint.conversationId} failed: ${String(error)}`,
             )

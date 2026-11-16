@@ -1,4 +1,3 @@
-/** The Ultimate clone against origin: what it lacks, what that touches, and fetching it at most hourly. */
 import type { Git } from '../../lib/fast-forward.ts'
 import { fetchOrigin, standing } from '../../lib/fast-forward.ts'
 import { FETCH_EVERY, fetchedAt } from '../../lib/clone.ts'
@@ -8,10 +7,9 @@ import { corePath, packagePath } from '../../lib/layers.ts'
 import { conflictsPredicted } from '../../lib/merge.ts'
 import type { Layers, UpdateState } from './refs.ts'
 
-/** Which layers `files` (paths from the repository root) touch. */
-export function layersOf(files: string[]): Layers {
+export function layersOf(repositoryRelativePaths: string[]): Layers {
   const layers = { core: false, bin: false, lockfile: false, live: false }
-  for (const file of files)
+  for (const file of repositoryRelativePaths)
     if (corePath(file)) layers.core = true
     else if (file.startsWith('bin/')) layers.bin = true
     else if (packagePath(file)) layers.lockfile = true
@@ -19,23 +17,17 @@ export function layersOf(files: string[]): Layers {
   return layers
 }
 
-/**
- * Fetch origin when the last fetch is older than `FETCH_EVERY`, or always with `force` (Check now); the error of a
- * failed fetch, else undefined.
- */
 export async function fetchIfDue(git: Git, root: string, now: number, force = false) {
-  const last = await fetchedAt(git, root)
-  if (!force && last !== undefined && now - last < FETCH_EVERY) return undefined
+  const cloneFetchMtimeMs = await fetchedAt(git, root)
+  const cloneFetchStillFresh =
+    !force && cloneFetchMtimeMs !== undefined && now - cloneFetchMtimeMs < FETCH_EVERY
+  if (cloneFetchStillFresh) return undefined
   return fetchOrigin(git).then(
     () => undefined,
     (error: unknown) => (error instanceof Error ? error.message : String(error)),
   )
 }
 
-/**
- * The clone against `origin/<default branch>` as of the last fetch: commits behind, what they touch, whether a
- * diverged branch would conflict with a merge, and refusals.
- */
 export async function cloneState(
   git: Git,
   root: string,
@@ -91,7 +83,6 @@ export async function cloneState(
   }
 }
 
-/** What the summary model reads: the range's commit messages, never diffs, clipped. */
 export const SUMMARY_INPUT_CAP = 12_000
 
 export const SUMMARY_SYSTEM = `You summarize an update to Ultimate, a coding agent app, for its user.
@@ -99,7 +90,6 @@ You get the commit messages of the update, newest first. Answer with 2 to 4 line
 useful first, each under 90 characters, in plain language about what the user gets ("Review surface: comment on diff
 lines and send them to an agent"). Group small fixes into one line. No bullets, numbering, commit hashes or preamble.`
 
-/** The answer's lines, at most 4, without bullets or numbering. */
 export function summaryLines(text: string) {
   return text
     .split('\n')
@@ -108,24 +98,19 @@ export function summaryLines(text: string) {
     .slice(0, 4)
 }
 
-/**
- * The summary of `range` (`<head>..<remote head>`): the cached one when `file` holds it, else asked once with the
- * commit messages from `log` and cached; undefined when asking fails or answers nothing. Asked at most once per range
- * across every Ultimate on the clone, since `file` lives in the clone's git directory.
- */
 export async function summaryFor(
   file: string,
   range: string,
-  log: () => Promise<string>,
-  ask?: (input: string) => Promise<string | undefined>,
+  commitMessages: () => Promise<string>,
+  askWhenNotPolling?: (input: string) => Promise<string | undefined>,
 ): Promise<string[] | undefined> {
   const cached = await readJson<{ range?: string; lines?: string[] }>(file, {})
   if (cached.range === range) return cached.lines?.length ? cached.lines : undefined
-  // Without `ask` only the cache is read: a status poll never waits for a model.
-  if (!ask) return undefined
-  const text = await ask((await log()).slice(0, SUMMARY_INPUT_CAP)).catch(meansNone)
-  const lines = text === undefined ? [] : summaryLines(text)
-  // A failed or empty answer is cached too: the list stands in, and the range is not asked again.
-  await writeJson(file, { range, lines })
-  return lines.length ? lines : undefined
+  if (!askWhenNotPolling) return undefined
+  const text = await askWhenNotPolling((await commitMessages()).slice(0, SUMMARY_INPUT_CAP)).catch(
+    meansNone,
+  )
+  const attemptedSummaryLines = text === undefined ? [] : summaryLines(text)
+  await writeJson(file, { range, lines: attemptedSummaryLines })
+  return attemptedSummaryLines.length ? attemptedSummaryLines : undefined
 }
