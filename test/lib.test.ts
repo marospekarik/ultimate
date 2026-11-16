@@ -9,7 +9,7 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import { join } from 'node:path'
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 import { git, gitArgs, isolatable, noCommit, noRepository } from '../lib/git.ts'
 import { spawn } from '../lib/spawn.ts'
 import { readJson, updateJson, writeJson } from '../lib/json-file.ts'
@@ -181,18 +181,19 @@ it('fetches over ssh with no global ssh command, never running a repo-local one'
   await writeFile(global, '')
   await git(repo, 'remote', 'add', 'origin', 'git@example.com:owner/repo.git')
   await git(repo, 'config', 'core.sshCommand', `touch ${pwned}`)
-  process.env.GIT_CONFIG_GLOBAL = global
+  // A host GIT_SSH or GIT_SSH_COMMAND would run instead of the fake ssh on PATH.
+  vi.stubEnv('GIT_CONFIG_GLOBAL', global)
+  vi.stubEnv('GIT_SSH', undefined)
+  vi.stubEnv('GIT_SSH_COMMAND', undefined)
+  vi.stubEnv('PATH', `${bin}:${process.env.PATH}`)
   try {
-    const env: NodeJS.ProcessEnv = { ...process.env, PATH: `${bin}:${process.env.PATH}` }
-    delete env.GIT_SSH
-    delete env.GIT_SSH_COMMAND
-    await expect(git({ cwd: repo, env }, 'fetch', 'origin')).rejects.toThrow(
+    await expect(git(repo, 'fetch', 'origin')).rejects.toThrow(
       'Could not read from remote repository',
     )
     await access(reached)
     await expect(access(pwned)).rejects.toThrow('ENOENT')
   } finally {
-    delete process.env.GIT_CONFIG_GLOBAL
+    vi.unstubAllEnvs()
   }
 })
 
