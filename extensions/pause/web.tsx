@@ -537,7 +537,7 @@ function AutoPlayedNote({ entry }: { entry: EntryRecord }) {
           · {lasted(data.at - data.since)}{' '}
           {data.held && data.minutes === undefined
             ? `held by ${data.held.source}`
-            : data.checks
+            : data.checks !== undefined
               ? `after the rate limit · answered at check ${data.checks + 1}`
               : 'after the rate limit'}{' '}
           · {clock(data.at)}
