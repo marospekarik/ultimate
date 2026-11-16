@@ -1,12 +1,7 @@
-/** The lander's pull request mode (`lander.pr`): the gh seam and the poll's pure decision. */
 import { exec } from '../../lib/exec.ts'
 import { git } from '../../lib/git.ts'
 import { projectKey } from '../../lib/project-identity.ts'
 
-/**
- * Runs `gh` with `args` in `cwd`, for the repository behind git remote `remote`; resolves stdout. The lander's only way
- * to reach GitHub, provided as the resource `workspaces.gh` so tests stand in for it.
- */
 export type Gh = (
   cwd: string,
   remote: string,
@@ -14,10 +9,8 @@ export type Gh = (
   signal?: AbortSignal,
 ) => Promise<string>
 
-/** `gh pr view` states. */
 export type PrState = 'OPEN' | 'MERGED' | 'CLOSED'
 
-/** The real `gh`: a `pr` command gets `--repo` from the remote's GitHub URL (SSH host aliases included). */
 export const realGh: Gh = async (cwd, remote, args, signal) => {
   const command = `gh ${args.join(' ')}`
   const full = [...args]
@@ -25,7 +18,6 @@ export const realGh: Gh = async (cwd, remote, args, signal) => {
     const repo = projectKey(await git(cwd, 'remote', 'get-url', remote))
     if (!repo)
       throw new Error(`Cannot run \`${command}\`: git remote ${remote} is not a GitHub repository`)
-    // projectKey is lowercased and prefixed with the host, which `--repo` accepts as HOST/OWNER/REPO.
     full.push('--repo', repo)
   }
   try {
@@ -49,7 +41,6 @@ export const realGh: Gh = async (cwd, remote, args, signal) => {
   }
 }
 
-/** Which of the open pull requests `entries` merged, closed or still wait; a state not known (a failed lookup) waits. */
 export function decidePolls(
   entries: readonly { id: string }[],
   states: Readonly<Record<string, PrState | undefined>>,
@@ -64,7 +55,6 @@ export function decidePolls(
   return result
 }
 
-/** The `lander.pr` setting: where the conversation's branch goes and which branch the pull request targets. */
 export function parsePr(value: unknown): { remote: string; base: string } | undefined {
   if (value === undefined) return undefined
   const { remote, base } = (value && typeof value === 'object' ? value : {}) as Record<

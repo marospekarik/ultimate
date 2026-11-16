@@ -118,8 +118,6 @@ export async function send(
     ? `user (settled for them by ${settler}, from what they said in its chat)`
     : await senderName(host, from, ctx)
   const toLabel = await senderName(host, to, ctx)
-  // The asker of a question to the user, or of the one the user's answer settles. @ultimate and fronts keep their own
-  // questions; a branch's also show as pointers where its starter is when that is a front, else in @ultimate.
   const asker =
     to === 'user' && input.reply !== false
       ? from

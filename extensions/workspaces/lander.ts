@@ -118,7 +118,6 @@ type ConcurrentCheckGroup = Check[]
 type Settings = {
   checks: (Check | ConcurrentCheckGroup)[]
   push?: string
-  /** Pull request mode: push the conversation's branch to `remote` and open a PR against its `base`. */
   pr?: { remote: string; base: string }
 }
 const pullRequestPollIntervalMs = 5 * 60 * 1000
@@ -431,7 +430,6 @@ export function createLander(
         runtime.commit(async (tx) => {
           const index = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
           const own = index.queue.filter((item) => item.source === task.input.source)
-          // Open pull requests wait in the queue; they are polled once nothing else needs landing.
           const entry = own.find((item) => item.state !== 'pr')
           if (!entry) {
             if (own.length) return { status: 'running', checkpoint: { phase: 'poll' } }
@@ -569,22 +567,15 @@ export function createLander(
             },
           )
         }
-        /**
-         * Push the conversation's own branch and open (or reuse) its pull request; the entry stays queued in state
-         * `pr` until the poll sees the PR merge or close.
-         */
         const openPullRequest = async (pr: NonNullable<Settings['pr']>, sha: string) => {
           const gh = host.resource<Gh>('workspaces.gh', () => realGh)
           const branch = index.items[String(entry.conversationId)].branch
-          // The poll fast-forwards the local target from the PR's base; a base of another branch would move it
-          // somewhere unrelated, so the submission refuses instead of landing a lie.
           if (pr.base !== entry.target)
             return fail(
               `lander.pr.base (${pr.base}) is not the branch this project lands into (${entry.target})`,
               undefined,
               `Set lander.pr.base to "${entry.target}" or retarget the project, then submit again.`,
             )
-          // Before pushing anything: a missing or logged-out gh would leave a pushed branch without its PR.
           try {
             await gh(source, pr.remote, ['auth', 'status'], signal)
           } catch (error) {
@@ -600,8 +591,6 @@ export function createLander(
             await remote(source, signal, 'push', '-q', pr.remote, `${sha}:refs/heads/${branch}`)
           } catch (error) {
             if (signal.aborted) throw error
-            // Only a resubmit with rewritten history is rejected: this branch belongs to this conversation alone, so it
-            // may be replaced, and only where it still is what we saw.
             const current = (
               await remote(source, signal, 'ls-remote', pr.remote, `refs/heads/${branch}`)
             ).split(/\s/)[0]
@@ -668,7 +657,6 @@ export function createLander(
           const opened = { number: found.number, url: found.url, head: branch }
           await runtime.commit(async (tx) => {
             const draft = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
-            // A resubmit of the same branch updated the pull request the older entry waited on.
             for (const old of draft.queue.filter(
               (item) =>
                 item.id !== id &&
@@ -747,7 +735,6 @@ export function createLander(
                 }
               }
               if (settings.pr) {
-                // The PR merges into the remote base: prove the submission against that, not local main.
                 const { remote: name, base: branch } = settings.pr
                 if (await remote(path, signal, 'ls-remote', name, `refs/heads/${branch}`)) {
                   await step(`fetching ${name}/${branch}`)

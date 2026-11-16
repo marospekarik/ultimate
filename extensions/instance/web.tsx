@@ -267,7 +267,6 @@ function PreviewLink({
 }
 
 const port = (url: string) => `:${new URL(url).port}`
-/** What a preview is called: the label the user started it with, else the conversation that started it. */
 const name = (preview: Preview) => preview.label ?? `#${preview.conversationId}`
 
 function Switcher() {

@@ -293,7 +293,6 @@ export default function watchdog(host: ExtensionHost) {
         cursor = page.next
       } while (cursor)
     }
-    // A branch has no owner: its failure goes to the conversation that started it, @ultimate or a front.
     const starter = await host.want(Branches)?.starter(task.conversationId, context)
     await host.harness().commit(async (tx) => {
       const receipts = await tx.doc(Receipts, ROOT_CONVERSATION_ID)
@@ -318,7 +317,6 @@ export default function watchdog(host: ExtensionHost) {
         return
       const child = (await tx.conversation(task.conversationId))!
       const ultimate = (await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate
-      // A starter deleted since, or none, leaves the report with @ultimate.
       const started =
         starter !== undefined && starter !== child.id && (await tx.conversation(starter))
           ? starter

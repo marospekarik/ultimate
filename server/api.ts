@@ -494,7 +494,6 @@ export async function createApi(
           json(200, await listModels(host.modelRuntime))
           return true
         }
-        // How many pages are open: the host that started this server as a preview stops it after an idle hour.
         if (request.method === 'GET' && url.pathname === '/api/pages') {
           json(200, { pages: connections.size })
           return true

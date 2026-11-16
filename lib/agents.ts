@@ -314,7 +314,6 @@ function parseSettings(frontmatter: Record<string, unknown>): Partial<
   }
 }
 
-/** A front is a person's standing agent: one conversation, so only a resident definition can be one. */
 const FRONT_RESIDENT = 'front needs resident: true'
 
 const isTools = (tools: unknown): tools is string[] =>

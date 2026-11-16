@@ -203,10 +203,8 @@ interface Instance {
   pid: number
   temporary: boolean
   conversationId?: ConversationId
-  /** A preview the user started (`start` action): its name and the commit it runs. */
   label?: string
   ref?: string
-  /** Cancels the idle check of a preview the user started. */
   idle?: Cancel
   child: GroupProcess
   group: Group
@@ -312,7 +310,6 @@ async function tailnet(host: Pick<ExtensionHost, 'want' | 'userHome'>) {
   )
 }
 
-/** Only the user starts and stops previews of a commit; agents preview their own workspace with the tool. */
 export const userActions = ['start', 'stop']
 
 export const actions: Record<string, ExtensionAction> = {
@@ -331,10 +328,6 @@ export const actions: Record<string, ExtensionAction> = {
         .map((item) => ({ ...item, running: false })),
     ]
   }),
-  /**
-   * Preview a commit of this project for the user. It runs on even when the page that asked leaves, and stops after an
-   * hour with no page open.
-   */
   start: implementAction(StartAction, async (args, { host }) => {
     const ref = stringArg(args, 'ref', 200)
     const label = stringArg(args, 'label', 80)
@@ -362,10 +355,8 @@ function stringArg(args: unknown, name: string, max: number) {
   return trimmed
 }
 
-/** How long a preview the user started may run with no page open, and how often that is checked. */
 export const idle = { limit: 60 * 60_000, every: 60_000 }
 
-/** Pages open on a preview; one that exited, does not answer in time or predates `/api/pages` counts as none. */
 async function pages(item: Instance) {
   if (!live(item)) return 0
   try {
@@ -374,18 +365,15 @@ async function pages(item: Instance) {
     })
     return response.ok ? ((await response.json()) as { pages: number }).pages : 0
   } catch {
-    // Busy or gone: idle for this check. Only an hour of such checks stops it.
     return 0
   }
 }
 
-/** Stop a preview the user started once it ran an hour with no page open, or as soon as it exited by itself. */
 function watchIdle(
   host: Pick<ExtensionHost, 'resource' | 'onClose' | 'home' | 'notice'>,
   item: Instance,
 ) {
   let seen = Date.now()
-  // Stopping cancels the check; a failed stop is tried again at the next one.
   item.idle = every(
     idle.every,
     () => {
@@ -397,7 +385,6 @@ function watchIdle(
           remember(host, item)
         })
         .catch((error: unknown) => {
-          // Already stopped by the user's `stop` or by shutdown: nothing failed.
           if (!running(host).has(item.id)) return
           host.notice(`Stopping idle preview ${item.label} failed: ${String(error)}`)
         })
@@ -461,10 +448,6 @@ async function previewGit(project: string, home: string) {
   return { common: await realpath(common), branch, config }
 }
 
-/**
- * The workspace a preview of conversation `id` serves: its own, else the nearest owner's (a subagent without an isolate
- * works in its parent's worktree, at any depth); undefined means the host checkout.
- */
 export async function previewWorkspace(
   host: Pick<ExtensionHost, 'harness'>,
   workspaces: Pick<WorkspaceService, 'get'>,

@@ -795,9 +795,6 @@ export function workspaces(host: Host) {
     const { sleeping, ...submitted } = result
     if (sleeping !== undefined) {
       await host.harness().abortTask(sleeping, context)
-      // The mark alone leaves the sleeping task live, so a restart would see a busy lander: wait for its abort
-      // handler to end it (the mark makes the sleeping task runnable at once), then start the replacement that lands
-      // this submission and goes on polling the pull requests the aborted task left queued.
       await host.harness().waitForTask(sleeping, context)
       await resume(context)
     }

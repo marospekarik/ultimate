@@ -7,23 +7,15 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 export const reloadOnSettings = true
 
 export interface CfAccessSettings {
-  /** The Zero Trust team name: `<team>.cloudflareaccess.com`. */
   team: string
-  /** The Access application's AUD tag. */
   aud: string
-  /** The public origin Cloudflare serves, such as `https://ultimate.example.com`. */
   origin: string
-  /** Email addresses admitted, compared case-insensitively. */
   allow: string[]
 }
 type Jwk = { kid?: string; kty?: string; n?: string; e?: string }
 
 const decode = (part: string) => JSON.parse(Buffer.from(part, 'base64url').toString('utf8'))
 
-/**
- * The email of a valid Cloudflare Access token, else undefined: RS256 signature by one of `keys`, issuer, audience
- * and expiry as configured, and an email on the allowlist. The header is never trusted for the algorithm.
- */
 export function verifyToken(
   token: string,
   keys: Jwk[],
@@ -58,7 +50,6 @@ export default function cfAccess(host: ExtensionHost) {
   let keys: Jwk[] = []
   let fetchedAt = 0
   async function refresh(team: string) {
-    // At most one fetch a minute, so a stream of unknown key ids cannot turn this into a request flood.
     if (Date.now() - fetchedAt < 60_000) return
     fetchedAt = Date.now()
     const response = await fetch(`https://${team}.cloudflareaccess.com/cdn-cgi/access/certs`)
@@ -88,7 +79,6 @@ export default function cfAccess(host: ExtensionHost) {
         const token = headers['cf-access-jwt-assertion']
         if (typeof token !== 'string') return undefined
         const kid = decode(token.split('.')[0] ?? '')?.kid
-        // Known keys are re-read every ten minutes too, so a key Cloudflare withdraws stops being trusted.
         if (!keys.some((key) => key.kid === kid) || Date.now() - fetchedAt > 600_000)
           await refresh(config.team)
         const login = verifyToken(token, keys, config)

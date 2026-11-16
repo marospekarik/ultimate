@@ -214,14 +214,11 @@ function Popup({
   )
 }
 
-/** The status-line item: quiet while in sync, `↓N` / `↑N` otherwise. */
 function Sync() {
-  const { data: state, refetch } = useAction(
-    StateAction,
-    null,
-    // A failed poll keeps the last state; the next one tries again.
-    { onError: keepLast, every: 60_000 },
-  )
+  const { data: state, refetch } = useAction(StateAction, null, {
+    onError: keepLast,
+    every: 60_000,
+  })
   const [busy, setBusy] = useState<string>()
   const [checking, setChecking] = useState(false)
   const [message, setMessage] = useState<Message>()
@@ -237,7 +234,6 @@ function Sync() {
     api
       .action(CheckAction)
       .catch(fail)
-      // The check leaves its answer as the server's state.
       .finally(() => void refetch().finally(() => setChecking(false)))
   }
   const act = (name: 'pull' | 'push' | 'pr' | 'merge') => {
@@ -284,7 +280,6 @@ function Sync() {
       .catch(fail)
       .finally(() => {
         setBusy(undefined)
-        // oxlint-disable-next-line typescript/no-floating-promises -- useAction reports failures and resolves undefined rather than rejecting.
         void refetch()
       })
   }

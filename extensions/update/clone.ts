@@ -51,7 +51,6 @@ export async function cloneState(
   const head = await git('rev-parse', 'HEAD')
   const at = await fetchedAt(git, root)
   const state = await standing(git)
-  // Predicted for a diverged clone only: a status poll never runs merge-tree for a plain fast-forward.
   const predicted = state.diverged ? await conflictsPredicted(root, state.remote) : undefined
   const result = {
     head,

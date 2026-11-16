@@ -282,7 +282,6 @@ function FlowView({
   useEffect(() => {
     if (status !== 'complete') return
     void refreshModels()
-    // Whoever gates on a credential re-checks its status now instead of on a remount, voice's mic included.
     events.emit('auth:changed', undefined)
   }, [status])
   return (

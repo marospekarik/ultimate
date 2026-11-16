@@ -5,11 +5,6 @@ import { proxied } from './request-security.ts'
 const compressible =
   /^(text\/(?!event-stream)|application\/(javascript|json|manifest\+json)|image\/svg\+xml)/
 
-/**
- * Compress the response of a remote client (one that came through Tailscale Serve or from a non-loopback address) with
- * Brotli or gzip. Unbundled dev modules and the models list are large plain text, and a phone link pays for every
- * byte. Loopback clients, event streams, other types, small bodies and non-200 answers (304) are left alone.
- */
 export function compress(request: IncomingMessage, response: ServerResponse) {
   const local =
     !proxied(request.headers) &&
@@ -24,7 +19,6 @@ export function compress(request: IncomingMessage, response: ServerResponse) {
   }
   let stream: ReturnType<typeof createGzip> | undefined
   response.writeHead = (status: number, ...rest: unknown[]) => {
-    // Move the headers passed here onto the response, so one case-insensitive store holds them all.
     const headers = rest.find((value) => typeof value === 'object') as
       | OutgoingHttpHeaders
       | undefined
@@ -36,7 +30,6 @@ export function compress(request: IncomingMessage, response: ServerResponse) {
       !response.hasHeader('content-encoding') &&
       Number(response.getHeader('content-length') ?? Infinity) > 1024
     ) {
-      // The weak ETag Vite sends stays: it names the resource, and revalidation needs it.
       response.removeHeader('content-length')
       response.setHeader('content-encoding', encoding)
       response.appendHeader('vary', 'Accept-Encoding')
@@ -53,7 +46,6 @@ export function compress(request: IncomingMessage, response: ServerResponse) {
     }
     return raw.writeHead(status, ...rest.filter((value) => typeof value === 'string'))
   }
-  // Node sends headers implicitly on the first write or end; do it now, through the override above.
   const open = () => {
     if (!response.headersSent) response.writeHead(response.statusCode)
   }

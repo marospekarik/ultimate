@@ -1,4 +1,3 @@
-/** The project checkout against its branch's upstream: state, fetch, Pull, Push and Open PR. Host-free, so tests run it on real repositories. */
 import { exec } from '../../lib/exec.ts'
 import { fastForwardUpstream, Refusal, standingUpstream } from '../../lib/fast-forward.ts'
 import type { Git } from '../../lib/fast-forward.ts'
@@ -8,7 +7,6 @@ import { quoteMentions } from '../../lib/mentions.ts'
 import { githubRepo } from '../../lib/project-identity.ts'
 import type { PrResult, PullResult, PushResult, SyncState } from './refs.ts'
 
-/** Runs a program: `exec` in production, a stub in tests. */
 export type Run = (
   file: string,
   args: string[],
@@ -16,24 +14,16 @@ export type Run = (
 ) => Promise<{ stdout: string }>
 
 export type Context = {
-  /** Branches that never get a manual push: `sync.protected`, origin's default branch and the lander's target when it pushes. */
   protectedBranches: string[]
-  /** Origin's default branch: the base of a pull request opened from a branch of its own. */
   defaultBranch?: string
 }
 
-/** The upstream's remote name and branch (`branch.<b>.remote`/`.merge`), or undefined without an upstream. */
 async function upstreamOf(git: Git, branch: string) {
   const remote = await git('config', `branch.${branch}.remote`).catch(() => '')
   const merge = await git('config', `branch.${branch}.merge`).catch(() => '')
   return remote && merge ? { remote, branch: merge.replace(/^refs\/heads\//, '') } : undefined
 }
 
-/**
- * Fetch the branch's upstream remote when the last fetch is older than `FETCH_EVERY`, or always with `force`;
- * the error of a failed fetch, else undefined. Under the repository's clone lock (shared with the update extension
- * for the Ultimate clone), with the age read again inside it.
- */
 export async function fetchIfDue(git: Git, root: string, now: number, force = false) {
   const branch = await git('symbolic-ref', '--quiet', '--short', 'HEAD').catch(() => '')
   const upstream = branch ? await upstreamOf(git, branch) : undefined
@@ -49,7 +39,6 @@ export async function fetchIfDue(git: Git, root: string, now: number, force = fa
   })
 }
 
-/** Where the checkout's branch stands against its upstream, from local refs only. */
 export async function stateOf(git: Git, root: string, context: Context): Promise<SyncState> {
   const standing = await standingUpstream(git)
   const dirty = Boolean(await git('status', '--porcelain', '--untracked-files=no'))
@@ -104,7 +93,6 @@ export async function stateOf(git: Git, root: string, context: Context): Promise
   return state
 }
 
-/** Why a push of `state`'s branch is refused, or undefined when it would run. */
 export function pushRefusal(state: SyncState): string | undefined {
   if (!state.branch) return 'The checkout is on a detached HEAD: check out a branch, then push'
   if (!state.upstream)
@@ -119,11 +107,6 @@ export function pushRefusal(state: SyncState): string | undefined {
   return undefined
 }
 
-/**
- * Fast-forward the branch to its upstream, or merge a diverged one: a restore ref first, conflicts predicted before
- * touching anything and aborted back on one — never a stash, rebase or reset. The move runs through `serialize`, the
- * per-source git-write queue the lander's fast-forwards hold.
- */
 export async function pull(
   git: Git,
   root: string,
@@ -148,12 +131,10 @@ export async function pull(
   }
 }
 
-/** Push the branch to its upstream with a plain `git push`: never forced, refused by `pushRefusal`. */
 export async function push(git: Git, root: string, context: Context): Promise<PushResult> {
   const state = await stateOf(git, root, context)
   const refused = pushRefusal(state)
   if (refused) return { ok: false, refused }
-  // Safe: pushRefusal above returns a refusal for a detached checkout or a branch without an upstream.
   const upstream = (await upstreamOf(git, state.branch!))!
   try {
     await git('push', upstream.remote, `HEAD:refs/heads/${upstream.branch}`)
@@ -166,10 +147,6 @@ export async function push(git: Git, root: string, context: Context): Promise<Pu
   return { ok: true, pushed: `${upstream.remote}/${upstream.branch}` }
 }
 
-/**
- * Open a pull request of the branch against the base: push the branch to origin under its own name, then
- * `gh pr create`. Same-repository PRs only: a push that fails for access is refused with that, no fork flow.
- */
 export async function openPr(
   git: Git,
   root: string,

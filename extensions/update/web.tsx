@@ -114,7 +114,6 @@ function CheckNow({ checking, onClick }: { checking: boolean; onClick: () => voi
   )
 }
 
-/** The popover's verdict on a diverged clone, by what merge-tree predicted. */
 function Diverged({ state }: { state: UpdateState }) {
   const ahead = state.ahead ?? 0
   return (
