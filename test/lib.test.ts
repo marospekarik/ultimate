@@ -169,6 +169,33 @@ function gitWithStdin(argv: string[], cwd: string, stdin: string) {
   })
 }
 
+it('fetches over ssh with no global ssh command, never running a repo-local one', async () => {
+  const dir = await temp('ultimate-lib-')
+  const repo = await hardeningRepo(dir)
+  const bin = join(dir, 'bin')
+  const reached = join(dir, 'ssh-reached')
+  const pwned = join(dir, 'pwned')
+  await mkdir(bin)
+  await writeFile(join(bin, 'ssh'), `#!/bin/sh\ntouch ${reached}\nexit 1\n`, { mode: 0o755 })
+  const global = join(dir, 'gitconfig')
+  await writeFile(global, '')
+  await git(repo, 'remote', 'add', 'origin', 'git@example.com:owner/repo.git')
+  await git(repo, 'config', 'core.sshCommand', `touch ${pwned}`)
+  process.env.GIT_CONFIG_GLOBAL = global
+  try {
+    const env: NodeJS.ProcessEnv = { ...process.env, PATH: `${bin}:${process.env.PATH}` }
+    delete env.GIT_SSH
+    delete env.GIT_SSH_COMMAND
+    await expect(git({ cwd: repo, env }, 'fetch', 'origin')).rejects.toThrow(
+      'Could not read from remote repository',
+    )
+    await access(reached)
+    await expect(access(pwned)).rejects.toThrow('ENOENT')
+  } finally {
+    delete process.env.GIT_CONFIG_GLOBAL
+  }
+})
+
 it('keeps the global ssh command and credential helper over a repo-local value', async () => {
   const dir = await temp('ultimate-lib-')
   const repo = await hardeningRepo(dir)

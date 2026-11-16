@@ -69,8 +69,13 @@ async function trustedGlobal(): Promise<Trusted> {
       args.push('-c', `${name}=${pair.slice(newline + 1)}`)
       keys.add(name)
     }
-    // `core.sshCommand` is single-valued; empty it when global sets none, so a repo-local value cannot run.
-    if (!keys.has('core.sshcommand')) args.push('-c', 'core.sshcommand=')
+    // `core.sshCommand` is single-valued and beats `GIT_SSH`; when global sets none, pin git's own default (`GIT_SSH`,
+    // else `ssh`) so a repo-local value cannot run. An empty value would make git run a program with no name.
+    // `GIT_SSH` is a program path, not a shell command, so it is single-quoted; `GIT_SSH_COMMAND` beats config anyway.
+    if (!keys.has('core.sshcommand')) {
+      const ssh = process.env.GIT_SSH
+      args.push('-c', `core.sshcommand=${ssh ? `'${ssh.replaceAll("'", "'\\''")}'` : 'ssh'}`)
+    }
     return { args, keys }
   })()
   return trusted
