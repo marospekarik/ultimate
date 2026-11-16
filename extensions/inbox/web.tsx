@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button'
 import { Kbd } from '@/components/ui/kbd'
 import {
   cn,
+  column,
   defineWebExtension,
   events,
   formatAgo,
@@ -298,7 +299,7 @@ function Reading({
     )
   return (
     <div className={positionedReadingScroller} data-inbox-item={id}>
-      <div className="mx-auto w-full max-w-[44rem] px-8 pt-8 pb-12">
+      <div className={cn(column(), 'pt-8 pb-12')}>
         {top}
         <div className="mt-6">{answer}</div>
       </div>
@@ -345,6 +346,7 @@ function Zero({ messages, now }: { messages: readonly Message[]; now: number }) 
 }
 
 let linkedKeyAwaitingSurfaceMount: string | undefined
+let keyShownBeforeSurfaceUnmount: string | undefined
 
 function Inbox() {
   return <Waiting>{(items, messages) => <Surface items={items} messages={messages} />}</Waiting>
@@ -355,7 +357,9 @@ function Surface({ items, messages }: { items: Entry[]; messages: readonly Messa
   const now = useNow(60_000)
   const openBranch = useOpenBranch()
 
-  const [anchoredSelection, setAnchoredSelection] = useState<string | null>(null)
+  const [anchoredSelection, setAnchoredSelection] = useState(
+    () => keyShownBeforeSurfaceUnmount ?? null,
+  )
 
   const [linkedKeyAwaitingItemLoad, setLinkedKeyAwaitingItemLoad] = useState(
     () => linkedKeyAwaitingSurfaceMount,
@@ -373,6 +377,9 @@ function Surface({ items, messages }: { items: Entry[]; messages: readonly Messa
   )
   const at = items.findIndex((candidate) => candidate.key === selected)
   const item = items[at]
+  useEffect(() => {
+    if (selected !== undefined) keyShownBeforeSurfaceUnmount = selected
+  }, [selected])
 
   useEffect(() => {
     if (at >= 0) setIndexAfterSelectedItemLeaves(at)
@@ -498,6 +505,18 @@ function useInboxRow(): ReactNode {
   return <Waiting>{(items) => <InboxRow items={items} />}</Waiting>
 }
 
+function InboxBadge() {
+  return (
+    <Waiting>
+      {(items) =>
+        items.length > 0 && (
+          <span className={cn('font-mono text-[11px]', amber)}>{items.length}</span>
+        )
+      }
+    </Waiting>
+  )
+}
+
 function InboxRow({ items }: { items: Entry[] }) {
   const actions = useUltimate()
   const now = useNow(60_000)
@@ -543,6 +562,7 @@ export default defineWebExtension({
       description: 'Everything that waits on you, oldest first, answered in place',
       order: 10,
       component: Inbox,
+      badge: InboxBadge,
     },
   ],
   commands: [
