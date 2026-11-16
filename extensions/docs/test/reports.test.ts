@@ -2,8 +2,8 @@ import { mkdir, readdir, symlink, utimes, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { expect, it } from 'vitest'
 import { temp } from '../../../test/helpers.ts'
-import { isReport, shownPath } from '../limits.ts'
-import { DAY, keep, readReport, reports, sweep } from '../reports.ts'
+import { DAY, isReport, shownPath } from '../limits.ts'
+import { keep, readReport, reports, sweep } from '../reports.ts'
 
 async function project() {
   const root = await temp('docs-reports-')

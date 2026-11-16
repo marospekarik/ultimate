@@ -3,11 +3,8 @@ import { basename, join, sep } from 'node:path'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { errnoCode, ignoring, isMissing } from '../../lib/errors.ts'
 import { parsed } from './doc.ts'
-import { MAX_BYTES, REPORTS } from './limits.ts'
+import { ARCHIVE, DAY, KEEP_DAYS, MAX_BYTES, REPORTS } from './limits.ts'
 import type { Doc, Report } from './refs.ts'
-
-export const DAY = 24 * 60 * 60 * 1000
-export const KEEP_DAYS = 30
 
 export type Homes = Pick<ExtensionHost, 'userHome' | 'home'>
 
@@ -47,7 +44,7 @@ export async function reports(host: Homes): Promise<{ folder: string; reports: R
     expires: file.modified + KEEP_DAYS * DAY,
   }))
   const kept = (await reportFiles(join(dir, 'archive'))).map((file) => ({
-    path: `${REPORTS}archive/${file.name}`,
+    path: `${ARCHIVE}${file.name}`,
     size: file.size,
     modified: file.modified,
     archived: true,
@@ -69,11 +66,11 @@ export async function reportFile(host: Homes, path: string) {
 }
 
 export async function readReport(host: Homes, requested: string): Promise<Doc> {
-  const archived = `${REPORTS}archive/${requested.slice(REPORTS.length)}`
-  const moved = requested.startsWith(`${REPORTS}archive/`) ? undefined : archived
+  const archived = `${ARCHIVE}${requested.slice(REPORTS.length)}`
+  const moved = requested.startsWith(ARCHIVE) ? undefined : archived
   const found =
     (await reportFile(host, requested)) ?? (moved ? await reportFile(host, moved) : undefined)
-  const path = found?.archived ? `${REPORTS}archive/${found.name}` : requested
+  const path = found?.archived ? `${ARCHIVE}${found.name}` : requested
   if (!found) return { status: 'missing', path }
   if (found.stat.size > MAX_BYTES) return { status: 'tooLarge', path, size: found.stat.size }
   return parsed(path, await readFile(found.file, 'utf8'), found.stat.size, found.stat.mtimeMs)
@@ -91,7 +88,7 @@ export async function keep(host: Homes, path: string) {
   const target = join(real, found.name)
   if (await lstat(target).catch(absent)) throw new Error(`archive/${found.name} already exists`)
   await rename(found.file, target)
-  return { path: `${REPORTS}archive/${found.name}` }
+  return { path: `${ARCHIVE}${found.name}` }
 }
 
 export async function sweep(host: Homes, now: number) {

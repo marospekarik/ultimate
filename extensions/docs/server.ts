@@ -10,7 +10,7 @@ import { runGit } from '../../lib/git.ts'
 import { parseConversationId } from '../../lib/ids.ts'
 import { every } from '../../lib/timers.ts'
 import { parsed } from './doc.ts'
-import { limits, MAX_BYTES, REPORTS } from './limits.ts'
+import { DAY, limits, MAX_BYTES, REPORTS } from './limits.ts'
 import {
   DocCommentsEntry,
   KeepAction,
@@ -21,7 +21,7 @@ import {
   SweepAction,
 } from './refs.ts'
 import type { Doc, DocComment, DocComments } from './refs.ts'
-import { DAY, keep, readReport, reportFile, reports, sweep } from './reports.ts'
+import { keep, readReport, reportFile, reports, sweep } from './reports.ts'
 
 export default function docs(host: ExtensionHost) {
   const run = () =>
@@ -34,7 +34,7 @@ export default function docs(host: ExtensionHost) {
     stopSweeping?.()
     stopSweeping = every(DAY, run)
   })
-  host.onClose(async () => stopSweeping?.())
+  host.onClose(() => Promise.resolve(stopSweeping?.()))
   return defineExtension({ name: 'docs' })
 }
 

@@ -48,7 +48,7 @@ import {
 import type { Viewport } from '@/sdk'
 import { parseConversationId } from '../../lib/ids.ts'
 import { debounce, deadline } from '../../lib/timers.ts'
-import { isReport, limits, REPORTS, shownPath } from './limits.ts'
+import { ARCHIVE, DAY, isReport, limits, shownPath } from './limits.ts'
 import { KeepAction, ListAction, ReadAction, ReportsAction, SendAction } from './refs.ts'
 import type { Doc, DocComment, DocComments, Report } from './refs.ts'
 
@@ -166,8 +166,6 @@ function FileButton({
     </button>
   )
 }
-
-const DAY = 24 * 60 * 60 * 1000
 
 function Reports({
   folder,
@@ -795,7 +793,7 @@ function Docs() {
     />
   )
   const report = path !== null && isReport(path) ? data : undefined
-  const kept = report?.status === 'ok' && report.path.startsWith(`${REPORTS}archive/`)
+  const kept = report?.status === 'ok' && report.path.startsWith(ARCHIVE)
   const expires = reportList.find((item) => item.path === path)?.expires
   return (
     <>

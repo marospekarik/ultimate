@@ -60,3 +60,11 @@ it('tells the recipient where to read a report', () => {
   expect(text).toContain('the report `/home/u/.ultimate/reports/p/x.md`')
   expect(text).toContain('Under "Setup"')
 })
+
+it('fences a quote that holds backticks with a longer fence', () => {
+  const text = commentsText({
+    path: 'a.md',
+    comments: [{ text: 'Why?', quote: 'run ```x``` here' }],
+  })
+  expect(text).toContain('````markdown\nrun ```x``` here\n````')
+})
