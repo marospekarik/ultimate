@@ -23,6 +23,8 @@ const COMMAND_SCOPE_PROGRAM_RUNNING_CONFIG_OFF = [
   'commit.gpgSign=false',
   '-c',
   'tag.gpgSign=false',
+  '-c',
+  'log.showSignature=false',
 ]
 
 const GLOBAL_PROGRAM_RUNNING_KEY =
