@@ -15,6 +15,7 @@ import { lasted } from './lasted.ts'
 import { AutoPlayAction, PauseAction, PauseDoc, PlayAction, StateAction } from './refs.ts'
 import type {
   AutoPlayed,
+  GaveUp,
   HeldNote,
   Hold,
   PauseDocState,
@@ -37,7 +38,14 @@ export const docs = [State]
 
 type Host = Pick<
   ExtensionHost,
-  'harness' | 'resource' | 'onOpen' | 'onClose' | 'onRelease' | 'implement' | 'conversations'
+  | 'harness'
+  | 'resource'
+  | 'onOpen'
+  | 'onClose'
+  | 'onRelease'
+  | 'implement'
+  | 'conversations'
+  | 'modelRuntime'
 >
 
 const sharedPauseFlag = (host: Pick<ExtensionHost, 'resource'>) =>
@@ -134,6 +142,8 @@ async function state(host: Host): Promise<PauseState> {
     ...(doc.held === undefined ? {} : { held: doc.held }),
     ...(doc.autoPlay === undefined ? {} : { autoPlay: doc.autoPlay }),
     ...(autoPlayAt(doc) === undefined ? {} : { autoPlayAt: autoPlayAt(doc) }),
+    ...(doc.checks === undefined ? {} : { checks: doc.checks }),
+    ...(doc.gaveUp === undefined ? {} : { gaveUp: doc.gaveUp }),
     running: await activeTasks(host),
   }
 }
@@ -211,8 +221,8 @@ function autoPlayAt(doc: PauseDocState): number | undefined {
     return undefined
   const causeEnds: number[] = []
   if (doc.limit) {
-    if (!doc.autoPlay) return undefined
-    causeEnds.push(doc.since + doc.autoPlay * 60_000)
+    if (!doc.autoPlay || doc.gaveUp !== undefined) return undefined
+    causeEnds.push((doc.checks?.at ?? doc.since) + doc.autoPlay * 60_000)
   }
   if (doc.held) {
     if (doc.held.until === undefined) return undefined
@@ -245,19 +255,87 @@ function rearmAutoPlay(host: Host, doc: PauseDocState) {
   )
 }
 
+const GIVE_UP_AFTER_MS = 6 * 60 * 60_000
+const CHECK_TIMEOUT_MS = 60_000
+
+async function refusal(host: Host, limit: RateLimit, now: number) {
+  const model = host.modelRuntime.getModel(limit.provider, limit.model)
+  if (!model) return `${limit.provider}/${limit.model} is not available`
+  try {
+    const answer = await host.modelRuntime
+      .streamSimple(
+        model,
+        { messages: [{ role: 'user', content: 'Reply with OK.', timestamp: now }] },
+        {
+          maxTokens: 16,
+          cacheRetention: 'none',
+          ...(model.reasoning ? { reasoning: 'minimal' } : {}),
+          signal: AbortSignal.timeout(CHECK_TIMEOUT_MS),
+        },
+      )
+      .result()
+    return answer.stopReason === 'error' || answer.stopReason === 'aborted'
+      ? answer.errorMessage || answer.stopReason
+      : undefined
+  } catch (error) {
+    return String(error)
+  }
+}
+
+async function recordRefusedCheck(host: Host, now: number) {
+  await host.harness().commit(async (tx) => {
+    const current = await tx.doc(State, ROOT_CONVERSATION_ID)
+    current.checks = { count: (current.checks?.count ?? 0) + 1, at: now }
+    if (now + current.autoPlay! * 60_000 > current.since! + GIVE_UP_AFTER_MS) current.gaveUp = now
+  }, context)
+  await writeGaveUpOnce(host, await read(host))
+}
+
+async function writeGaveUpOnce(host: Host, doc: PauseDocState) {
+  const harness = host.harness()
+  const ultimate = (await harness.snapshot(Standing, ROOT_CONVERSATION_ID, context))?.ultimate
+  if (!doc.paused || doc.gaveUp === undefined || ultimate === undefined) return
+  const data: GaveUp = {
+    limit: doc.limit!,
+    since: doc.since!,
+    at: doc.gaveUp,
+    checks: doc.checks!.count,
+  }
+  await (
+    await harness.conversation(ultimate, context)
+  )?.submit(
+    {
+      type: 'write',
+      requestId: `pause.gave-up:${doc.since}`,
+      entry: { kind: 'pause.gave-up', data },
+    },
+    context,
+  )
+}
+
 export async function autoPlay(host: Host, now = Date.now()) {
+  const due = (doc: PauseDocState) => {
+    const at = autoPlayAt(doc)
+    return at !== undefined && now >= at
+  }
+  const before = await read(host)
+  if (!due(before)) return false
+  const refused = before.limit && (await refusal(host, before.limit, now))
   return serializePause(host, async () => {
     const doc = await read(host)
-    const at = autoPlayAt(doc)
-    if (at === undefined || now < at) return false
+    if (doc.since !== before.since || !doc.limit !== !before.limit || !due(doc)) return false
+    if (refused) {
+      await recordRefusedCheck(host, now)
+      return false
+    }
     const data: AutoPlayed = {
       since: doc.since!,
       at: now,
-      ...(doc.limit ? { minutes: doc.autoPlay! } : {}),
+      ...(doc.limit ? { minutes: doc.autoPlay!, checks: doc.checks?.count ?? 0 } : {}),
       ...(doc.held ? { held: doc.held } : {}),
     }
     const why = doc.limit
-      ? `after the rate limit paused it (the user's setting: ${data.minutes} min)`
+      ? `after the rate limit paused it, once ${doc.limit.provider} answered again (checked every ${data.minutes} min, the user's setting)`
       : `after ${doc.held!.source} held it (${doc.held!.reason}), once the time it named passed`
     const autoPlayOncePerPause = `pause.autoplay:${data.since}`
     const harness = host.harness()
@@ -424,6 +502,8 @@ async function noteRunsThenRelease(host: Host, auto = false) {
     delete current.limit
     delete current.held
     delete current.manual
+    delete current.checks
+    delete current.gaveUp
   }, context)
   const after = await read(host)
   rearmAutoPlay(host, after)
@@ -455,6 +535,7 @@ export default function pauseExtension(host: Host) {
       host.harness().hold()
       rearmAutoPlay(host, doc)
       await writePauseLimitOnce(host, doc)
+      await writeGaveUpOnce(host, doc)
     })
     unsubscribe = onCommit(host.harness(), (publication) => {
       const generationsSleepingBeforeRetry = new Set(

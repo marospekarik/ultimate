@@ -802,6 +802,12 @@ it.each([
     rateHint,
   ],
   ['429 Too Many Requests', false, rateHint],
+  // Ollama Cloud's weekly limit paused the whole host for days (2026-11-15): it resets too late to wait for.
+  [
+    '429: {"message":"you (someone) have reached your weekly usage limit, upgrade for higher limits: https://ollama.com/upgrade or add usage credits: https://ollama.com/settings (ref: 85cd92bc)"}',
+    false,
+    'faux’s weekly usage limit is reached, which resets days from now: switch this agent to a model of another provider, then resume this conversation with a message',
+  ],
   // Quota and billing errors are not rate limits Pi retries: they fail as usual, without the pause's hint.
   [
     'You exceeded your current quota, please check your plan and billing details. (insufficient_quota)',

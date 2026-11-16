@@ -102,8 +102,27 @@ async function fixture(home?: string, retry: { maxRetries?: number } = {}) {
   let opened: OpenHost | undefined
   const services = apis()
   const openers: (() => Promise<void>)[] = []
+  const refusals: string[] = []
+  let checks = 0
   const host = {
     ...services,
+    modelRuntime: {
+      getModel: (provider: string, id: string) => ({ provider, id, reasoning: true }),
+      streamSimple: (_model: unknown, _context: unknown, options?: { reasoning?: string }) => ({
+        result: async () => {
+          checks++
+          // Claude Code refused claude-opus-5-5 requests without thinking (measured 2026-11-16).
+          const refusal =
+            refusals.shift() ??
+            (options?.reasoning
+              ? undefined
+              : 'Incomplete Claude Code upstream response (status 400, upstream said: "thinking.type.disabled" is not supported for this model.)')
+          return refusal
+            ? fauxAssistantMessage('', { stopReason: 'error', errorMessage: refusal })
+            : fauxAssistantMessage([fauxText('OK')])
+        },
+      }),
+    },
     harness: () => opened!.harness,
     resource: (() => {
       const resources = new Map<string, unknown>()
@@ -136,6 +155,8 @@ async function fixture(home?: string, retry: { maxRetries?: number } = {}) {
     setAutoPlay: (minutes: number | null) =>
       actions.autoPlay({ minutes }, { host } as unknown as ActionContext),
     autoPlay: (now: number) => autoPlay(host, now),
+    refuseChecks: (count: number) => refusals.push(...Array<string>(count).fill(limit)),
+    checks: () => checks,
     paused: () => services.want(PauseApi)!.paused(),
     hold: (request: { source: string; reason: string; until?: number }) =>
       services.want(PauseApi)!.hold(request),
@@ -610,7 +631,7 @@ it('records a limit into a pause the user started, so it still shows', async () 
   expect((await submission.wait(context)).status).toBe('done')
 })
 
-it('plays a rate-limit pause by itself once, N minutes in, only when the user switched it on', async () => {
+it('checks a rate-limit pause every N minutes once switched on, and plays only when the provider answers', async () => {
   const f = await fixture()
   let responses = 0
   f.prepared.faux!.setResponses([
@@ -637,28 +658,92 @@ it('plays a rate-limit pause by itself once, N minutes in, only when the user sw
   expect((await f.action('state')).autoPlay).toBeUndefined()
   expect(await f.autoPlay(since! + 365 * 86_400_000)).toBe(false)
   expect(f.paused()).toBe(true)
+  expect(f.checks()).toBe(0)
 
   const set = await f.setAutoPlay(30)
   expect(set).toMatchObject({ autoPlay: 30, autoPlayAt: since! + 30 * 60_000 })
-  // Not yet due.
+  // Not yet due: no check.
   expect(await f.autoPlay(since! + 29 * 60_000)).toBe(false)
+  expect(f.checks()).toBe(0)
+  // Still limited at the check: the host stays paused and the held run keeps its retry (#25156 spent all of them).
+  f.refuseChecks(1)
+  expect(await f.autoPlay(since! + 30 * 60_000)).toBe(false)
+  expect(f.checks()).toBe(1)
   expect(f.paused()).toBe(true)
-  expect(await f.autoPlay(since! + 30 * 60_000)).toBe(true)
+  expect(responses).toBe(1)
+  expect(await f.action('state')).toMatchObject({
+    since,
+    checks: { count: 1, at: since! + 30 * 60_000 },
+    autoPlayAt: since! + 60 * 60_000,
+  })
+  expect(await f.autoPlay(since! + 59 * 60_000)).toBe(false)
+  expect(f.checks()).toBe(1)
+  expect(await f.autoPlay(since! + 60 * 60_000)).toBe(true)
+  expect(f.checks()).toBe(2)
   expect(f.paused()).toBe(false)
   expect((await submission.wait(context)).status).toBe('done')
   expect(responses).toBe(2)
+  expect((await f.action('state')).checks).toBeUndefined()
   // Once: the pause is over, so a second due timer finds nothing to play.
-  expect(await f.autoPlay(since! + 31 * 60_000)).toBe(false)
+  expect(await f.autoPlay(since! + 61 * 60_000)).toBe(false)
   const played = (await ultimate.context(context)).entries.filter(
     (entry) => entry.kind === 'pause.autoplay',
   )
   expect(played).toHaveLength(1)
-  expect(played[0].data).toMatchObject({ since, at: since! + 30 * 60_000, minutes: 30 })
+  expect(played[0].data).toMatchObject({ since, at: since! + 60 * 60_000, minutes: 30, checks: 1 })
+  expect(played[0].model?.[0]?.content).toMatch(/once faux answered again \(checked every 30 min/)
   const notes = (await root.context(context)).entries.filter((entry) => entry.kind === 'pause.note')
   expect(notes[0].data).toMatchObject({ auto: true })
   expect(notes[0].model?.[0]?.content).toMatch(/continued after Ultimate played by itself\.$/)
   // The setting stays for the next limit.
   expect((await f.action('state')).autoPlay).toBe(30)
+})
+
+it('stops checking six hours into a rate limit: it stays paused with one card, and Play still continues it', async () => {
+  const f = await fixture()
+  f.prepared.faux!.setResponses([
+    () => fauxAssistantMessage('', { stopReason: 'error', errorMessage: limit }),
+    () => fauxAssistantMessage([fauxText('done')]),
+  ])
+  const { root, harness } = await f.open()
+  const ultimate = await harness.createConversation({ ownership: { kind: 'ownerless' } }, context)
+  await harness.commit(async (tx) => {
+    ;(await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate = ultimate.id
+  }, context)
+  await f.setAutoPlay(60)
+  const submission = await root.submit({ type: 'input', content: 'go' }, context)
+  await until(async () => (await f.action('state')).limit !== undefined)
+  const { since } = await f.action('state')
+  f.refuseChecks(6)
+  for (let hour = 1; hour <= 6; hour++)
+    expect(await f.autoPlay(since! + hour * 60 * 60_000)).toBe(false)
+  const state = await f.action('state')
+  expect(state).toMatchObject({ paused: true, gaveUp: since! + 6 * 60 * 60_000 })
+  expect(state.autoPlayAt).toBeUndefined()
+  expect(await f.autoPlay(since! + 24 * 60 * 60_000)).toBe(false)
+  expect(f.checks()).toBe(6)
+  const cards = (await ultimate.context(context)).entries.filter(
+    (entry) => entry.kind === 'pause.gave-up',
+  )
+  expect(cards).toHaveLength(1)
+  expect(cards[0].data).toMatchObject({ since, checks: 6, limit: { error: limit } })
+  await f.action('play')
+  expect((await submission.wait(context)).status).toBe('done')
+})
+
+it('never pauses for a weekly usage limit: it resets days later, so the run fails and the watchdog reports it', async () => {
+  const f = await fixture()
+  const weekly =
+    '429: {"message":"you (someone) have reached your weekly usage limit, upgrade for higher limits: https://ollama.com/upgrade"}'
+  const refused = () => fauxAssistantMessage('', { stopReason: 'error', errorMessage: weekly })
+  f.prepared.faux!.setResponses([refused, refused, refused, refused])
+  const { root } = await f.open()
+  const submission = await root.submit({ type: 'input', content: 'go' }, context)
+  expect(await submission.wait(context)).toMatchObject({
+    status: 'unanswered',
+    reason: 'model_error',
+  })
+  expect(f.paused()).toBe(false)
 })
 
 it('plays a hold with an end by itself two minutes after it, unless the user also paused', async () => {
@@ -723,6 +808,7 @@ it('never plays a pause the user pressed, also when a rate limit joins it', asyn
   await until(async () => (await f.action('state')).limit !== undefined)
   expect((await f.action('state')).autoPlayAt).toBeUndefined()
   expect(await f.autoPlay(since! + 86_400_000)).toBe(false)
+  expect(f.checks()).toBe(0)
   expect(f.paused()).toBe(true)
   await f.action('play')
   expect((await submission.wait(context)).status).toBe('done')

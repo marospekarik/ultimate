@@ -33,9 +33,19 @@ export type PauseDocState = {
   held?: Hold
   /** The user pressed Pause, or an extension held without `until`, during this pause: it never plays by itself. */
   manual?: boolean
-  /** The user's setting: minutes after a rate-limit pause began that Ultimate presses Play by itself; unset is off. */
+  /**
+   * The user's setting: every that many minutes of a rate-limit pause, Ultimate asks the limited model one short
+   * question and presses Play once it answers; unset is off.
+   */
   autoPlay?: number
+  /** The checks of this rate-limit pause the provider still refused: how many, and when the last was (ms). */
+  checks?: Checks
+  /** When Ultimate stopped checking (ms), still limited six hours in: only Play continues it. */
+  gaveUp?: number
 }
+
+/** How many checks the provider refused during a rate-limit pause, and when the last one was (ms). */
+export type Checks = { count: number; at: number }
 
 /** A task still running while paused: it finishes on its own, nothing new starts after it. */
 export type RunningTask = {
@@ -56,13 +66,18 @@ export type PauseState = {
   limit?: RateLimit
   /** The extension that held Ultimate, if one did. */
   held?: Hold
-  /** Minutes after a rate-limit pause began that Play is pressed by itself; unset is off. */
+  /** Minutes between the checks of a rate-limit pause, which play once the provider answers; unset is off. */
   autoPlay?: number
   /**
    * When this pause plays by itself (ms): once every cause has an end (a rate limit with the setting on, a hold with
-   * `until`), and nothing the user pressed holds it.
+   * `until`), and nothing the user pressed holds it. For a rate limit it is the next check, which plays only when the
+   * provider answers it.
    */
   autoPlayAt?: number
+  /** The checks the provider still refused during this rate-limit pause. */
+  checks?: Checks
+  /** When Ultimate stopped checking (ms), still limited six hours in. */
+  gaveUp?: number
   /** Foreground tasks still running: while paused, the pause is safe once this is empty. */
   running: RunningTask[]
 }
@@ -79,8 +94,9 @@ export const PauseAction = actionRef<null, PauseState>('pause', 'pause')
 /** User-only: continue. Each run that was mid-turn when paused gets one "Paused for …" note. Returns the state. */
 export const PlayAction = actionRef<null, PauseState>('pause', 'play')
 /**
- * User-only `{ minutes }`: play by itself that many minutes (1 to 1440) after a rate limit paused Ultimate, once per
- * pause; `null` turns it off. A pause the user pressed never plays by itself. Returns the state.
+ * User-only `{ minutes }`: every that many minutes (1 to 1440) of a rate-limit pause, ask the limited model one short
+ * question and play once it answers, for up to six hours; `null` turns it off. A pause the user pressed
+ * never plays by itself. Returns the state.
  */
 export const AutoPlayAction = actionRef<{ minutes: number | null }, PauseState>('pause', 'autoPlay')
 
@@ -98,6 +114,19 @@ export type HeldNote = { child: ConversationId; provider: string; model: string;
 
 /**
  * The `pause.autoplay` entry in @ultimate's transcript: the pause from `since` played by itself at `at`; `minutes` the
- * setting when a rate limit paused it, `held` the hold whose `until` passed.
+ * setting when a rate limit paused it and `checks` how many checks the provider refused first, `held` the hold whose
+ * `until` passed.
  */
-export type AutoPlayed = { since: number; at: number; minutes?: number; held?: Hold }
+export type AutoPlayed = {
+  since: number
+  at: number
+  minutes?: number
+  checks?: number
+  held?: Hold
+}
+
+/**
+ * The `pause.gave-up` card in @ultimate's transcript: the rate limit that paused Ultimate at `since` still refused
+ * every check until `at` (ms), `checks` of them, so Ultimate stays paused until the user presses Play.
+ */
+export type GaveUp = { limit: RateLimit; since: number; at: number; checks: number }

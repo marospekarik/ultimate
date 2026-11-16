@@ -20,7 +20,7 @@ import {
   ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { rateLimited } from '../../lib/rate-limit.ts'
+import { rateLimited, weeklyLimit } from '../../lib/rate-limit.ts'
 import { Messages } from '../messages/api.ts'
 import { Standing, Subagents } from '../subagents/api.ts'
 import { Branches } from '../workspaces/api.ts'
@@ -100,6 +100,11 @@ async function lastErrorBeforeNextGeneration(tx: Tx, task: Generation, next?: Ge
 }
 
 export function diagnose(error: string, assistant?: AssistantMessage) {
+  if (weeklyLimit(error))
+    return {
+      hint: `${assistant?.provider ?? 'The provider'}’s weekly usage limit is reached, which resets days from now: switch this agent to a model of another provider, then resume this conversation with a message`,
+      temporary: false,
+    }
   if (rateLimited(error))
     return {
       hint: 'Still rate limited after Pi’s retries; once the limit resets (or the agent has another model), resume this conversation with a message',

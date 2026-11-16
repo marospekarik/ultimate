@@ -27,12 +27,14 @@ import { ConversationRef } from '../conversations/ui.tsx'
 import { lasted } from './lasted.ts'
 import { parkedConversations } from './parked.ts'
 import { AutoPlayAction, PauseAction, PauseDoc, PlayAction, StateAction } from './refs.ts'
-import type { AutoPlayed, HeldNote, PauseNote, PauseState, RateLimit } from './refs.ts'
+import type { AutoPlayed, GaveUp, HeldNote, PauseNote, PauseState, RateLimit } from './refs.ts'
 
 const statusButton =
   '-mx-1 flex cursor-pointer items-center gap-1.5 rounded-sm px-1 transition-colors hover:bg-accent'
 
 const tasks = (count: number) => `${count} ${count === 1 ? 'task' : 'tasks'}`
+
+const checks = (count: number) => `${count} ${count === 1 ? 'check' : 'checks'}`
 
 const clock = (at: number) =>
   new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -110,10 +112,24 @@ function Popup({
             <div className="break-words text-muted-foreground" title={limit.error}>
               “{unwrappedProviderError(limit.error)}”
             </div>
-            <div className="text-muted-foreground">
-              {state.autoPlayAt !== undefined
-                ? `No reset time given: plays by itself in ${lasted(Math.max(0, state.autoPlayAt - now))}, or press Play.`
-                : 'No reset time given: nothing retries until Play.'}{' '}
+            <div className="text-muted-foreground" data-pause-checks>
+              {state.autoPlayAt !== undefined ? (
+                <>
+                  No reset time given: next check at{' '}
+                  <span className="text-foreground">{clock(state.autoPlayAt)}</span> (in{' '}
+                  {lasted(Math.max(0, state.autoPlayAt - now))}), plays once {limit.provider}{' '}
+                  answers, or press Play.
+                </>
+              ) : state.gaveUp !== undefined ? (
+                `Still limited after ${lasted(state.gaveUp - (state.since ?? state.gaveUp))}: stopped checking. Press Play once it resets.`
+              ) : (
+                'No reset time given: nothing retries until Play.'
+              )}{' '}
+              {state.checks && (
+                <span>
+                  Still limited at {clock(state.checks.at)} ({checks(state.checks.count)}).{' '}
+                </span>
+              )}
               A model you switch meanwhile applies on Play.
             </div>
           </div>
@@ -205,7 +221,7 @@ function AutoPlay({ minutes }: { minutes?: number }) {
           onChange={(event) => save(event.target.checked ? Number(draft) || 30 : null)}
           type="checkbox"
         />
-        <span>Play by itself after</span>
+        <span>After a rate limit, check every</span>
         <input
           className="w-12 rounded-sm border border-border bg-transparent px-1 text-right tabular-nums"
           max={1440}
@@ -218,7 +234,8 @@ function AutoPlay({ minutes }: { minutes?: number }) {
         <span>min</span>
       </label>
       <div className="text-muted-foreground/70">
-        Only after a rate limit, once per limit. A Pause you press waits for you.
+        One short request per check; plays once the provider answers, stops checking after 6 h. A
+        Pause you press waits for you.
       </div>
       {error && <div className="break-words text-error">{error}</div>}
     </div>
@@ -242,7 +259,10 @@ function Item() {
   }
   const pausing = state.paused && state.running.length > 0
   const resumes = state.autoPlayAt !== undefined && !pausing && (
-    <span data-pause-until> · until {clock(state.autoPlayAt)}</span>
+    <span data-pause-until>
+      {' '}
+      · {state.limit ? 'next check' : 'until'} {clock(state.autoPlayAt)}
+    </span>
   )
   return (
     <Popover>
@@ -389,7 +409,6 @@ function Limit({ entry }: { entry: EntryRecord }) {
   const holding = doc?.paused === true && doc.limit?.at === limit.at
   const now = useNow(1000, holding)
   const { switchConversation } = useUltimate()
-  const [busy, setBusy] = useState(false)
   if (limit.error === undefined || limit.conversationId === undefined) return null
   const conversationId = limit.conversationId
   return (
@@ -416,8 +435,8 @@ function Limit({ entry }: { entry: EntryRecord }) {
           · no reset time given
         </p>
         <p className="text-[12px] text-muted-foreground">
-          {holding && doc.autoPlay && !doc.manual
-            ? `Plays by itself ${doc.autoPlay} min after the limit, or press Play`
+          {holding && doc.autoPlay && !doc.manual && doc.gaveUp === undefined
+            ? `Checks every ${doc.autoPlay} min with one short request and plays once ${limit.provider} answers again (for up to 6 h), or press Play`
             : 'Nothing retries until you press Play'}
           ; held runs then continue where they stopped. A model you switch meanwhile applies on
           Play.
@@ -427,24 +446,70 @@ function Limit({ entry }: { entry: EntryRecord }) {
         {holding ? (
           <>
             <span>paused for {lasted(Math.max(0, now - (doc.since ?? now)))}</span>
-            <Button
-              className="h-7 font-sans text-[12px]"
-              disabled={busy}
-              onClick={() => {
-                setBusy(true)
-                void api
-                  .action(PlayAction)
-                  .catch((error: unknown) =>
-                    store.notify({ level: 'error', message: errorMessage(error) }),
-                  )
-                  .finally(() => setBusy(false))
-              }}
-              size="sm"
-              variant="outline"
-            >
-              <PlayIcon className="size-3" />
-              Play
-            </Button>
+            <PlayButton />
+          </>
+        ) : (
+          <span className="flex items-center gap-1.5">
+            <PlayIcon className="size-3" />
+            continued after Play
+          </span>
+        )}
+      </footer>
+    </Card>
+  )
+}
+
+function PlayButton() {
+  const [busy, setBusy] = useState(false)
+  return (
+    <Button
+      className="h-7 font-sans text-[12px]"
+      disabled={busy}
+      onClick={() => {
+        setBusy(true)
+        void api
+          .action(PlayAction)
+          .catch((error: unknown) => store.notify({ level: 'error', message: errorMessage(error) }))
+          .finally(() => setBusy(false))
+      }}
+      size="sm"
+      variant="outline"
+    >
+      <PlayIcon className="size-3" />
+      Play
+    </Button>
+  )
+}
+
+function GaveUpCard({ entry }: { entry: EntryRecord }) {
+  const data = (entry.data ?? {}) as Partial<GaveUp>
+  const doc = useDocOf(ROOT, PauseDoc)
+  if (!data.limit || data.since === undefined || data.at === undefined) return null
+  const holding = doc?.paused === true && doc.since === data.since
+  return (
+    <Card attention={holding} className="border-l-warning/60" data-pause-gave-up>
+      <header className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
+        <PauseIcon className="size-3.5 text-warning" />
+        <span className="text-foreground">{data.limit.provider}</span>
+        <span>still rate limited · stopped checking</span>
+        <span className="ml-auto truncate">{data.limit.model}</span>
+      </header>
+      <div className="space-y-2 px-3 py-3 text-[13px] leading-relaxed">
+        <p>
+          Still limited after {lasted(data.at - data.since)}
+          {data.checks === undefined ? '' : ` and ${checks(data.checks)}`}: Ultimate stays paused
+          and checks no more.
+        </p>
+        <p className="text-[12px] text-muted-foreground">
+          Press Play once the limit resets, or switch the held agents to another provider’s model
+          first; held runs then continue where they stopped.
+        </p>
+      </div>
+      <footer className="flex items-center justify-between gap-2 border-t border-border/60 px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
+        {holding ? (
+          <>
+            <span>since {clock(data.since)}</span>
+            <PlayButton />
           </>
         ) : (
           <span className="flex items-center gap-1.5">
@@ -472,7 +537,9 @@ function AutoPlayedNote({ entry }: { entry: EntryRecord }) {
           · {lasted(data.at - data.since)}{' '}
           {data.held && data.minutes === undefined
             ? `held by ${data.held.source}`
-            : 'after the rate limit'}{' '}
+            : data.checks
+              ? `after the rate limit · answered at check ${data.checks + 1}`
+              : 'after the rate limit'}{' '}
           · {clock(data.at)}
         </span>
       </span>
@@ -501,6 +568,7 @@ export default defineWebExtension({
     'pause.note': Note,
     'pause.limit': attention(Limit),
     'pause.autoplay': AutoPlayedNote,
+    'pause.gave-up': attention(GaveUpCard),
     'pause.held': Held,
   },
   commands: [
