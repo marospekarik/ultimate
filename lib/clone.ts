@@ -4,7 +4,7 @@
  */
 import { stat } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
-import { exec } from './exec.ts'
+import { runGit } from './git.ts'
 import type { Git } from './fast-forward.ts'
 import { acquireLock } from './lock.ts'
 import { meansNone } from './errors.ts'
@@ -15,7 +15,7 @@ export const gitIn =
   async (...args) => {
     try {
       const env = { ...process.env, GIT_TERMINAL_PROMPT: '0' }
-      return (await exec('git', args, { cwd: root, env, timeout: 120_000 })).stdout.trim()
+      return (await runGit(root, args, { env, timeout: 120_000 })).stdout.trim()
     } catch (error) {
       const { stderr = '' } = error as { stderr?: string }
       throw new Error(`git ${args[0]} failed: ${stderr.trim() || String(error)}`, { cause: error })

@@ -1,8 +1,7 @@
 /** Local Git diffs for review: a spec's two sides, its patch split per file with counts and status, capped in size. */
 import { lstat, readlink } from 'node:fs/promises'
 import { join } from 'node:path'
-import { exec } from '../../lib/exec.ts'
-import { git } from '../../lib/git.ts'
+import { git, runGit } from '../../lib/git.ts'
 import { errnoCode, meansNone } from '../../lib/errors.ts'
 import type { ReviewDiff, ReviewFile, ReviewKind } from './refs.ts'
 
@@ -13,7 +12,14 @@ export const TOTAL_CAP = 8 * 1024 * 1024
 /** Git's output may be this big before a diff is given up as too large. */
 const BUFFER = 16 * 1024 * 1024
 // Fixed `a/` and `b/` prefixes: work-tree and `--no-index` diffs would use mnemonic ones (`w/`, `1/`) the parser rejects.
-const DIFF = ['--no-color', '--no-ext-diff', '-M', '--src-prefix=a/', '--dst-prefix=b/']
+const DIFF = [
+  '--no-color',
+  '--no-ext-diff',
+  '--no-textconv',
+  '-M',
+  '--src-prefix=a/',
+  '--dst-prefix=b/',
+]
 
 type Sides = { kind: ReviewKind; title: string; base: string; head?: string }
 type Options = {
@@ -172,8 +178,7 @@ const tooBig = (error: unknown) => errnoCode(error) === 'ERR_CHILD_PROCESS_STDIO
 async function tracked(cwd: string, base: string, head: string | undefined, signal?: AbortSignal) {
   const range = head ? [base, head] : [base]
   const run = (...args: string[]) =>
-    exec('git', ['diff', ...DIFF, ...args, ...range, '--'], {
-      cwd,
+    runGit(cwd, ['diff', ...DIFF, ...args, ...range, '--'], {
       signal,
       timeout: 30000,
       maxBuffer: BUFFER,
@@ -195,10 +200,10 @@ async function tracked(cwd: string, base: string, head: string | undefined, sign
 
 /** `git diff --no-index` of a new file, which exits 1 because there is a difference. */
 async function untrackedDiff(top: string, path: string, args: string[], signal?: AbortSignal) {
-  const result = await exec(
-    'git',
+  const result = await runGit(
+    top,
     ['diff', '--no-index', ...DIFF, ...args, '--', '/dev/null', path],
-    { cwd: top, signal, timeout: 30000, maxBuffer: BUFFER },
+    { signal, timeout: 30000, maxBuffer: BUFFER },
   ).catch((error: { code?: unknown; stdout?: string }) => {
     if (error.code === 1 && typeof error.stdout === 'string') return { stdout: error.stdout }
     throw error
@@ -218,8 +223,7 @@ const linkPatch = (path: string, target: string) =>
 
 /** Files Git does not track and does not ignore, each as an added file with its patch; a symlink as its target. */
 async function untracked(top: string, signal?: AbortSignal) {
-  const list = await exec('git', ['ls-files', '--others', '--exclude-standard', '-z'], {
-    cwd: top,
+  const list = await runGit(top, ['ls-files', '--others', '--exclude-standard', '-z'], {
     signal,
     timeout: 30000,
     maxBuffer: BUFFER,

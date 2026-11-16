@@ -49,7 +49,7 @@ import {
 import type { AgentDefinition, DefinitionFields } from '../../lib/agents.ts'
 import { createChild, reconfigure, started } from './children.ts'
 import { implementAction } from '../../lib/actions.ts'
-import { exec } from '../../lib/exec.ts'
+import { runGit } from '../../lib/git.ts'
 import { shortTitle } from '../../lib/title.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
 import { ConversationsApi, Marks } from '../conversations/api.ts'
@@ -1316,8 +1316,7 @@ export default function subagents(
             // Untrimmed NUL-separated name lists: the git helper in lib/ trims, which would cut a
             // leading space off the first name.
             const list = (...command: string[]) =>
-              exec('git', [...command, '-z'], {
-                cwd: workspace!.path,
+              runGit(workspace!.path, [...command, '-z'], {
                 maxBuffer: 1024 * 1024,
               }).then(({ stdout }) => stdout.split('\0').filter(Boolean))
             const uncommitted =

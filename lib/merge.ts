@@ -2,7 +2,7 @@
  * Merging a diverged clone with origin: predicting conflicts without touching the worktree, the restore ref
  * written before a merge so it can be undone, and the merge itself — never a rebase, reset or stash.
  */
-import { exec } from './exec.ts'
+import { runGit } from './git.ts'
 import type { FastForward, Git, Standing } from './fast-forward.ts'
 import { Refusal } from './fast-forward.ts'
 import { overshadowed, retriedLater } from './errors.ts'
@@ -17,8 +17,7 @@ export async function conflictsPredicted(
   remote: string,
 ): Promise<boolean | undefined> {
   try {
-    await exec('git', ['merge-tree', '--write-tree', 'HEAD', remote], {
-      cwd: root,
+    await runGit(root, ['merge-tree', '--write-tree', 'HEAD', remote], {
       env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
       timeout: 120_000,
     })
