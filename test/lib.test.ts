@@ -9,7 +9,7 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import { join } from 'node:path'
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 import { git, gitArgs, isolatable, noCommit, noRepository } from '../lib/git.ts'
 import { spawn } from '../lib/spawn.ts'
 import { readJson, updateJson, writeJson } from '../lib/json-file.ts'
@@ -168,6 +168,34 @@ function gitWithStdin(argv: string[], cwd: string, stdin: string) {
     child.stdin?.end()
   })
 }
+
+it('fetches over ssh with no global ssh command, never running a repo-local one', async () => {
+  const dir = await temp('ultimate-lib-')
+  const repo = await hardeningRepo(dir)
+  const bin = join(dir, 'bin')
+  const reached = join(dir, 'ssh-reached')
+  const pwned = join(dir, 'pwned')
+  await mkdir(bin)
+  await writeFile(join(bin, 'ssh'), `#!/bin/sh\ntouch ${reached}\nexit 1\n`, { mode: 0o755 })
+  const global = join(dir, 'gitconfig')
+  await writeFile(global, '')
+  await git(repo, 'remote', 'add', 'origin', 'git@example.com:owner/repo.git')
+  await git(repo, 'config', 'core.sshCommand', `touch ${pwned}`)
+  // A host GIT_SSH or GIT_SSH_COMMAND would run instead of the fake ssh on PATH.
+  vi.stubEnv('GIT_CONFIG_GLOBAL', global)
+  vi.stubEnv('GIT_SSH', undefined)
+  vi.stubEnv('GIT_SSH_COMMAND', undefined)
+  vi.stubEnv('PATH', `${bin}:${process.env.PATH}`)
+  try {
+    await expect(git(repo, 'fetch', 'origin')).rejects.toThrow(
+      'Could not read from remote repository',
+    )
+    await access(reached)
+    await expect(access(pwned)).rejects.toThrow('ENOENT')
+  } finally {
+    vi.unstubAllEnvs()
+  }
+})
 
 it('keeps the global ssh command and credential helper over a repo-local value', async () => {
   const dir = await temp('ultimate-lib-')
