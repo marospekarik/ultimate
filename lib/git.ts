@@ -54,6 +54,10 @@ async function trustedGlobal(): Promise<Trusted> {
     const args: string[] = []
     const keys = new Set<string>()
     const result = await exec('git', ['config', '--global', '--null', '--list']).catch(meansNone)
+    // `credential.helper` (and `credential.<url>.helper`) is a multi-valued list accumulated across scopes, so
+    // re-applying the global values alone would still run a repo-local helper. An empty `credential.helper` resets the
+    // whole list; emit that first, then the global helpers in order.
+    args.push('-c', 'credential.helper=')
     // `--null --list` prints `key\nvalue\0` pairs; repeated keys keep their order (a `credential.<url>.helper=`
     // reset before the real helper, for example), and `-c` preserves that order. Git lowercases section and key
     // names, so the filter is case-insensitive.
@@ -65,26 +69,21 @@ async function trustedGlobal(): Promise<Trusted> {
       args.push('-c', `${name}=${pair.slice(newline + 1)}`)
       keys.add(name)
     }
-    // Always override the unscoped keys too, so a repo-local sshCommand or helper cannot run when global sets none.
-    // Git lowercases section and key names, so the canonical names are lowercase here.
-    for (const name of ['core.sshcommand', 'credential.helper'])
-      if (!keys.has(name)) args.push('-c', `${name}=`)
+    // `core.sshCommand` is single-valued; empty it when global sets none, so a repo-local value cannot run.
+    if (!keys.has('core.sshcommand')) args.push('-c', 'core.sshcommand=')
     return { args, keys }
   })()
   return trusted
 }
 
-/** Subcommands that materialise files and so can run a smudge/process filter or, for merge, a merge driver. */
-const WRITES = new Set(['checkout', 'reset', 'merge', 'switch', 'restore'])
-const writesFiles = (args: readonly string[]) =>
-  WRITES.has(args[0] ?? '') || (args[0] === 'worktree' && args[1] === 'add')
-
 const DRIVER_KEY = /^(filter\..*\.(smudge|clean|process)|merge\..*\.driver)$/i
 
 /**
- * Repo-local filter and merge-driver commands the subcommand would run, forced empty. The global values for the same
- * keys are re-applied above, so git-lfs keeps working while a driver only the repository defines cannot run a program
- * (`.gitattributes` names the driver, but the command to run always comes from config).
+ * Repo-local filter and merge-driver commands forced empty, so `.gitattributes` cannot run a program on any command
+ * (clean and process filters run on status, diff, add, stash and commit too, not only checkout and merge). The global
+ * values for the same keys are re-applied above, so git-lfs keeps working while a driver only the repository defines
+ * cannot run (`.gitattributes` names the driver, but the command to run always comes from config). Listed fresh each
+ * call: a driver the repository adds must not survive in a cache.
  */
 async function localDrivers(cwd: string, global: ReadonlySet<string>): Promise<string[]> {
   const result = await exec('git', ['config', '--null', '--list'], { cwd }).catch(meansNone)
@@ -106,6 +105,12 @@ export type RunGitOptions = {
   env?: NodeJS.ProcessEnv
 }
 
+/** The neutralising `-c` overrides prepended to a host git command, before its own `args`. */
+export async function gitArgs(cwd: string, args: readonly string[]): Promise<string[]> {
+  const global = await trustedGlobal()
+  return [...NEUTRALISE, ...global.args, ...(await localDrivers(cwd, global.keys)), ...args]
+}
+
 /**
  * Run git in `cwd` with the host's neutralising config prepended; resolves `{ stdout, stderr }`, rejects with
  * execFile's error, stderr in its message. Every host-side git call should go through this or `git`.
@@ -115,10 +120,7 @@ export async function runGit(
   args: readonly string[],
   options: RunGitOptions = {},
 ): Promise<{ stdout: string; stderr: string }> {
-  const global = await trustedGlobal()
-  const prefix: string[] = [...NEUTRALISE, ...global.args]
-  if (writesFiles(args)) prefix.push(...(await localDrivers(cwd, global.keys)))
-  return exec('git', [...prefix, ...args], {
+  return exec('git', await gitArgs(cwd, args), {
     cwd,
     timeout: 30000,
     maxBuffer: 1024 * 1024,

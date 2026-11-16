@@ -10,7 +10,8 @@ import {
 } from 'node:fs/promises'
 import { join } from 'node:path'
 import { expect, it } from 'vitest'
-import { git, isolatable, noCommit, noRepository } from '../lib/git.ts'
+import { git, gitArgs, isolatable, noCommit, noRepository } from '../lib/git.ts'
+import { spawn } from '../lib/spawn.ts'
 import { readJson, updateJson, writeJson } from '../lib/json-file.ts'
 import { readSettings, updateSettings } from '../lib/settings.ts'
 import { shortTitle } from '../lib/title.ts'
@@ -137,16 +138,48 @@ it('does not run a repo smudge filter command on checkout', async () => {
   await expect(access(marker)).rejects.toThrow('ENOENT')
 })
 
+it('does not run a repo clean filter command on git status', async () => {
+  const dir = await temp('ultimate-lib-')
+  const repo = await hardeningRepo(dir)
+  const marker = join(dir, 'clean')
+  await git(repo, 'config', 'filter.evil.clean', `touch ${marker}; cat`)
+  await writeFile(join(repo, '.gitattributes'), '*.bin filter=evil\n')
+  await writeFile(join(repo, 'x.bin'), 'ABC')
+  await git(repo, 'add', '.')
+  await git(repo, 'commit', '-m', 'attributes')
+  // status compares the worktree with the index, running the clean filter; the host must not run the command.
+  await git(repo, 'status', '--porcelain')
+  await expect(access(marker)).rejects.toThrow('ENOENT')
+})
+
+/** Run `git` with `argv` and `stdin`, resolving its combined output; the way to exercise commands that read stdin. */
+function gitWithStdin(argv: string[], cwd: string, stdin: string) {
+  return new Promise<string>((resolve, reject) => {
+    const child = spawn('git', argv, {
+      cwd,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    })
+    let output = ''
+    child.stdout?.on('data', (chunk) => (output += chunk))
+    child.stderr?.on('data', (chunk) => (output += chunk))
+    child.on('error', reject)
+    child.on('close', () => resolve(output))
+    child.stdin?.write(stdin)
+    child.stdin?.end()
+  })
+}
+
 it('keeps the global ssh command and credential helper over a repo-local value', async () => {
   const dir = await temp('ultimate-lib-')
   const repo = await hardeningRepo(dir)
+  const marker = join(dir, 'credential-helper')
   const global = join(dir, 'gitconfig')
   await writeFile(
     global,
     [
       '[core]',
       '  sshCommand = ssh -i /tmp/trusted-key',
-      '[credential "https://github.com"]',
+      '[credential]',
       '  helper = !echo trusted',
       '',
     ].join('\n'),
@@ -154,11 +187,17 @@ it('keeps the global ssh command and credential helper over a repo-local value',
   process.env.GIT_CONFIG_GLOBAL = global
   try {
     await git(repo, 'config', 'core.sshCommand', 'touch /tmp/pwned')
-    await git(repo, 'config', 'credential.https://github.com.helper', '!touch /tmp/pwned')
+    await git(repo, 'config', 'credential.helper', `!touch ${marker}`)
+    await git(repo, 'config', 'credential.https://github.com.helper', `!touch ${marker}`)
     expect(await git(repo, 'config', '--get', 'core.sshCommand')).toBe('ssh -i /tmp/trusted-key')
-    expect(await git(repo, 'config', '--get', 'credential.https://github.com.helper')).toBe(
-      '!echo trusted',
+    // credential.helper is multi-valued across scopes: a fill must run only the global helper, never the repo-local one.
+    const fill = await gitWithStdin(
+      await gitArgs(repo, ['credential', 'fill']),
+      repo,
+      'protocol=https\nhost=github.com\n\n',
     )
+    expect(fill).toContain('trusted')
+    await expect(access(marker)).rejects.toThrow('ENOENT')
   } finally {
     delete process.env.GIT_CONFIG_GLOBAL
   }
