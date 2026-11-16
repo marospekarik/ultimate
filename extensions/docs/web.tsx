@@ -881,7 +881,7 @@ function Docs() {
                   {(list.error ?? doc.error)?.message}
                 </p>
               )}
-              {path === null && !list.error && (
+              {path === null && list.data && !list.error && (
                 <p className="text-muted-foreground font-mono text-[12px]">
                   No Markdown docs tracked by git in this project.
                 </p>
