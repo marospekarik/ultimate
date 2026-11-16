@@ -638,7 +638,14 @@ export default function subagents(
   const service: SubagentsService = {
     async createChild(tx, options) {
       const child = await createChild(host, tx, options)
-      await started(host, tx, child, options.definition?.name ?? options.label, 'child')
+      await started(
+        host,
+        tx,
+        child,
+        options.definition?.name ?? options.label,
+        'child',
+        options.definition?.name,
+      )
       return child
     },
     async reconfigure(tx, id, { definition, parentAgent, modelRuntime }) {
@@ -1151,7 +1158,14 @@ export default function subagents(
                   cwd: parent.cwd ?? host.projectRoot,
                 })
                 conversationId = child.id
-                await started(host, tx, child, label!, 'child')
+                await started(
+                  host,
+                  tx,
+                  child,
+                  label!,
+                  'child',
+                  args.agent ? definition.name : undefined,
+                )
                 const runs = await tx.doc(Runs, ROOT_CONVERSATION_ID)
                 const { model: ran } = await tx.doc(AgentDoc, child.id)
                 runs[String(child.id)] = {
@@ -1161,6 +1175,7 @@ export default function subagents(
                 state.agents[String(child.id)] = {
                   conversationId,
                   agent: label!,
+                  ...(args.agent ? { definition: definition.name } : {}),
                   background: args.background === true,
                   reported: [],
                 }

@@ -442,6 +442,14 @@ it('makes an agent on the fly from the call, read-only without a worktree, and r
   })
 })
 
+it('records the definition name beside the label when start gives both', async () => {
+  const f = await fixture()
+  await call(f.opened, { action: 'start', agent: 'scout', label: 'sneaky probe', task: 'Probe' })
+  const [child] = await children(f.opened)
+  expect(child.agent).toBe('sneaky probe')
+  expect(child.definition).toBe('scout')
+})
+
 it('routes asynchronous leaf reports only to their lead, not the root', async () => {
   const f = await fixture()
   await writeFile(
@@ -1992,6 +2000,7 @@ describe('subagents', () => {
       [second, first].map((started) => ({
         id: started.conversationId,
         agent: 'scout',
+        definition: 'scout',
         kind: 'child',
         model: 'faux/faux-1',
         thinking: 'off',

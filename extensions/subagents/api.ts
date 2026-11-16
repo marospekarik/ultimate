@@ -21,6 +21,7 @@ export const Subagents = defineDoc<{
     {
       conversationId: ConversationId
       agent: string
+      definition?: string
       background: boolean
       reported: EntryId[]
     }

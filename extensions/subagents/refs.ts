@@ -75,11 +75,13 @@ export type DefinitionFields = {
 /**
  * Conversation `id` was configured to run as an agent: a subagent or automation run (`child`, `parent` the conversation
  * that owns it), a new standing agent's conversation (`standing`), or a branch (`branch`, `parent` the conversation it
- * forked from). `agent` is the definition or label, `model` `provider/modelId`. Emitted in the creating commit.
+ * forked from). `agent` is the definition or label, `definition` the definition name when one configured it (absent for
+ * an agent made on the fly or a branch), `model` `provider/modelId`. Emitted in the creating commit.
  */
 export const Started = defineEvent<{
   id: ConversationId
   agent: string
+  definition?: string
   model?: string
   thinking?: string
   parent?: ConversationId

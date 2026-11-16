@@ -27,6 +27,7 @@ export async function started(
   conversation: ConversationRecord,
   agent: string,
   kind: 'child' | 'standing' | 'branch',
+  definition?: string,
 ) {
   const { model, thinkingLevel } = await tx.doc(AgentDoc, conversation.id)
   const parent = conversation.owner?.conversationId ?? conversation.parent?.conversationId
@@ -34,6 +35,7 @@ export async function started(
     id: conversation.id,
     agent,
     kind,
+    ...(definition ? { definition } : {}),
     ...(model ? { model: `${model.provider}/${model.modelId}` } : {}),
     ...(thinkingLevel ? { thinking: thinkingLevel } : {}),
     ...(parent === undefined ? {} : { parent }),
