@@ -101,6 +101,21 @@ export const log = (
     },
   })
 }
+const starterLine = (
+  branch: ConversationId,
+  sha: string,
+  outcome: WorkspaceIndex['results'][string],
+) =>
+  [
+    `#${branch}${outcome.subject?.title ? ` ${outcome.subject.title}` : ''} ${outcome.commits?.length ? `landed as ${sha.slice(0, 7)} on ${outcome.target}` : `had nothing new to land on ${outcome.target}`}`,
+    ...(outcome.pushed ? [`pushed`] : []),
+    ...(outcome.reason ? [outcome.reason] : []),
+    ...(outcome.needsRestart ? ['needs restart'] : []),
+    ...(outcome.flaky?.length ? [`flaky: ${outcome.flaky.join(', ')}`] : []),
+  ]
+    .join(' · ')
+    .replace(/\s*\n\s*/g, ' ')
+
 type Host = Pick<
   ExtensionHost,
   | 'home'
@@ -310,7 +325,7 @@ type CommittedDeliveryDecision = {
   phase: 'deliver'
   id: string
   conversationId: ConversationId
-  text: string
+  headline: string
   outcome: WorkspaceIndex['results'][string]
   concluded: boolean
   starter?: ConversationId
@@ -323,6 +338,7 @@ type UnderwayReportPhase = {
   id: string
   conversationId: BranchReportHeldAsNote
   text: string
+  headline: string
   outcome: WorkspaceIndex['results'][string]
 }
 
@@ -356,7 +372,7 @@ export function createLander(
 
   function landingOutcomeCommitter(runtime: Runtime, context: Context, entry: QueueEntry) {
     const id = entry.id
-    const commitLandingOutcome = (text: string, outcome: LanderOutcome) =>
+    const commitLandingOutcome = (text: string, outcome: LanderOutcome, sha = outcome.sha) =>
       runtime.commit(async (tx) => {
         const draft = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
         const steps = draft.queue.find((item) => item.id === id)!.steps
@@ -415,6 +431,7 @@ export function createLander(
             id,
             conversationId: entry.conversationId,
             outcome: draft.results[id],
+            headline: starterLine(entry.conversationId, sha ?? '', draft.results[id]),
             text: `[lander] Submission ${id} (#${entry.conversationId}, ${entry.tip.slice(0, 7)}) ${text}\nLog: lander conversation #${runtime.conversationId}.`,
           },
         }
@@ -566,6 +583,7 @@ export function createLander(
               ...(pushed.remote ? { pushed: pushed.remote } : {}),
               ...(needsRestart ? { needsRestart } : {}),
             },
+            sha,
           )
         }
         const openPullRequest = async (pr: NonNullable<Settings['pr']>, sha: string) => {
@@ -727,7 +745,7 @@ export function createLander(
                       await mergeOrReportConflict(
                         fetched,
                         `Merge ${settings.push}/${target}`,
-                        `${settings.push}/${target} conflicts with local ${target} in`,
+                        `${settings.push}/${target} conflicts with local ${target}`,
                         `Reconcile ${settings.push}/${target} with local ${target}, then submit again.`,
                       )
                     )
@@ -1084,7 +1102,7 @@ export function createLander(
         )
       },
       report: async (task, runtime, context) => {
-        const { id, conversationId, text, outcome } = task.state.checkpoint
+        const { id, conversationId, text, headline, outcome } = task.state.checkpoint
         const branch = conversationId
         const entry = { kind: LanderReportEntry.kind, data: { id, outcome } }
         const next = { status: 'running', checkpoint: { phase: 'next' } } as const
@@ -1130,7 +1148,7 @@ export function createLander(
               phase: 'deliver',
               id,
               conversationId,
-              text,
+              headline,
               outcome,
               concluded: concludedInThisCommit,
               ...(starter !== undefined && starter !== branch ? { starter } : {}),
@@ -1142,13 +1160,13 @@ export function createLander(
         const {
           id,
           conversationId,
-          text,
+          headline,
           outcome,
           concluded: conclusionCommitted,
           starter,
         } = task.state.checkpoint
         const entry = { kind: LanderReportEntry.kind, data: { id, outcome } }
-        const content = `${text}\nDiverged: ${outcome.divergence}\n${conclusionCommitted ? `#${conversationId} is concluded.` : `#${conversationId} still has work under way; it reports when it stops.`}`
+        const content = `${headline}\nDiverged: ${outcome.divergence}\n${conclusionCommitted ? `#${conversationId} is concluded.` : `#${conversationId} still has work under way; it reports when it stops.`}`
         if (starter !== undefined)
           await (
             await host.harness().conversation(starter, context)
