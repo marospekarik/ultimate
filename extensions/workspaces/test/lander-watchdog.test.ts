@@ -121,8 +121,11 @@ it('names the failed tests of a check that exits nonzero', async () => {
   )
 })
 
+const emptyHome = join(tmpdir(), 'no-user-home')
 const settings = (checks: unknown) =>
   landerSettings({
+    userHome: emptyHome,
+    projectRoot: '/project',
     projectSettings: async () => ({ lander: { checks } }) as never,
   })
 

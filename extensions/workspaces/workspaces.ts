@@ -83,6 +83,7 @@ type Host = Pick<
   | 'ultimateRoot'
   | 'projectRoot'
   | 'projectSettings'
+  | 'userHome'
   | 'need'
   | 'want'
   | 'resource'

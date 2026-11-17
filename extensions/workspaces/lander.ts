@@ -19,6 +19,7 @@ import { debounce, deadline } from '../../lib/timers.ts'
 import { git } from '../../lib/git.ts'
 import { overshadowed, retriedLater, settled } from '../../lib/errors.ts'
 import { needsRestart as restartNeeded } from '../../lib/layers.ts'
+import { readSettings, userSettingsPath } from '../../lib/settings.ts'
 import { quoteMentions } from '../../lib/mentions.ts'
 import { runGroup, sweepPidFiles } from '../../lib/process-group.ts'
 import { landingWeight } from '../../lib/token-weight.ts'
@@ -107,6 +108,8 @@ type Host = Pick<
   | 'ultimateRoot'
   | 'harness'
   | 'projectSettings'
+  | 'userHome'
+  | 'projectRoot'
   | 'doc'
   | 'metadata'
   | 'notice'
@@ -242,10 +245,16 @@ const parseCheck = (value: unknown): Check | undefined => {
     ...(typeof stall === 'number' ? { stall } : {}),
   }
 }
-export const landerSettings = async (host: Pick<Host, 'projectSettings'>): Promise<Settings> => {
-  const lander = (await host.projectSettings()).lander as
-    | { checks?: unknown; push?: unknown; pr?: unknown }
+type LanderKeys = { checks?: unknown; push?: unknown; pr?: unknown }
+export const landerSettings = async (
+  host: Pick<Host, 'projectSettings' | 'userHome' | 'projectRoot'>,
+): Promise<Settings> => {
+  const userLanders = (await readSettings(userSettingsPath(host.userHome))).landers as
+    | Record<string, LanderKeys>
     | undefined
+  const userLander = userLanders?.[host.projectRoot]
+  const projectLander = (await host.projectSettings()).lander as LanderKeys | undefined
+  const lander = { ...projectLander, ...userLander }
   const entries = lander?.checks ?? []
   const checks = Array.isArray(entries)
     ? entries.map((entry) =>
