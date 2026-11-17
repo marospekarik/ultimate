@@ -140,7 +140,7 @@ export async function sourceCopy(parent: string) {
     recursive: true,
     filter: (path) => {
       const parts = path.slice(resolve('.').length + 1).split('/')
-      return !['.git', 'node_modules', 'test'].includes(parts[0]) && parts[2] !== 'test'
+      return !['.git', 'node_modules'].includes(parts[0]) && parts[2] !== 'test'
     },
   })
   await linkDependencies(root)
