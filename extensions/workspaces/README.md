@@ -194,7 +194,7 @@ lander's sidebar row shows the feature it lands or landed last.
 `workspaces.confinement` is the extension point the optional `sandbox` extension provides (`Confinement` in `api.ts`, `want` it): `confined(id)` says whether a conversation's tools run in a sandbox, and `exec(id, command, options)` runs a shell command inside it. A confined subagent whose source is the project checkout cannot `land`: its commits reach the project checkout only through `workspace submit`.
 
 Settings (`.ultimate/settings.json`): `"lander": { "checks": ["pnpm check", [{ "command": "pnpm test", "timeout": 180 }, "pnpm test:e2e"]], "push": "origin" }`;
-both are optional. Anything that must follow every landing (a deploy, a notification) is an automation on the
+both are optional. `landers` in `~/.ultimate/settings.json` (`{ "<project root>": { "checks", "push", "pr" } }`) overrides those keys for that project on this machine, so a person's remote or check limits stay out of the committed file. Anything that must follow every landing (a deploy, a notification) is an automation on the
 `workspaces.landed` event.
 
 Each attempt starts from a reset checkout, and the integrated commit is memoized after the checks, so a crash resumes
