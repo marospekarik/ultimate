@@ -9,6 +9,7 @@ import {
   defineExtension,
   defineTool,
   LiveDoc,
+  ROOT_CONVERSATION_ID,
   type ToolExecutionApi,
   type ToolExecutionResult,
   type ToolRegistration,
@@ -27,7 +28,18 @@ import { git } from '../../lib/git.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { watchSteer } from '../../lib/steer.ts'
-import { CancelAction, CancelledDoc, Committed } from './refs.ts'
+import { BackgroundStarted, CancelAction, CancelledDoc, Committed } from './refs.ts'
+import { Concluded, ConversationsApi } from '../conversations/api.ts'
+import { defineEffect } from '../../lib/effect.ts'
+import {
+  BackgroundGroups,
+  recordStarted,
+  startBackground,
+  type Started,
+  stopStarted,
+  sweepEarlierProcesses,
+  takeStarted,
+} from './background.ts'
 
 const modelSizedImages = await createNodePhotonImages()
 
@@ -102,7 +114,7 @@ const DurableCancellations = defineDoc<{ calls: Record<string, number> }>({
   fork: 'initial',
   initial: () => ({ calls: {} }),
 })
-export const docs = [DurableCancellations]
+export const docs = [DurableCancellations, BackgroundGroups]
 
 function took(ms: number) {
   const seconds = Math.round(ms / 1000)
@@ -257,7 +269,42 @@ async function madeCommits(
   return events
 }
 
-export default function codingTools(host: Pick<ExtensionHost, 'emit'>) {
+export default function codingTools(
+  host: Pick<ExtensionHost, 'emit' | 'home' | 'need' | 'notice' | 'onOpen' | 'react'>,
+) {
+  host.onOpen(() =>
+    sweepEarlierProcesses(host.home).catch((error: unknown) =>
+      host.notice(`Stopping background processes an earlier Ultimate left: ${String(error)}`),
+    ),
+  )
+  const StopBackground = defineEffect<{ groups: Started[] }, null>(
+    'coding-tools.stop-background',
+    async ({ groups }) => {
+      await stopStarted(host.home, groups)
+      return null
+    },
+    async (_tx, { groups }, outcome) => {
+      if (!outcome.ok)
+        host.notice(
+          `Stopping background processes of #${[...new Set(groups.map((group) => group.conversation))].join(', #')} failed: ${outcome.error}`,
+        )
+    },
+  )
+  host.react('stop-background', [BackgroundStarted, Concluded], async (tx, event) => {
+    if (BackgroundStarted.is(event)) return recordStarted(tx, event.data)
+    if (!Concluded.is(event)) return
+    const groups = await takeStarted(tx, event.data.conversations)
+    if (!groups.length) return
+    await tx.createTask(
+      StopBackground,
+      { groups },
+      {
+        conversationId: ROOT_CONVERSATION_ID,
+        ownership: { kind: 'conversation' },
+        background: true,
+      },
+    )
+  })
   const shell = createBashTool()
   const parameters = obj({
     command: str({ description: 'Bash command to execute' }),
@@ -273,11 +320,51 @@ export default function codingTools(host: Pick<ExtensionHost, 'emit'>) {
           'Only for commands that just wait or poll (CI checks, deploys, a file appearing): a steering message ends the command early. Never combine with commands that change things.',
       }),
     ),
+    background: opt(
+      bool({
+        description:
+          'For servers and other long-running processes: start the command in its own process group and return at once with the group id, a log file of its output and the command that stops it. Do not add & yourself. Ultimate stops it when this conversation concludes or Ultimate restarts.',
+      }),
+    ),
   })
   const tracedBashTool = defineTool({
     ...shell,
     parameters,
-    async execute({ interruptible, ...args }, api, context) {
+    async execute({ interruptible, background, ...args }, api, context) {
+      if (background) {
+        if (!api.env) throw new Error('No execution environment is configured')
+        const { pgid, log, started, stop } = await startBackground(
+          host,
+          api.conversationId,
+          api.env.cwd,
+          args.command,
+          context.abortSignal,
+        )
+        const conversations = host.need(ConversationsApi)
+        const concluded = await api
+          .commit(async (tx) => {
+            const ended = await conversations.concludedIn(tx)
+            for (let id: ConversationId | undefined = api.conversationId; id !== undefined;) {
+              if (ended.has(id)) return true
+              id = (await tx.conversation(id))?.owner?.conversationId
+            }
+            await host.emit(tx, BackgroundStarted, started)
+            return false
+          }, context)
+          .catch(async (error: unknown) => {
+            await stop()
+            throw error
+          })
+        if (concluded) {
+          await stop()
+          throw new Error('This conversation is concluded; its background processes are stopped')
+        }
+        const output = `Started in the background as process group ${pgid}.\nOutput: ${log}\nStop it with: kill -- -${pgid}`
+        return {
+          output: [{ type: 'text', text: output }],
+          structuredOutput: { output, truncated: false, exitCode: 0 },
+        }
+      }
       const change = interruptible ? changes(args.command) : undefined
       if (change)
         throw new Error(
@@ -311,6 +398,7 @@ export default function codingTools(host: Pick<ExtensionHost, 'emit'>) {
   })
   return defineExtension({
     name: 'coding-tools',
+    tasks: [StopBackground],
     tools: [
       createReadTool({ images: modelSizedImages }),
       createWriteTool(),

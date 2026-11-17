@@ -1,12 +1,14 @@
 import { defineExtension } from '@earendil-works/pi-durable'
-import type { ExtensionHost } from '../../server/extensions.ts'
 import { implementAction } from '../../lib/actions.ts'
+import type { ExtensionHost } from '../../server/extensions.ts'
 import { meansNone } from '../../lib/errors.ts'
-import { openaiError } from '../../lib/openai.ts'
-import { readSecret } from '../../lib/secrets.ts'
+import {
+  OPENAI_SECRET as SECRET,
+  openaiSecretOrNonOAuthKey,
+  openaiError,
+} from '../../lib/openai.ts'
 import { StatusAction, TranscribeAction } from './refs.ts'
 
-const SECRET = 'OPENAI_API_KEY'
 const LOGIN = 'openai-codex'
 const NO_CREDENTIAL = `Voice needs a ChatGPT login or an OpenAI API key: sign in with ChatGPT, or add ${SECRET} in ⌘K → Secrets`
 const TOO_LARGE = 'The recording is too large to transcribe'
@@ -30,18 +32,6 @@ export const secrets = [
 type VoiceHost = Pick<ExtensionHost, 'userHome' | 'modelRuntime'>
 
 type Credential = { kind: 'login'; token: string } | { kind: 'key'; key: string }
-
-async function openaiSecretOrNonOAuthKey(
-  host: VoiceHost,
-  signal?: AbortSignal,
-): Promise<string | undefined> {
-  const secret = await readSecret(host.userHome, SECRET)
-  if (secret) return secret
-  const runtime = host.modelRuntime
-  if (!runtime.getProviderAuthStatus('openai').configured || runtime.isUsingOAuth('openai'))
-    return undefined
-  return (await runtime.getAuth('openai', { signal }))?.auth.apiKey
-}
 
 async function credentialsLoginFirst(host: VoiceHost, signal?: AbortSignal): Promise<Credential[]> {
   const found: Credential[] = []

@@ -138,8 +138,10 @@ export async function sourceCopy(parent: string) {
   const root = await temp('source-', parent)
   await cp(resolve('.'), root, {
     recursive: true,
-    filter: (path) =>
-      !['.git', 'node_modules'].includes(path.slice(resolve('.').length + 1).split('/')[0]),
+    filter: (path) => {
+      const parts = path.slice(resolve('.').length + 1).split('/')
+      return !['.git', 'node_modules'].includes(parts[0]) && parts[2] !== 'test'
+    },
   })
   await linkDependencies(root)
   const config = join(root, 'vite.config.ts')

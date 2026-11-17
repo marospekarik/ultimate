@@ -1,7 +1,7 @@
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import { afterAll, expect, it } from 'vitest'
-import { fauxServer, removeTemp, temp, until } from './helpers.ts'
+import { fauxServer, removeTemp, sourceCopy, temp, until } from './helpers.ts'
 
 const homes: string[] = []
 afterAll(async () => {
@@ -13,8 +13,10 @@ it('builds the classes of a project extension folder created while the host runs
   homes.push(home)
   const projectRoot = join(home, 'project')
   await mkdir(join(projectRoot, '.ultimate'), { recursive: true })
+  const ultimateRoot = await sourceCopy(join(home, 'state'))
+  await writeFile(join(ultimateRoot, 'web/src/main.tsx'), "import './index.css'\n")
   const server = await fauxServer({
-    ultimateRoot: resolve('.'),
+    ultimateRoot,
     projectRoot,
     userHome: home,
     home: join(home, 'state'),
