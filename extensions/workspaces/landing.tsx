@@ -11,7 +11,15 @@ import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { MentionText } from '@/components/ai/message'
 import { Button } from '@/components/ui/button'
-import { api, definePoint, Fold, Provided, useConversationSummary, useUltimate } from '@/sdk'
+import {
+  AllProvided,
+  api,
+  definePoint,
+  Fold,
+  Provided,
+  useConversationSummary,
+  useUltimate,
+} from '@/sdk'
 import { FeatureTag, useStandingName } from '../conversations/ui.tsx'
 import { GithubAction, RepoAction } from './refs.ts'
 import type { GithubRepo } from './refs.ts'
@@ -78,6 +86,13 @@ export function useProjectRepo() {
 }
 
 export const Review = definePoint<string, (() => void) | undefined>('workspaces.review')
+
+export const LandedNote = definePoint<
+  { conversation: ConversationId; submission: string },
+  ReactNode | undefined
+>('workspaces.landed-note')
+
+export const LandingExtras = definePoint<ConversationId, ReactNode>('workspaces.landing-extras')
 
 const external = (href: string, children: ReactNode, className?: string) => (
   <a
@@ -185,6 +200,7 @@ export function LandingCard({
   at,
   divergence,
   sourceEntry,
+  submission,
   children,
 }: {
   card: number
@@ -196,6 +212,7 @@ export function LandingCard({
   at?: ReactNode
   divergence?: string
   sourceEntry?: number
+  submission?: string
   children?: ReactNode
 }) {
   const [border, color, Icon, label] = tones[tone]
@@ -247,6 +264,16 @@ export function LandingCard({
             </p>
           )}
           {children}
+          {submission && tone !== 'failed' && (
+            <Provided input={{ conversation: from, submission }} point={LandedNote}>
+              {(note) => note}
+            </Provided>
+          )}
+          {tone !== 'failed' && (
+            <AllProvided input={from} point={LandingExtras}>
+              {(extras) => extras}
+            </AllProvided>
+          )}
         </div>
       </section>
     </Fold>

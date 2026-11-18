@@ -11,6 +11,7 @@ import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { Kbd } from '@/components/ui/kbd'
 import {
+  AllProvided,
   cn,
   column,
   defineWebExtension,
@@ -19,6 +20,7 @@ import {
   formatTime,
   Header,
   provide,
+  Provided,
   Sidebar,
   useEvent,
   useNow,
@@ -26,11 +28,12 @@ import {
   useViewport,
 } from '@/sdk'
 import { FeatureTag, useOverview, useStandingName } from '../conversations/ui.tsx'
-import { Body, MessageImages, stateTone } from '../messages/ui.tsx'
+import { Body, MessageExtras, MessageImages, stateTone } from '../messages/ui.tsx'
 import type { Message } from '../messages/refs.ts'
 import { MessageQuestions } from '../questions/ui.tsx'
 import { UnderUltimate } from '../sidebar/ui.tsx'
 import { talkToUltimate } from '../subagents/ui.tsx'
+import { QuestionPane } from './ui.tsx'
 import { answeredToday, keyOf, lead, previewUrl, selection } from './items.tsx'
 import type { Entry } from './items.tsx'
 import { Waiting } from './ui.tsx'
@@ -271,6 +274,9 @@ function Reading({
 
   const answer = item ? (
     <div className="overflow-hidden rounded-lg border border-border/70 bg-card/60">
+      <AllProvided input={item} point={MessageExtras}>
+        {(extras) => extras}
+      </AllProvided>
       <MessageQuestions key={item.id} keys={!phone} message={item} />
     </div>
   ) : (
@@ -447,32 +453,43 @@ function Surface({ items, messages }: { items: Entry[]; messages: readonly Messa
     </span>
   )
 
-  const reading = item && (
+  const ownPane = item && (
     <Reading entry={item} key={item.key} now={now} onBack={() => setOpen(false)} phone={phone} />
   )
   return (
-    <div className="flex min-h-0 flex-1">
-      <Sidebar />
-      <main className="flex min-w-0 flex-1 flex-col">
-        {!(phone && open && item) && <Header>{title}</Header>}
-        {!items.length ? (
-          <Zero messages={messages} now={now} />
-        ) : phone ? (
-          open && item ? (
-            reading
-          ) : (
-            <List items={items} now={now} onSelect={select} phone selected={undefined} />
-          )
-        ) : (
-          <div className="flex min-h-0 flex-1">
-            <div className="flex w-[24rem] shrink-0 flex-col border-r border-border/70">
-              <List items={items} now={now} onSelect={select} phone={false} selected={selected} />
-            </div>
-            {reading}
-          </div>
-        )}
-      </main>
-    </div>
+    <Provided input={{ message: item?.message, phone }} point={QuestionPane}>
+      {(takeover) => (
+        <div className="flex min-h-0 flex-1">
+          <Sidebar />
+          <main className="flex min-w-0 flex-1 flex-col">
+            {!(phone && ((open && item) || takeover)) && <Header>{title}</Header>}
+            {!items.length && !takeover ? (
+              <Zero messages={messages} now={now} />
+            ) : phone ? (
+              (takeover ??
+              (open && item ? (
+                ownPane
+              ) : (
+                <List items={items} now={now} onSelect={select} phone selected={undefined} />
+              )))
+            ) : (
+              <div className="flex min-h-0 flex-1">
+                <div className="flex w-[24rem] shrink-0 flex-col border-r border-border/70">
+                  <List
+                    items={items}
+                    now={now}
+                    onSelect={select}
+                    phone={false}
+                    selected={selected}
+                  />
+                </div>
+                {takeover ?? ownPane}
+              </div>
+            )}
+          </main>
+        </div>
+      )}
+    </Provided>
   )
 }
 

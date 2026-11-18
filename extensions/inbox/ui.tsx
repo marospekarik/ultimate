@@ -31,6 +31,16 @@ export type InboxItem = {
 /** Every provider's items; the Inbox, its sidebar row and the To-dos' "For you" count merge them with the questions. */
 export const InboxItems = definePoint<null, InboxItem[]>('inbox.items')
 
+/**
+ * The reading pane, taken over by another extension while it shows something about a question: `side-chat` shows the
+ * question's side chat while it is in front, and keeps it after the question is answered elsewhere. `message` is the
+ * selected question, if any; undefined keeps the Inbox's own pane.
+ */
+export const QuestionPane = definePoint<
+  { message: Message | undefined; phone: boolean },
+  ReactNode | undefined
+>('inbox.question-pane')
+
 /** Renders with everything that waits on the user, oldest first: the open questions and every provided item. */
 export function Waiting({
   children,

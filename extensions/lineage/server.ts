@@ -36,7 +36,7 @@ import {
   UsageDoc,
 } from '@earendil-works/pi-durable'
 import { implementAction } from '../../lib/actions.ts'
-import { actingAs } from '../../lib/acting-as.ts'
+import { actingAs, isSideChat } from '../../lib/acting-as.ts'
 import type { ActionInput } from '../../lib/actions.ts'
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
@@ -614,6 +614,7 @@ function landingNote(landing: LandedData) {
     at: landing.at,
     divergence: landing.divergence,
     sha: landing.sha,
+    submission: landing.submission,
     base: landing.base,
     target: landing.target,
     commits: landing.commits,
@@ -1328,6 +1329,7 @@ export default function lineageExtension(host: ExtensionHost) {
       hook(GenerationTask, {
         beforeInput: async (input, api, ctx) => {
           await refuseTally(api.tx, api.conversationId)
+          if (await isSideChat(host, api.tx, api.conversationId)) return undefined
           return catchup(host, input, api, ctx, treeOf)
         },
       }),

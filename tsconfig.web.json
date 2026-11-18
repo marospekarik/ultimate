@@ -33,6 +33,8 @@
     "extensions/dream/types.ts",
     "extensions/lineage/types.ts",
     "extensions/phase/types.ts",
+    "extensions/plan/body.ts",
+    "extensions/plan/progress.ts",
     "extensions/recall/types.ts",
     "extensions/conversations/summary-model-ref.ts",
     "extensions/models/switches.ts",
@@ -82,6 +84,7 @@
     "lib/timers.ts",
     "lib/errors.ts",
     "lib/ids.ts",
+    "lib/question-cards.ts",
     "extensions/subagents/types.ts",
     "test/web",
     "extensions/*/test/web"
