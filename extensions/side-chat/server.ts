@@ -401,7 +401,7 @@ export function endTask(host: ExtensionHost) {
         await runtime.commit(async (tx) => {
           const state = await tx.doc(Side, id)
           if (state.ended) return terminal
-          await summaries.concludeIn(tx, [id])
+          await summaries.concludeIn(tx, [id], id)
           if (response) await summaries.accountResponse(tx, id, response)
           state.ended = mode
           const listed = (await tx.doc(Index, side.of!)).sides.find((item) => item.id === id)!
@@ -556,7 +556,7 @@ const draftAnswersTool = (host: ExtensionHost) =>
         const ui = await tx.doc(UiState, ROOT_CONVERSATION_ID)
         const cards = (ui[CARDS_KEY] ?? {}) as Record<string, CardState>
         const card = cardKey(message.id)
-        const previous = cardOf(cards, card)
+        const previous = cardOf(cards, card, questions)
         const drafts = { ...previous.drafts }
         const lines: string[] = []
         for (const { question, answer } of answers) {

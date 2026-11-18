@@ -1,7 +1,12 @@
 import { join } from 'node:path'
 import { fauxProvider, fauxAssistantMessage, fauxText } from '@earendil-works/pi-ai/providers/faux'
 import { configure, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
-import type { ConversationId, Tx } from '@earendil-works/pi-durable'
+import type {
+  Conversation,
+  ConversationId,
+  InputSubmissionDraft,
+  Tx,
+} from '@earendil-works/pi-durable'
 import type { JsonValue } from '@earendil-works/chord/json'
 import { afterEach, expect, it, vi } from 'vitest'
 import { context, prepareHarness } from '../../../server/harness.ts'
@@ -15,6 +20,7 @@ import { ContextUsageDoc } from '../../conversations/api.ts'
 import { Standing } from '../../subagents/api.ts'
 import type { SubagentsService } from '../../subagents/api.ts'
 import { createChild } from '../../subagents/children.ts'
+import { Workspaces } from '../../workspaces/workspaces.ts'
 import automations, { actions, Automations } from '../server.ts'
 import type { Automation } from '../types.ts'
 import { IDLE_TICK } from '../triggers.ts'
@@ -67,7 +73,21 @@ async function fixture() {
     onClose: (fn: () => Promise<void>) => {
       closer = fn
     },
-    ...apis(new Map<string, unknown>([['messages', { send, owed: async () => ({}) }]])),
+    ...apis(
+      new Map<string, unknown>([
+        [
+          'messages',
+          {
+            send,
+            owed: async () => ({}),
+            dropped: async () => {},
+            submitFire: (tx: Tx, to: Conversation, input: InputSubmissionDraft) =>
+              to.submit(tx, input),
+          },
+        ],
+        ['workspaces', { doc: Workspaces }],
+      ]),
+    ),
     extensions: () => [{ name: 'subagents', enabled: true }],
     projectSetup: async () => ({ decision: false }),
     notice: (message: string) => {

@@ -8,13 +8,13 @@ import type { Message, Question } from './api.ts'
 import type { Via } from './refs.ts'
 import { checkQuestions, gist, openQuestion } from './questions.ts'
 import { isOwed } from '../../lib/message-state.ts'
-import { actingAs } from '../../lib/acting-as.ts'
 import { UserInputEvent } from '../../shared/events.ts'
 import type { Device } from '../../shared/events.ts'
 import { resolveImages } from './images.ts'
 import type { ImagesRef } from './images.ts'
 import { append } from './log.ts'
-import { isFront, parentOf, resolveRecipient, senderName, starterOf } from './addresses.ts'
+import { isFront, parentOf, resolveRecipient, senderName, serve, starterOf } from './addresses.ts'
+import { actingAs } from '../../lib/acting-as.ts'
 import { delivery } from './delivery.ts'
 import { notice } from './notice.ts'
 
@@ -78,6 +78,7 @@ export async function send(
     report?: boolean
     routed?: EntryId
     echo?: boolean
+    serveBranch?: true
   } = {},
 ) {
   const { taskId, callId, requestId, answerId, device, via } = options
@@ -209,6 +210,8 @@ export async function send(
         return response.id
       }
     }
+    if (options.serveBranch && typeof from === 'number' && typeof to === 'number')
+      await serve(host, tx, from, { kind: 'branch', id: to })
     const message = await append(tx, {
       from,
       to,

@@ -1,7 +1,7 @@
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterAll, expect, it } from 'vitest'
-import { fauxServer, removeTemp, sourceCopy, temp, until } from './helpers.ts'
+import { fauxServer, removeTemp, sourceCopy, temp, until } from '../helpers.ts'
 
 const homes: string[] = []
 afterAll(async () => {
