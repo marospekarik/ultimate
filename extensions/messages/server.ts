@@ -40,7 +40,14 @@ import { receiptOf, send } from './send.ts'
 import type { Device } from '../../shared/events.ts'
 import type { Context } from '@earendil-works/chord/context'
 import { branchesConcluded, reported, route, working } from './route.ts'
-import { projectsSection, remoteAction, remoteReplyAction, tellTask, tell } from './remote.ts'
+import {
+  dismissTell,
+  projectsSection,
+  remoteAction,
+  remoteReplyAction,
+  tellTask,
+  tell,
+} from './remote.ts'
 import { branchTool } from './branch.ts'
 import { remoteProgress } from './progress.ts'
 import { safeToRerun } from '../../lib/replay.ts'
@@ -174,6 +181,15 @@ export const actions = {
     if (conversationId === undefined) throw new Error("Only @ultimate settles the user's questions")
     const standing = await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, ctx)
     const settler = await actingAs(host, conversationId, ctx)
+    const log = await host.harness().snapshot(Messages, ROOT_CONVERSATION_ID, ctx)
+    if (log?.messages.some((m) => m.id === messageId && m.to === 'remote')) {
+      if (standing?.ultimate === undefined || settler !== standing.ultimate)
+        throw new Error("Only @ultimate settles the user's questions")
+      if (!closing) throw new Error('A request to another project closes only with dismiss: true')
+      return {
+        id: await dismissTell(host, standing.ultimate, messageId as number, text.trim(), ctx),
+      }
+    }
     if (settler !== standing?.ultimate) {
       const asker = (await openMessage(host, messageId as number, ctx)).from
       const frontSettlesOwnOrStartedBranchQuestion =
