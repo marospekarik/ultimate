@@ -248,13 +248,13 @@ async function sendOneShotPingWithoutSession(
 async function tick(host: ExtensionHost, signal: AbortSignal) {
   if (stopped(host.want(PauseApi))) return
   const doc = await read(host)
-  if (doc.off) return
   const now = Date.now()
   const found = await activity(host, doc, now)
   if (found?.lastRequest && precoldDue(precoldInput(host, doc, found, now))) {
     await compactBeforeCold(host, found)
     return
   }
+  if (doc.off) return
   if (!found?.lastRequest || !due({ now, ...found })) return
   await sendOneShotPingWithoutSession(
     host,
