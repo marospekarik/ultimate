@@ -2,10 +2,11 @@ import { parseConversationId } from '../../../lib/ids.ts'
 import type { ConversationId } from '@earendil-works/pi-durable'
 
 import type { EventRecord } from '../../../shared/events.ts'
-import { deadline } from '../../../lib/timers.ts'
+import { deadline, within } from '../../../lib/timers.ts'
 import { CORE_EVENTS, EVENT_FEED } from '../../../shared/events.ts'
 import type { Api } from './api.ts'
 import { ROOT } from './api.ts'
+import type { UiAgent, UiAgentHandle } from './agent.ts'
 import type { State, Store } from './store.ts'
 
 export type Condition =
@@ -27,7 +28,13 @@ interface Sent {
 
 const SENT_KEY = 'ultimate.sent'
 
-export function createTestHook(store: Store, api: Api) {
+export function createTestHook(
+  store: Store,
+  api: Api,
+  agent: UiAgentHandle,
+  rendered: Promise<void>,
+  readsSettled: (signal: AbortSignal) => Promise<void>,
+) {
   const saved = JSON.parse(sessionStorage.getItem(SENT_KEY) ?? '{"sent":[]}') as {
     sent: [ConversationId, Sent][]
     last?: ConversationId
@@ -84,6 +91,21 @@ export function createTestHook(store: Store, api: Api) {
     })
   }
 
+  const controlsMounted = () => {
+    const gaveUp = new AbortController()
+    return within(
+      30_000,
+      rendered.then(() => readsSettled(gaveUp.signal)),
+      () => {
+        const error = new Error(
+          'Timed out after 30s: the page never rendered its surface with the data its components read',
+        )
+        gaveUp.abort(error)
+        return error
+      },
+    )
+  }
+
   const firstSnapshotReady = (timeoutMs = 30_000) =>
     whenStoreConditionHolds(
       (state) => (state.view && state.tasks ? true : undefined),
@@ -102,12 +124,35 @@ export function createTestHook(store: Store, api: Api) {
   return {
     api,
 
+    ui: {
+      async snapshot() {
+        await controlsMounted()
+        return agent
+          .bridge()
+          .snapshot()
+          .filter((component) => !component.offPage)
+      },
+      async query(input: Parameters<UiAgent['query']>[0]) {
+        await controlsMounted()
+        return agent.bridge().query(input)
+      },
+      async act(input: Parameters<UiAgent['act']>[0]) {
+        await controlsMounted()
+        return agent.bridge().act(input)
+      },
+      flush: () => agent.flush(false),
+    },
+
     async state() {
       await firstSnapshotReady()
       const state = store.getState()
       return {
         shown: shown(state),
-        conversations: state.conversations.map(({ id, title, busy }) => ({ id, title, busy })),
+        conversations: state.conversations.map(({ id, title, busy }) => ({
+          id,
+          title,
+          busy,
+        })),
         entries: state.view?.entries.map((entry) => entry.kind) ?? [],
       }
     },

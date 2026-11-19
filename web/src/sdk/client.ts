@@ -7,6 +7,8 @@ import { linkedConversation } from './link.ts'
 import { HOME, createRegistry } from './registry.ts'
 import { createStore } from './store.ts'
 import { createTestHook } from './test-hook.ts'
+import { createUiAgent } from './agent.ts'
+import { firstRender } from './resume.ts'
 import type { TestHook } from './test-hook.ts'
 
 declare global {
@@ -14,7 +16,7 @@ declare global {
     ultimate?: TestHook
   }
 }
-import { createUiState } from './ui-state.ts'
+import { createUiState, tabWrites } from './ui-state.ts'
 
 const initialUrl = new URL(location.href)
 let initialUrlSelectionResolved = false
@@ -48,20 +50,32 @@ export const api = createApi(store)
 
 export const reads = createReads(api, store)
 
-const automatedOrDetachedTab =
-  navigator.webdriver || sessionStorage.getItem('ultimate.detached') === '1'
+const driven = sessionStorage.getItem('ultimate.driven') === '1'
+const { shares: followsSharedUiState, ...tabOnly } = tabWrites({
+  driven,
+  detached: sessionStorage.getItem('ultimate.detached') === '1',
+  webdriver: navigator.webdriver,
+})
 
-export const uiState = createUiState(automatedOrDetachedTab ? undefined : api.updateUi, {
+export const uiState = createUiState(followsSharedUiState ? api.updateUi : undefined, {
   onError: (error) =>
     store.notify({
       level: 'error',
       message: `UI state not saved: ${String(error)}`,
     }),
+  ...tabOnly,
 })
 
-if (sessionStorage.getItem('ultimate.driven') === '1') window.ultimate = createTestHook(store, api)
+/** The page's one ui-sdk agent bridge, created at start so it hears every component; the `ui` facet records its changes. */
+export const uiAgent = createUiAgent(driven)
+uiAgent.onFlush(() => uiState.flush())
 
 export const registry = createRegistry()
+
+if (driven)
+  window.ultimate = createTestHook(store, api, uiAgent, firstRender, (signal) =>
+    reads.settledInUse(signal),
+  )
 
 /** The web bundle this page runs (`server/web.ts` names it in the page). */
 export const bundle = document.querySelector<HTMLMetaElement>('meta[name=ultimate-web]')?.content
@@ -123,7 +137,7 @@ store.subscribe(() => {
       if (linkedConversation(initialUrl, navigation?.type)) uiState.set('shell.surface', HOME)
       initialUrlSelectionResolved = true
       followSelection()
-    } else if (!automatedOrDetachedTab) uiState.receive(shared)
+    } else if (followsSharedUiState) uiState.receive(shared)
   }
 
   const { view, requested } = store.getState()
@@ -171,7 +185,7 @@ addEventListener('popstate', () => {
     replaceSelection = false
   }
 })
-addEventListener('pagehide', () => uiState.flush())
+addEventListener('pagehide', () => void uiAgent.flush(true))
 
 addEventListener('unhandledrejection', (event) => {
   if (!(event.reason instanceof ActionError)) return

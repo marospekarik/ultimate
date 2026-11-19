@@ -25,8 +25,10 @@ bugs. The skills that the libraries ship match the exact pinned versions: read t
 The toolchain, lint, these skills, and the SDK's Solid side. A `*.solid.tsx` file compiles with Solid and lints with the
 rules below. An extension mounts a Solid component from its `web.tsx` with `island(Component)` from `@/sdk`, and the
 component reads documents, UI state and client state as accessors from `@/sdk/solid`
-([Solid facets](../../docs/extensions/sdk.md#solid-facets)). The Solid UI kit comes next: until it lands,
-`@/components/ui` is React-only, so check `web/src/components/ui/` before assuming a kit component exists.
+([Solid facets](../../docs/extensions/sdk.md#solid-facets)). The Solid UI kit is growing one component at a time
+(`popover.solid.tsx`, `switch.solid.tsx` so far): import it as `@/components/ui/<name>.solid.tsx`, and check
+`web/src/components/ui/` before assuming a component exists. `extensions/keep-warm/chip.solid.tsx` is the reference
+migration, with its agent test beside it. Icons come from `@lucide/solid`.
 
 ## Ultimate's rules (on top of those skills)
 
@@ -62,6 +64,17 @@ component reads documents, UI state and client state as accessors from `@/sdk/so
   - A context created without a default throws when nothing provides it, and a provider passing `undefined` counts as
     nothing. For an optional context, declare a `null` default and provide `null`, as `ExtensionName` does.
   - `solid/reactivity` rejects memos built inside an array literal; give each memo its own name.
+- **ui-sdk facts that tripped agents here:**
+  - Popups render in the browser's top layer, not a portal: they stay in their trigger's DOM tree and inherit its
+    text styles (a status line's `whitespace-nowrap`, `font-mono`). Kit popups reset the inherited text styles.
+  - A closed popover hides its controls from the agent bridge: `snapshot()` shows only the popover, so open it first
+    (`setOpen(true)` through `act`).
+  - Packages that ship raw JSX under the `solid` export condition (ui-sdk, `@lucide/solid`) must be in the Solid
+    plugin's `include` in `vite.config.ts`, or Vite compiles them with React's runtime. After changing that list,
+    delete `node_modules/.vitest-cache`.
+  - Under fake timers `agent.act` never settles: advance timers while it runs (`vi.advanceTimersByTimeAsync`), and do
+    not `settle()` under fake timers.
+  - Each kit form control a `<label>` wraps goes in `jsx-a11y/label-has-associated-control`'s `controlComponents`.
 - **Lint is the floor, not the bar.** `pnpm check` runs eslint-plugin-solid's `v2-strict` set (Solid 2 semantics) as
   errors, plus accessibility rules and ours, on every `*.solid.tsx`. Never disable a rule inline. A false positive is a
   report to the coordinator, with the code and the rule.
@@ -75,9 +88,25 @@ component reads documents, UI state and client state as accessors from `@/sdk/so
   for deferred SDK work.
 - For SDK data, mock `web/src/sdk/client.ts` with a real `createStore` on a `FakeSource`, as
   `test/web/solid-sdk.test.solid.tsx` does, and send `doc`/`docOps` events through it.
-- Agent test: one `createAgent()` per file; find controls in `snapshot()` by name; subscribe before `act`; assert the
+- Agent test: one `createAgent()` (from `@ui-sdk/core/agent`) per file; find controls in `snapshot()` by label and act
+  on the ref it returns, never an assumed `c1`, since other controls may mount; subscribe before `act`; assert the
   result's `ok`, the DOM, `details.source === 'agent'` in your handlers, and the events the subscription saw
-  (`test/web/solid-harness.test.solid.tsx`).
+  (`test/web/solid-harness.test.solid.tsx`). `act`'s `values` are keyed `"<ref> <label>"`. Use `expect(x)` without a
+  message: the ui-sdk skill's `expect(x, message)` template fails `vitest/valid-expect`.
+- On a whole page, agents drive controls with the browser tool's `ui` steps (`snapshot`, `query`, `act`), which wait
+  for the page's first render and for every mounted read's first answer (a request that never reached the server
+  counts); each control's change is recorded as a durable `ui.changed` event with its source and the conversation of
+  the `ConversationScope` around it (`extensions/ui/README.md`). Only flags, numbers and a choice control's option values
+  are recorded; any other value (typed text, tokens, a search query) is `"[value]"`, and a person's typing is recorded
+  only when the field commits it (blur, or Enter in an input). A new kit choice control goes in the recorder's
+  `CHOICE_COMPONENTS` (`extensions/ui/recorder.ts`) for its options to show. The browser tool
+  sends recorded changes and UI-state writes before it closes the page, whatever the last step was.
+- To type into a ui-sdk text field in jsdom, use `setRangeText` and dispatch `input`, as ui-sdk's own `type` helper
+  does: assigning `.value` counts as a program's write, not typing, and reports no `input-change`.
+- A Solid `useAction` with getter args: each read keeps the args its key was made from, so switching args mid-flight
+  never answers the old read with the new args.
+- A person's click inside `data-agent-hidden` still changes the control, but the bridge reports nothing: a secret
+  value an agent may fill goes in `data-agent-secret` instead.
 
 ## Done means
 

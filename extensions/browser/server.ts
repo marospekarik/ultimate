@@ -198,7 +198,7 @@ export default function browserExtension(host: ExtensionHost) {
       defineTool({
         name: 'browser',
         description:
-          "Drive a fresh browser page with clicks, fills, keys, waits and JavaScript; report outcomes and optionally an image. Each step times out after 30 s. On an Ultimate page (this UI or a preview), `send` submits a prompt without the composer and `until` waits on Ultimate's state, never a guessed time: 'idle' (that conversation's turn is done), 'quiet' (nothing is busy, branches and subagents included), {entry: kind} or {event: name, where}; until defaults to 5 min (timeoutMs) and on timeout says what was still busy. Click and fill only to test the interaction itself. Scope selectors to one card or panel ('[data-entry-id=\"42\"] button:has-text(\"Retry\")', not 'button:has-text(\"Retry\")', which fails when it matches several).",
+          "Drive a fresh browser page with clicks, fills, keys, waits and JavaScript; report outcomes and optionally an image. Each step times out after 30 s. On an Ultimate page (this UI or a preview), `send` submits a prompt without the composer and `until` waits on Ultimate's state, never a guessed time: 'idle' (that conversation's turn is done), 'quiet' (nothing is busy, branches and subagents included), {entry: kind} or {event: name, where}; until defaults to 5 min (timeoutMs) and on timeout says what was still busy. Use `ui` steps for ui-sdk controls (switches, selects, dialogs): {ui: 'snapshot'} lists them with their label, state and actions, {ui: 'query', text?, within?, kind?} finds some or a list's items, {ui: 'act', steps: [{ref, action, args?}]} runs their actions as the agent (ref: a snapshot ref or the label), like [{ref: 'Keep warm', action: 'setChecked', args: [false]}]. Click and fill only to test the interaction itself. Scope selectors to one card or panel ('[data-entry-id=\"42\"] button:has-text(\"Retry\")', not 'button:has-text(\"Retry\")', which fails when it matches several).",
         parameters: obj({
           ...base,
           steps: arr(
@@ -222,6 +222,24 @@ export default function browserExtension(host: ExtensionHost) {
               obj({
                 send: str(),
                 conversation: opt(int({ minimum: 1 })),
+              }),
+              obj({ ui: lit('snapshot') }),
+              obj({
+                ui: lit('query'),
+                text: opt(str()),
+                within: opt(str({ description: 'A list component whose items to return.' })),
+                kind: opt(str({ description: 'One component kind, like select.' })),
+              }),
+              obj({
+                ui: lit('act'),
+                steps: arr(
+                  obj({
+                    ref: str({ description: 'A ref from snapshot, or the label.' }),
+                    action: str({ description: 'One of the component’s actions.' }),
+                    args: opt(arr(unknown())),
+                  }),
+                  { minItems: 1 },
+                ),
               }),
               obj({
                 until: union([
@@ -264,7 +282,7 @@ export default function browserExtension(host: ExtensionHost) {
                   if (typeof step.wait === 'number')
                     await guard(page.waitForTimeout(step.wait), step.wait)
                   else await guard(page.locator(step.wait).waitFor())
-                } else if ('send' in step || 'until' in step) {
+                } else if ('send' in step || 'until' in step || 'ui' in step) {
                   const waitForLoadedSdk = () =>
                     guard(
                       page
@@ -276,7 +294,34 @@ export default function browserExtension(host: ExtensionHost) {
                         }),
                     )
                   await waitForLoadedSdk()
-                  if ('send' in step)
+                  if ('ui' in step) {
+                    const outcome = await guard(
+                      page.evaluate((uiStep) => {
+                        const ui = window.ultimate!.ui
+                        if (!ui)
+                          return {
+                            error:
+                              'This page has no window.ultimate.ui: an Ultimate UI older than ui steps',
+                          }
+                        const work =
+                          uiStep.ui === 'snapshot'
+                            ? ui.snapshot()
+                            : uiStep.ui === 'query'
+                              ? ui.query({
+                                  text: uiStep.text,
+                                  within: uiStep.within,
+                                  kind: uiStep.kind,
+                                })
+                              : ui.act({ steps: uiStep.steps })
+                        return work.then(
+                          (result: unknown) => ({ result }),
+                          (error: unknown) => ({ error: String(error) }),
+                        )
+                      }, step),
+                    )
+                    if ('error' in outcome) throw new Error(outcome.error.replace(/^Error: /, ''))
+                    value = outcome.result
+                  } else if ('send' in step)
                     value = await guard(
                       page.evaluate(
                         ([text, conversation]) =>
@@ -382,6 +427,7 @@ export default function browserExtension(host: ExtensionHost) {
   ) {
     const outcomes: string[] = []
     let isolated: BrowserContext | undefined
+    let page: Page | undefined
     const stepMs = args.timeoutMs ?? stepTimeoutMs
     const coldLaunchAndPageSetupMs = Math.max(stepMs, stepTimeoutMs)
     const totalMs = 4 * stepMs + waits
@@ -392,6 +438,11 @@ export default function browserExtension(host: ExtensionHost) {
         ? within(left, work, timeout(totalMs))
         : within(stepMs + extraMs, work)
     }
+    const sendWhatThePageRecorded = (shown: Page) =>
+      guard(shown.evaluate(() => window.ultimate?.ui.flush())).then(
+        () => [],
+        (error: unknown) => [`The page's last UI changes were not sent: ${String(error)}`],
+      )
     const abort = () => void closeContextOrRelaunchBrowser(isolated)
     try {
       const png = screenshotFile(host.home, api.env?.cwd ?? host.projectRoot, args.path)
@@ -440,7 +491,7 @@ export default function browserExtension(host: ExtensionHost) {
         }),
       )
       context.abortSignal?.addEventListener('abort', abort, { once: true })
-      const page = await within(coldLaunchAndPageSetupMs, isolated.newPage())
+      page = await within(coldLaunchAndPageSetupMs, isolated.newPage())
       deadline = Date.now() + totalMs
       page.setDefaultTimeout(stepMs)
       page.setDefaultNavigationTimeout(stepMs)
@@ -466,6 +517,7 @@ export default function browserExtension(host: ExtensionHost) {
       api.output(`Loading ${url}\n`)
       await guard(page.goto(url, { waitUntil: 'domcontentloaded' }))
       const result = await action(page, outcomes, png, guard)
+      outcomes.push(...(await sendWhatThePageRecorded(page)))
       const title = await guard(page.title())
       const maps = new Map()
       const readFromRedirectedOrigin = fetchAssets(new URL(page.url()).origin)
@@ -504,9 +556,13 @@ export default function browserExtension(host: ExtensionHost) {
         ],
       }
     } catch (error) {
+      const notSent =
+        page && !context.abortSignal?.aborted ? await sendWhatThePageRecorded(page) : []
       return {
         isError: true,
-        output: [{ type: 'text' as const, text: [String(error), ...outcomes].join('\n') }],
+        output: [
+          { type: 'text' as const, text: [String(error), ...outcomes, ...notSent].join('\n') },
+        ],
       }
     } finally {
       context.abortSignal?.removeEventListener('abort', abort)

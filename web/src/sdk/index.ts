@@ -84,12 +84,20 @@ export { useTranscriptScroll } from '../app/transcript.tsx'
 /** Renders with the values other extensions provide for your point, or through them (`Rendered`); see `definePoint`. */
 export { AllProvided, Provided, Rendered } from '../app/boundary.tsx'
 export { ConversationScope } from './conversation-scope.tsx'
+/** The conversation of the `ConversationScope` around an element, or undefined outside every scope. */
+export { scopeOf } from './conversation-scope.tsx'
 /** Mounts a Solid component (`*.solid.tsx`) where React renders; its code uses `@/sdk/solid`. */
 export { island } from './island.tsx'
 /** Sends what the composer inside it submits somewhere else, such as a new side chat; see `composer` renderers. */
 export { Composer, ComposerRedirect, fillComposer, insertIntoComposer } from '../app/composer.tsx'
 export type { ComposerTarget } from '../app/composer.tsx'
 export { api, bundle, switched } from './client.ts'
+/**
+ * The page's ui-sdk agent bridge: `bridge()` drives and observes its components, `onFlush(flush)` registers work that
+ * must reach the server before the page goes or the browser tool closes it, `driven` is true in a page an agent drives.
+ */
+export { uiAgent } from './client.ts'
+export type { ObservedChange, UiAgent, UiFlush } from './agent.ts'
 export { ActionError } from './api.ts'
 export type { ActionOptions, Api } from './api.ts'
 export type { UseActionOptions } from './hooks.ts'

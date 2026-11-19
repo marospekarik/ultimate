@@ -38,6 +38,10 @@ conversation.
 
 `api.cancelSubmission(submissionId, conversationId?)` withdraws one queued input without stopping the run.
 
+`uiAgent` is the page's one ui-sdk agent bridge: `bridge()` snapshots, queries, acts on and `subscribe`s to the
+page's ui-sdk components, `onFlush(flush)` registers work that must reach the server before the page goes or the
+browser tool closes it, and `driven` is true in a page an agent drives. The `ui` extension records its changes.
+
 Helpers: `cn()` for class names, `formatTokens`, `formatBytes`, `formatDuration`, `formatTime`, `formatAgo(at, now)`
 (`now`, `5m`, `3h`, `2d`, then a date; `{ ago: true }` reads `just now`, `5m ago`), `shortenPath(path, { cwd, home })`
 (`home` is `useSystem().machine.home`), `elidePath`, `formatKeys`, and `errorMessage(error)` for a caught value. Types
@@ -62,13 +66,15 @@ export default defineWebExtension({ slots: { 'statusline.left': island(Status) }
 The island renders inside a `display: contents` element and remounts when its extension or conversation scope
 changes. Solid code imports `@/sdk/solid`, never `@/sdk` (types excepted), and gets accessors:
 
-| `@/sdk/solid`                                          | Returns                                                                                                                                     |
-| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `useDoc(ref)`, `useDocOf(() => conversation, ref)`     | An accessor of the document; a memo or JSX reading `doc()?.columns[0].title` reruns only when that path changes. `useDoc` follows the scope |
-| `useUiState(key, initial)`, `useExtensionUiState(…)`   | `[value, set]`: `value` is an accessor, `set` takes a value or an updater, as in React                                                      |
-| `useConnection()`, `useSystem()`, `useConversations()` | Accessors of the same client state the React hooks read                                                                                     |
-| `ExtensionName`, `ConversationScope`                   | The contexts `island` provides                                                                                                              |
-| `api`, `ROOT`, `docRef`, `actionRef`, `cn`, `format*`  | The same helpers `@/sdk` exports                                                                                                            |
+| `@/sdk/solid`                                                     | Returns                                                                                                                                       |
+| ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `useDoc(ref)`, `useDocOf(() => conversation, ref)`                | An accessor of the document; a memo or JSX reading `doc()?.columns[0].title` reruns only when that path changes. `useDoc` follows the scope   |
+| `useUiState(key, initial)`, `useExtensionUiState(…)`              | `[value, set]`: `value` is an accessor, `set` takes a value or an updater, as in React                                                        |
+| `useConnection()`, `useSystem()`, `useConversations()`            | Accessors of the same client state the React hooks read                                                                                       |
+| `useAction(ref, args?, options?)`                                 | `{ data, error, loading, refetch }`, the first three accessors, sharing React's call and result; `on` takes an accessor, such as a document's |
+| `useNow(ms, () => active)`                                        | An accessor of the current time, ticking every `ms` while `active`                                                                            |
+| `ExtensionName`, `ConversationScope`                              | The contexts `island` provides                                                                                                                |
+| `api`, `ROOT`, `docRef`, `actionRef`, `cn`, `format*`, `keepLast` | The same helpers `@/sdk` exports                                                                                                              |
 
 ## Rendering another conversation
 
