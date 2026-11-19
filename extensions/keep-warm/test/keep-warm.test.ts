@@ -1,5 +1,5 @@
-import { expect, it, vi } from 'vitest'
-import { due, failing, IDLE_STOP, LEAD, TTL } from '../due.ts'
+import { describe, expect, it, vi } from 'vitest'
+import { due, failing, IDLE_STOP, LEAD, precoldAt, precoldDue, PRECOLD, TTL } from '../due.ts'
 import * as keepWarm from '../server.ts'
 
 const now = Date.parse('2026-10-24T12:00:00Z')
@@ -100,4 +100,51 @@ it('sends only while not paused and within the hour, checked right before the re
   expect(keepWarm.open(false, now - LEAD, now)).toBe(true)
   expect(keepWarm.open(true, now - LEAD, now)).toBe(false)
   expect(keepWarm.open(false, now - TTL, now)).toBe(false)
+})
+
+describe('compacting before the cache goes cold', () => {
+  const lastRequest = now - PRECOLD
+  const base = {
+    now,
+    lastRequest,
+    inputAt: now - minutes(9 * 60),
+    on: true,
+    paused: false,
+    tokens: 200_000,
+  }
+
+  it('waits for the 50th minute and stops at the hour', () => {
+    expect(precoldDue({ ...base, now: lastRequest + minutes(49) })).toBe(false)
+    expect(precoldDue(base)).toBe(true)
+    expect(precoldDue({ ...base, now: lastRequest + TTL })).toBe(false)
+  })
+
+  it('is left to the ping while one will renew the cache', () => {
+    expect(precoldAt({ ...base, inputAt: now - minutes(60) })).toBeUndefined()
+    expect(precoldAt({ ...base, on: false, inputAt: now - minutes(60) })).toBe(
+      lastRequest + PRECOLD,
+    )
+    expect(precoldAt(base)).toBe(lastRequest + PRECOLD)
+  })
+
+  it('skips a small context, a pause and a request it already tried', () => {
+    expect(precoldAt({ ...base, tokens: 150_000 })).toBeUndefined()
+    expect(precoldAt({ ...base, tokens: undefined })).toBeUndefined()
+    expect(precoldAt({ ...base, paused: true })).toBeUndefined()
+    expect(precoldAt({ ...base, compactedAt: lastRequest })).toBeUndefined()
+    expect(precoldAt({ ...base, compactedAt: lastRequest - 1 })).toBe(lastRequest + PRECOLD)
+  })
+
+  it('is not a cache request: a compaction sends no cache tokens, so it renews nothing', () => {
+    const compaction = {
+      role: 'assistant',
+      provider: 'claude-code',
+      model: 'claude-opus-5-5',
+      stopReason: 'stop',
+      usage: { cacheRead: 0, cacheWrite: 0, input: 450_000 },
+    } as unknown as Parameters<typeof keepWarm.cached>[0]
+    expect(
+      keepWarm.cached(compaction, { provider: 'claude-code', modelId: 'claude-opus-5-5' }),
+    ).toBe(false)
+  })
 })

@@ -30,6 +30,8 @@ function cacheLine(state: WarmState, now: number) {
 function nextLine(state: WarmState, now: number) {
   if (!state.on) return 'Off'
   if (state.nextAt !== undefined) return `Next ping ${clock(Math.max(now, state.nextAt))}`
+  if (state.precoldAt !== undefined && state.precoldAt > now)
+    return `Compacts at ${clock(state.precoldAt)} before the cache goes cold`
   if (state.lastRequest !== undefined && failed(state)) return 'Waiting for @ultimate’s next answer'
   if (state.lastRequest !== undefined && state.lastRequest + TTL <= now) return 'Cache is cold'
   return 'Stopped: no input from you for 8 h'

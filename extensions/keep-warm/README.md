@@ -13,15 +13,16 @@ Claude Code caches @ultimate's prompt for an hour after each request (`ttl: "1h"
 - The ping replays @ultimate's committed context as its next request would send it (the `You are conversation #N.` identity right after the leading system message, as `conversations` adds it), plus one user line asking for `ok`. The provider reads the prefix up to @ultimate's last input from the cache; that renews it, and @ultimate's next real request reads it again.
 - It sends no `sessionId`, so pi-claude-code runs it in a one-shot Claude Code process and @ultimate's own warm process is untouched. Nothing is written to any transcript; the response's usage is added to @ultimate's usage (`accountResponse`), so the status line's spend includes the pings.
 - Skips while the user paused Ultimate or a rate limit did (`PauseApi`): nothing new starts, and a ping into a limit would fail. It keeps pinging while only a hold with an end pauses it (`PauseApi.heldSince()`, such as a usage soft cap held until the window resets): the provider still answers, and the work the hold parks resumes on this cache. Your absence then counts only up to the hold's start, so a 5-hour hold does not run into the 8-hour stop. A failed ping is recorded and blocks further pings until @ultimate's next request, so an outage or a limit is never retried in a loop.
+- Pre-cold compaction: when no ping will renew the cache (keep-warm off, the 8-hour stop passing before the next ping) and @ultimate's context is over 150k, a compaction starts 50 minutes after the last cache request, just before the hour ends: one compaction at the old price instead of rewriting the whole context at twice the price on your return. It runs only while @ultimate is idle, at most once per last request (a failed one is never retried, a newer request re-arms it), and not while the user's Pause or a rate limit holds Ultimate. It does not count as a cache request: Pi Durable's compaction sends with `cacheRetention: "none"` and is no assistant entry, so `lastRequest` and the ping logic are untouched, and the smaller context stays below 150k.
 - Only @ultimate is warmed, and only while idle: a branch, or @ultimate itself, that a pause parks mid-turn loses its cache after an hour and rewrites it when work continues.
 - Not warmed: a system-prompt change (new instructions, sections, tools) still rewrites the cache on the next request. Pings only help idle gaps.
 
 ## State and actions
 
-- `keep-warm.state` on conversation 1: `{ off?, last?, pings? }`; `last` is `{ at, provider, model, read?, write?, error? }`.
-- `state` → `{ on, lastRequest?, inputAt?, nextAt?, last?, pings }`.
+- `keep-warm.state` on conversation 1: `{ off?, last?, pings?, precold? }`; `last` is `{ at, provider, model, read?, write?, error? }`.
+- `state` → `{ on, lastRequest?, inputAt?, nextAt?, precoldAt?, last?, pings }`.
 - `set { on }` turns it on or off. User-only: pings spend the user's plan.
 
 ## UI
 
-The `warm` chip in the status line: amber while the cache is warm, dimmed while off, red after a failed ping. Its popover has the switch, "Warm until 14:52" or "Cold since …", the next ping or why none is coming, and the last ping's read and write.
+The `warm` chip in the status line: amber while the cache is warm, dimmed while off, red after a failed ping. Its popover has the switch, "Warm until 14:52" or "Cold since …", the next ping or the pre-cold compaction or why none is coming, and the last ping's read and write.

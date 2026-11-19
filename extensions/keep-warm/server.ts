@@ -13,10 +13,10 @@ import { UserInputEvent } from '../../shared/events.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { every } from '../../lib/timers.ts'
 import type { ResponseReceipt } from '../conversations/summary.ts'
-import { ConversationsApi } from '../conversations/api.ts'
+import { ContextUsageDoc, ConversationsApi } from '../conversations/api.ts'
 import { PauseApi } from '../pause/api.ts'
 import { Standing } from '../subagents/api.ts'
-import { due, LEAD, TTL } from './due.ts'
+import { due, LEAD, precoldAt, precoldDue, TTL } from './due.ts'
 import { SetAction, StateAction, WarmDoc } from './refs.ts'
 import type { Ping, WarmDocState, WarmState } from './refs.ts'
 
@@ -97,6 +97,7 @@ async function activity(host: ExtensionHost, doc: WarmDocState, now: number) {
     failedAfter: last?.error ? last.at : undefined,
     inputAt: doc.inputAt,
     heldSince: host.want(PauseApi)?.heldSince(),
+    tokens: (await host.harness().snapshot(ContextUsageDoc, id!, context))?.tokens,
   }
 }
 
@@ -250,6 +251,10 @@ async function tick(host: ExtensionHost, signal: AbortSignal) {
   if (doc.off) return
   const now = Date.now()
   const found = await activity(host, doc, now)
+  if (found?.lastRequest && precoldDue(precoldInput(host, doc, found, now))) {
+    await compactBeforeCold(host, found)
+    return
+  }
   if (!found?.lastRequest || !due({ now, ...found })) return
   await sendOneShotPingWithoutSession(
     host,
@@ -260,6 +265,35 @@ async function tick(host: ExtensionHost, signal: AbortSignal) {
     },
     signal,
   )
+}
+
+const precoldInput = (
+  host: ExtensionHost,
+  doc: WarmDocState,
+  found: NonNullable<Awaited<ReturnType<typeof activity>>>,
+  now: number,
+) => ({
+  ...found,
+  now,
+  on: !doc.off,
+  paused: !!host.want(PauseApi)?.paused(),
+  compactedAt: doc.precold,
+})
+
+async function compactBeforeCold(
+  host: ExtensionHost,
+  found: NonNullable<Awaited<ReturnType<typeof activity>>>,
+) {
+  const claimed = await host.harness().commit(async (tx) => {
+    const warm = await tx.doc(State, ROOT_CONVERSATION_ID)
+    const live = await tx.doc(LiveDoc, found.id)
+    if (warm.precold === found.lastRequest) return false
+    if (live.run || live.compactions?.length || live.compactionFailure) return false
+    warm.precold = found.lastRequest
+    return true
+  }, context)
+  if (!claimed) return
+  await (await host.harness().conversation(found.id, context))?.compact(undefined, context)
 }
 
 async function state(host: ExtensionHost): Promise<WarmState> {
@@ -275,11 +309,13 @@ async function state(host: ExtensionHost): Promise<WarmState> {
   }
   if (!found) return base
   const nextAt = found.lastRequest === undefined ? undefined : found.lastRequest + LEAD
+  const precold = precoldAt(precoldInput(host, doc, found, now))
   const will = on && nextAt !== undefined && due({ ...found, now: Math.max(now, nextAt) })
   return {
     ...base,
     ...(found.lastRequest === undefined ? {} : { lastRequest: found.lastRequest }),
     ...(will ? { nextAt } : {}),
+    ...(precold === undefined ? {} : { precoldAt: precold }),
   }
 }
 

@@ -16,9 +16,16 @@ export type Ping = {
 
 /**
  * On conversation 1. `off` when the user turned it off (it is on by default); the user's latest input to @ultimate
- * (ms, from `user.input` events); the last ping and how many ran.
+ * (ms, from `user.input` events); the last ping and how many ran; `precold`, the last request a pre-cold compaction was
+ * started for (it is tried once per request, success or not).
  */
-export type WarmDocState = { off?: true; inputAt?: number; last?: Ping; pings?: number }
+export type WarmDocState = {
+  off?: true
+  inputAt?: number
+  last?: Ping
+  pings?: number
+  precold?: number
+}
 
 export type WarmState = {
   on: boolean
@@ -28,6 +35,8 @@ export type WarmState = {
   inputAt?: number
   /** When the next ping is due (ms), while one will run. */
   nextAt?: number
+  /** When @ultimate's context is compacted before the cache goes cold (ms): it is large and no ping will renew the cache. */
+  precoldAt?: number
   last?: Ping
   pings: number
 }
