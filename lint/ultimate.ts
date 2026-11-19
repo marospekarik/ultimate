@@ -4,6 +4,7 @@ import { apiSummary } from '../lib/api-files.ts'
 import { coreTier } from '../shared/extension-api.ts'
 
 interface ImportNode {
+  type?: string
   source?: { value?: unknown }
   importKind?: string
   exportKind?: string
@@ -65,7 +66,8 @@ interface Comment {
 }
 
 const extensionOf = (filename: string) => {
-  const [directory, extension] = path.relative(process.cwd(), filename).split(path.sep)
+  const parts = path.relative(process.cwd(), filename).split(path.sep)
+  const [directory, extension] = parts[0] === '.ultimate' ? parts.slice(1) : parts
   return directory === 'extensions' ? extension : undefined
 }
 /** The repository-relative path segments an import `source` of `filename` resolves to. */
@@ -108,6 +110,15 @@ const membersOf = (declaration: Node): Node[] =>
 const repositoryPath = (filename: string) =>
   path.relative(process.cwd(), filename).split(path.sep).join('/')
 const solidFile = (filename: string) => filename.endsWith('.solid.tsx')
+const rendererBridges = new Set(['web/src/sdk/island.tsx', 'web/src/sdk/solid.ts'])
+const rendererBridge = (filename: string) => rendererBridges.has(repositoryPath(filename))
+const solidSdk = 'web/src/sdk/solid.ts'
+const reactSdk = (module: string) => {
+  const file = repositoryPath(module)
+  return file.startsWith('web/src/sdk/') && file !== solidSdk
+}
+const extensionWebFacet = (filename: string) =>
+  /^(\.ultimate\/)?extensions\/[^/]+\/web\.tsx$/.test(repositoryPath(filename))
 const uiKitFile = (filename: string) =>
   repositoryPath(filename).startsWith('web/src/components/ui/')
 const reactOnly =
@@ -246,9 +257,14 @@ const hasBody = (statement: Node) =>
   (statement.declaration?.declarations ?? []).some((declarator) =>
     functionTypes.includes(declarator.init?.type ?? ''),
   )
-/** Where JSDoc is a contract: the statements of a contract file, or those exporting the web SDK's public names. */
+/** The SDK's public entries: `@/sdk` for React, `@/sdk/solid` for Solid. */
+const sdkEntry = (filename: string) =>
+  ['web/src/sdk/index.ts', solidSdk].includes(repositoryPath(filename))
+/** Where JSDoc is a contract: the statements of a contract file, or the exports of an SDK entry's public names. */
 function contractStatements(filename: string, statements: Node[]) {
   if (contractFile(filename)) return statements
+  if (repositoryPath(filename) === solidSdk)
+    return statements.filter((statement) => statement.type === 'ExportNamedDeclaration')
   if (!inSdk(filename)) return []
   const names = publicSdk()
   return statements.filter(
@@ -279,9 +295,7 @@ export default {
             const opening = context.sourceCode.getAllComments()[0]
             if (
               opening &&
-              (contractFile(context.filename) ||
-                path.relative(process.cwd(), context.filename) ===
-                  path.join('web/src/sdk/index.ts')) &&
+              (contractFile(context.filename) || sdkEntry(context.filename)) &&
               (statements.length === 0 || opening.end <= statements[0].start!)
             )
               contractDocs.add(opening.start)
@@ -313,16 +327,32 @@ export default {
           if (node.importKind === 'type' || node.exportKind === 'type') return
           const local = localModule(context.filename, source)
           const localReact = local?.endsWith('.tsx') === true && !solidFile(local)
-          const localSolid = local !== undefined && solidFile(local)
+          const localSolid =
+            local !== undefined && (solidFile(local) || repositoryPath(local) === solidSdk)
+          const islandComponent =
+            local !== undefined &&
+            solidFile(local) &&
+            node.type === 'ImportDeclaration' &&
+            extensionWebFacet(context.filename)
           if (solid && (reactOnly.test(source) || localReact))
             context.report({
               node,
               message: `A Solid file renders with Solid alone, so React code in it never runs as written. Replace ${source} with its Solid counterpart: our UI kit (@/components/ui), @lucide/solid for icons, or a ui-sdk component in the kit.`,
             })
-          else if (!solid && !inSdk(context.filename) && (solidOnly.test(source) || localSolid))
+          else if (solid && local !== undefined && reactSdk(local))
             context.report({
               node,
-              message: `React and Solid meet only in the SDK's island mount, so each file has one renderer and one set of JSX types. Move this code into a .solid.tsx file, or mount a Solid component through @/sdk instead of importing ${source}.`,
+              message: `@/sdk is the SDK for React: its hooks run only inside a React render, so in a Solid file they throw or never update. Import the Solid bindings from @/sdk/solid instead of ${source}; types may still come from @/sdk with \`import type\`.`,
+            })
+          else if (
+            !solid &&
+            !rendererBridge(context.filename) &&
+            !islandComponent &&
+            (solidOnly.test(source) || localSolid)
+          )
+            context.report({
+              node,
+              message: `React and Solid meet only in the SDK's island mount, so each file has one renderer and one set of JSX types. Move this code into a .solid.tsx file, or import the Solid component in your extension's web.tsx and contribute it as island(Component) from @/sdk instead of importing ${source} here.`,
             })
           else if (
             uiSdkComponents.test(source) &&
@@ -616,17 +646,23 @@ export default {
       create(context: Context) {
         const own = extensionOf(context.filename)
         if (!own) return {}
-        // Server code reaches another extension through its api.ts, browser code through its ui.tsx.
+        // Server code reaches another extension through its api.ts, React code through its ui.tsx, Solid code through
+        // its refs.ts until extensions grow a Solid ui contract.
+        const solid = solidFile(context.filename)
         const browser = context.filename.endsWith('.tsx')
-        const allowed = browser ? 'ui.tsx' : 'api.ts'
-        const how = browser
-          ? 'its ui.tsx (components, hooks and the refs of its documents and actions)'
-          : 'its api.ts (a service, document or event token)'
+        const allowed = solid ? 'refs.ts' : browser ? 'ui.tsx' : 'api.ts'
+        const how = solid
+          ? 'its refs.ts (the refs of its documents and actions; its ui.tsx is React)'
+          : browser
+            ? 'its ui.tsx (components, hooks and the refs of its documents and actions)'
+            : 'its api.ts (a service, document or event token)'
         const check = (node: ImportNode) => {
           const source = node.source?.value
           if (typeof source !== 'string' || !source.startsWith('.')) return
           if (node.importKind === 'type' || node.exportKind === 'type') return
-          const [directory, extension, ...file] = resolved(context.filename, source)
+          const target = resolved(context.filename, source)
+          const [directory, extension, ...file] =
+            target[0] === '.ultimate' ? target.slice(1) : target
           if (directory === 'extensions' && extension !== own && file.join('/') !== allowed)
             context.report({
               node,

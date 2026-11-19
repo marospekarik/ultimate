@@ -298,6 +298,19 @@ export { TaskChip } from '../plan/chip.tsx'`
   ])
 })
 
+it('lets Solid code reach another extension through its refs.ts, since its ui.tsx is React', () => {
+  const source = `import { ContextDoc } from '../conversations/refs.ts'
+import { ContextBar } from '../conversations/ui.tsx'`
+  expect(lint('api-only-imports', 'extensions/echo/status.solid.tsx', source)).toEqual([
+    'echo imports conversations/ui.tsx at runtime; reach conversations through its refs.ts (the refs of its documents and actions; its ui.tsx is React), import types with `import type`, or move a pure helper to lib/.',
+  ])
+  const project = `import { BoardDoc } from '../board/refs.ts'
+import { columns } from '../board/columns.ts'`
+  expect(lint('api-only-imports', '.ultimate/extensions/echo/status.solid.tsx', project)).toEqual([
+    'echo imports board/columns.ts at runtime; reach board through its refs.ts (the refs of its documents and actions; its ui.tsx is React), import types with `import type`, or move a pure helper to lib/.',
+  ])
+})
+
 it('keeps React and Solid apart, and ui-sdk components behind the UI kit', () => {
   const solidSource = `/** @jsxImportSource @solidjs/web */
 import { useState } from 'react'
@@ -329,13 +342,54 @@ import { createSignal } from 'solid-js'
 import { Panel } from './panel.solid.tsx'
 import type { PanelProps } from './panel.solid.tsx'`
   const move = (source: string) =>
-    `Move this code into a .solid.tsx file, or mount a Solid component through @/sdk instead of importing ${source}.`
+    `Move this code into a .solid.tsx file, or import the Solid component in your extension's web.tsx and contribute it as island(Component) from @/sdk instead of importing ${source} here.`
   expect(lint('ui-framework-boundaries', 'extensions/echo/web.tsx', reactSource)).toEqual([
+    move('@solidjs/web'),
+    move('solid-js'),
+  ])
+  expect(lint('ui-framework-boundaries', 'extensions/echo/panel.tsx', reactSource)).toEqual([
     move('@solidjs/web'),
     move('solid-js'),
     move('./panel.solid.tsx'),
   ])
+  expect(
+    lint(
+      'ui-framework-boundaries',
+      'extensions/echo/web.tsx',
+      `export { Panel } from './panel.solid.tsx'`,
+    ),
+  ).toEqual([move('./panel.solid.tsx')])
   expect(lint('ui-framework-boundaries', 'web/src/sdk/solid.ts', reactSource)).toEqual([])
+  expect(lint('ui-framework-boundaries', 'web/src/sdk/island.tsx', reactSource)).toEqual([])
+  const solidSdk = `import { useDoc } from '@/sdk/solid'
+import { useUiState } from '../../web/src/sdk/solid.ts'
+import type { Accessor } from '@/sdk/solid'`
+  expect(lint('ui-framework-boundaries', 'extensions/echo/web.tsx', solidSdk)).toEqual([
+    move('@/sdk/solid'),
+    move('../../web/src/sdk/solid.ts'),
+  ])
+  expect(lint('ui-framework-boundaries', 'web/src/sdk/hooks.ts', reactSource)).toEqual([
+    move('@solidjs/web'),
+    move('solid-js'),
+    move('./panel.solid.tsx'),
+  ])
+})
+
+it('gives Solid files the Solid SDK, and types alone from the React one', () => {
+  const source = `/** @jsxImportSource @solidjs/web */
+import { useDoc } from '@/sdk'
+import { useStore } from '@/sdk/hooks'
+import { store } from '../../web/src/sdk/client.ts'
+import { useDoc as useSolidDoc, cn } from '@/sdk/solid'
+import type { SystemInfo } from '@/sdk'
+export type { DocRef } from '@/sdk'`
+  const solidSdk = (module: string) =>
+    `Import the Solid bindings from @/sdk/solid instead of ${module}; types may still come from @/sdk with \`import type\`.`
+  expect(lint('ui-framework-boundaries', 'extensions/echo/status.solid.tsx', source)).toEqual([
+    solidSdk('@/sdk'),
+    solidSdk('@/sdk/hooks'),
+    solidSdk('../../web/src/sdk/client.ts'),
+  ])
 })
 
 it('asks every Solid file for a leading block Solid JSX pragma, and only Solid files', () => {
@@ -458,4 +512,13 @@ export type AbstractData = {
 MIT License — Copyright (c) 2025 Mario Zechner
 */`
   expect(lint('no-comments', 'extensions/entries/refs.ts', contract)).toEqual([])
+  const solidSdk = `/**
+ * The extension SDK for Solid facets.
+ */
+import { store } from './client.ts'
+/** Keyed per conversation and kind. */
+const replicaKey = (kind: string) => kind
+/** The document as an accessor. */
+export function useDoc() {}`
+  expect(lint('no-comments', 'web/src/sdk/solid.ts', solidSdk)).toHaveLength(1)
 })

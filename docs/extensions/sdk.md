@@ -2,7 +2,7 @@
 
 Part of the [extension guide](../../extensions/README.md).
 
-`@/sdk/*` deep imports are core internals, not extension API. Import only from `@/sdk`, `@/components/ui/*`, `@/components/ai/*`, `@/components/json-tree`, `react`, and `lucide-react`. Never call `fetch` or
+`@/sdk/*` deep imports are core internals, not extension API, except `@/sdk/solid`, the SDK for Solid files ([Solid facets](#solid-facets)). Import only from `@/sdk`, `@/components/ui/*`, `@/components/ai/*`, `@/components/json-tree`, `react`, and `lucide-react`. Never call `fetch` or
 open an `EventSource` yourself (`ultimate/no-raw-stream` fails lint on it in `extensions/**/*.tsx`): the SDK keeps one
 live stream per tab, carrying a subscription for the shown conversation plus one for each conversation whose documents
 are watched with `useDocOf` (the shown one included), replays their changes, and your server code is reached through
@@ -46,6 +46,29 @@ for everything above are exported too (`EntryRecord`, `AssistantMessage`, `Syste
 Keep UI state that should survive a reload in `useExtensionUiState`; keep throwaway state (hover, an open menu) in
 `useState`. The shell keeps its own layout there too (`shell.conversation`, `shell.surface`, `shell.shownSurface`,
 `shell.panel`, `shell.panelOpen`, `shell.sidebarOpen`, `shell.dock.<surface>.<side>`).
+
+## Solid facets
+
+A contribution can render with Solid 2 instead of React. Write the component in a `*.solid.tsx` file (read the
+`solid-ui` skill first) and mount it from your `web.tsx` with `island`, the only place a React file may import it:
+
+```tsx
+import { defineWebExtension, island } from '@/sdk'
+import { Status } from './status.solid.tsx'
+
+export default defineWebExtension({ slots: { 'statusline.left': island(Status) } })
+```
+
+The island renders inside a `display: contents` element and remounts when its extension or conversation scope
+changes. Solid code imports `@/sdk/solid`, never `@/sdk` (types excepted), and gets accessors:
+
+| `@/sdk/solid`                                          | Returns                                                                                                                                     |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `useDoc(ref)`, `useDocOf(() => conversation, ref)`     | An accessor of the document; a memo or JSX reading `doc()?.columns[0].title` reruns only when that path changes. `useDoc` follows the scope |
+| `useUiState(key, initial)`, `useExtensionUiState(…)`   | `[value, set]`: `value` is an accessor, `set` takes a value or an updater, as in React                                                      |
+| `useConnection()`, `useSystem()`, `useConversations()` | Accessors of the same client state the React hooks read                                                                                     |
+| `ExtensionName`, `ConversationScope`                   | The contexts `island` provides                                                                                                              |
+| `api`, `ROOT`, `docRef`, `actionRef`, `cn`, `format*`  | The same helpers `@/sdk` exports                                                                                                            |
 
 ## Rendering another conversation
 

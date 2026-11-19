@@ -483,6 +483,7 @@ export function createStore(options: StoreOptions = {}) {
           docKinds.delete(kind)
           const { [kind]: _removed, ...docs } = state.docs
           set({ docs })
+          scheduleMain()
         }
       }
     },

@@ -7,6 +7,10 @@ import { defineConfig } from 'vite-plus'
 
 const solidFiles = /\.solid\.tsx$/
 const uiSdkSolidBuild = /\/@ui-sdk\/solid\/dist\/solid\/.*\.jsx$/
+const solidPlugin = () => solid({ include: [solidFiles, uiSdkSolidBuild] })
+const alias = { '@': fileURLToPath(new URL('web/src', import.meta.url)) }
+const excludeE2e = ['test/e2e/**', 'extensions/*/test/e2e/**']
+const maxWorkers = 16
 const solidRules = Object.fromEntries(
   Object.entries(solidV2Strict.rules as Record<string, number>)
     .filter(([rule, level]) => rule.startsWith('solid/') && level > 0)
@@ -62,12 +66,8 @@ const noReactRules = Object.fromEntries(
 
 export default defineConfig({
   root: 'web',
-  plugins: [
-    react({ exclude: [solidFiles, /\/node_modules\//] }),
-    solid({ include: [solidFiles, uiSdkSolidBuild] }),
-    tailwindcss(),
-  ],
-  resolve: { alias: { '@': fileURLToPath(new URL('web/src', import.meta.url)) } },
+  plugins: [react({ exclude: [solidFiles, /\/node_modules\//] }), solidPlugin(), tailwindcss()],
+  resolve: { alias },
   lint: {
     plugins: ['typescript', 'unicorn', 'import', 'promise', 'vitest', 'react'],
     jsPlugins: ['./lint/ultimate.ts', 'eslint-plugin-solid'],
@@ -255,6 +255,11 @@ export default defineConfig({
         rules: { 'ultimate/api-only-imports': 'error', 'ultimate/core-tier-deps': 'error' },
       },
       {
+        files: ['.ultimate/extensions/**/*.ts', '.ultimate/extensions/**/*.tsx'],
+        excludeFiles: ['.ultimate/extensions/*/test/**'],
+        rules: { 'ultimate/api-only-imports': 'error' },
+      },
+      {
         files: ['extensions/*/api.ts', 'extensions/*/refs.ts', 'extensions/*/ui.tsx'],
         rules: { 'ultimate/api-file-shape': 'error', 'ultimate/api-naming': 'error' },
       },
@@ -362,12 +367,29 @@ export default defineConfig({
     // Core and integration tests in test/, each extension's own in extensions/<name>/test/: `pnpm test extensions/<name>/`
     // runs one extension's.
     include: ['test/**/*.test.ts', 'extensions/*/test/**/*.test.ts'],
-    exclude: ['test/e2e/**', 'extensions/*/test/e2e/**'],
+    exclude: excludeE2e,
+    projects: [
+      { extends: true, test: { name: 'node' } },
+      {
+        // Resolve Solid with jsdom's client environment, leaving the node project's server conditions intact.
+        extends: false,
+        plugins: [solidPlugin()],
+        resolve: { alias },
+        test: {
+          name: 'solid-dom',
+          environment: 'jsdom',
+          include: ['test/**/*.test.solid.tsx', 'extensions/*/test/**/*.test.solid.tsx'],
+          exclude: excludeE2e,
+          setupFiles: ['test/web/solid-dom-setup.ts'],
+          maxWorkers,
+        },
+      },
+    ],
     testTimeout: 30000,
     // A hung hook or teardown fails within seconds and names its test, instead of stalling the run.
     hookTimeout: 5000,
     teardownTimeout: 5000,
-    maxWorkers: 16,
+    maxWorkers,
     // Under an agent (AI_AGENT, CLAUDECODE, …) Vitest picks its minimal reporter, which prints nothing for passing
     // files; the lander's stall watchdog then stops a passing run that is silent for two minutes.
     reporters: ['default'],
