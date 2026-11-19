@@ -14,6 +14,9 @@ import type {
   UiUpdateRequest,
   UiUpdateResponse,
 } from '../../../shared/protocol.ts'
+import { SOURCE_HEADER } from '../../../shared/protocol.ts'
+import { writerNow } from './writer.ts'
+import type { UiWho } from './writer.ts'
 import type { ActionRef } from '../../../shared/extension-api.ts'
 import { errorMessage } from './format.ts'
 import type { Store } from './store.ts'
@@ -63,11 +66,18 @@ export function createApi(store: Store, options: { fetch?: typeof fetch } = {}) 
   async function post<T>(
     path: string,
     body: object = {},
-    { keepalive = false, signal }: { keepalive?: boolean; signal?: AbortSignal } = {},
+    {
+      keepalive = false,
+      signal,
+      who = writerNow(),
+    }: { keepalive?: boolean; signal?: AbortSignal; who?: UiWho } = {},
   ): Promise<T> {
     const response = await request(path, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        [SOURCE_HEADER]: who,
+      },
       body: JSON.stringify(body),
 
       keepalive,
@@ -152,7 +162,8 @@ export function createApi(store: Store, options: { fetch?: typeof fetch } = {}) 
       }
     },
 
-    updateUi: (change: UiUpdateRequest) => post<UiUpdateResponse>('/api/ui', change),
+    updateUi: (change: UiUpdateRequest, who?: UiWho, exit?: { keepalive: boolean }) =>
+      post<UiUpdateResponse>('/api/ui', change, { who, ...exit }),
   }
 }
 export type Api = ReturnType<typeof createApi>

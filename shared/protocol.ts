@@ -12,6 +12,7 @@ import type { JsonValue } from '@earendil-works/chord/json'
 import type { Op } from '@earendil-works/chord/delta'
 import type { AuthType, ModelThinkingLevel } from '@earendil-works/pi-ai'
 import type { ModelRuntime } from '@earendil-works/pi-coding-agent'
+import type { UiSource } from './events.ts'
 
 export const imageMimeTypes = ['image/png', 'image/jpeg', 'image/webp', 'image/gif']
 export const maxImageBytes = 2 * 1024 * 1024
@@ -190,16 +191,20 @@ export interface ModelsResponse {
     available: boolean
   }[]
 }
+export interface UiOp {
+  key: string
+  value?: JsonValue
+  who?: UiSource['source']
+  seq?: number
+}
 export interface UiUpdateRequest {
-  set?: Record<string, JsonValue>
-  delete?: string[]
+  ops: UiOp[]
+  tab?: string
 }
 export const UI_REVISION = 'ui.rev'
+export const SOURCE_HEADER = 'x-ultimate-source'
 type CommittedUiRevision = number
-export interface UiUpdateResponse {
-  ok: true
-  rev: CommittedUiRevision
-}
+export type UiUpdateResponse = { ok: true; rev: CommittedUiRevision }
 type StreamHandshakeBeforeSubscriptions = { id: string }
 export interface ServerEvents {
   stream: StreamHandshakeBeforeSubscriptions

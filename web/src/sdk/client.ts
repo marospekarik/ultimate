@@ -8,6 +8,7 @@ import { HOME, createRegistry } from './registry.ts'
 import { createStore } from './store.ts'
 import { createTestHook } from './test-hook.ts'
 import { createUiAgent } from './agent.ts'
+import { agentsPage } from './writer.ts'
 import { firstRender } from './resume.ts'
 import type { TestHook } from './test-hook.ts'
 
@@ -45,12 +46,14 @@ export const store = createStore({
     uiState.delete('shell.conversation')
   },
 })
-/** Server commands; conversation commands default to the shown conversation. */
+const driven = sessionStorage.getItem('ultimate.driven') === '1'
+if (driven) agentsPage()
+
+/** Server commands; conversation commands default to the shown conversation. Each write says who made it. */
 export const api = createApi(store)
 
 export const reads = createReads(api, store)
 
-const driven = sessionStorage.getItem('ultimate.driven') === '1'
 const { shares: followsSharedUiState, ...tabOnly } = tabWrites({
   driven,
   detached: sessionStorage.getItem('ultimate.detached') === '1',
@@ -66,14 +69,13 @@ export const uiState = createUiState(followsSharedUiState ? api.updateUi : undef
   ...tabOnly,
 })
 
-/** The page's one ui-sdk agent bridge, created at start so it hears every component; the `ui` facet records its changes. */
-export const uiAgent = createUiAgent(driven)
-uiAgent.onFlush(() => uiState.flush())
+/** The page's one ui-sdk agent bridge, created at start so it hears every component. */
+export const uiAgent = createUiAgent()
 
 export const registry = createRegistry()
 
 if (driven)
-  window.ultimate = createTestHook(store, api, uiAgent, firstRender, (signal) =>
+  window.ultimate = createTestHook(store, api, uiAgent, uiState, firstRender, (signal) =>
     reads.settledInUse(signal),
   )
 
@@ -185,7 +187,7 @@ addEventListener('popstate', () => {
     replaceSelection = false
   }
 })
-addEventListener('pagehide', () => void uiAgent.flush(true))
+addEventListener('pagehide', () => void uiState.exit())
 
 addEventListener('unhandledrejection', (event) => {
   if (!(event.reason instanceof ActionError)) return

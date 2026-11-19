@@ -10,7 +10,12 @@ import type {
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { onCommit } from '../lib/commits.ts'
 import { inProcess } from '../lib/errors.ts'
-import type { ServerEvents, ConversationSummary, ConfigureRequest } from '../shared/protocol.ts'
+import type {
+  ServerEvents,
+  ConversationSummary,
+  ConfigureRequest,
+  UiOp,
+} from '../shared/protocol.ts'
 import { UI_REVISION, imageMimeTypes, maxImageBytes, maxImages } from '../shared/protocol.ts'
 import { listModels } from './models.ts'
 import { hostDefault } from '../lib/agents.ts'
@@ -20,14 +25,14 @@ import { context } from './harness.ts'
 import type { OpenHost, PreparedHost } from './harness.ts'
 import type { createSystem } from './system.ts'
 import { requestSwap } from './supervisor-protocol.ts'
-import { UiState } from '../shared/ui-state.ts'
+import { UiState, UiWriters } from '../shared/ui-state.ts'
 import type { JsonValue } from '@earendil-works/chord/json'
 import { clampThinkingLevel, getSupportedThinkingLevels } from '@earendil-works/pi-ai'
 import { Metadata } from './metadata.ts'
-import { EVENT_LOG_LABEL, emit } from './events.ts'
-import { UserInputEvent } from '../shared/events.ts'
+import { EVENT_LOG_LABEL, emit, uiChange } from './events.ts'
+import { ChangedEvent, UserInputEvent } from '../shared/events.ts'
 import type { Device } from '../shared/events.ts'
-import { admit, deviceOf } from './request-security.ts'
+import { admit, deviceOf, sourceOf } from './request-security.ts'
 import type { Access } from './request-security.ts'
 import { conversationIndex } from './project.ts'
 import { shortTitle } from '../lib/title.ts'
@@ -70,8 +75,24 @@ function text(value: unknown, name: string): string {
   if (typeof value !== 'string' || !value.trim()) throw new HttpError(400, `Expected ${name}`)
   return value
 }
-const validUiKey = (key: unknown) =>
+const validUiKey = (key: unknown): key is string =>
   typeof key === 'string' && key.length <= 200 && /^[A-Za-z0-9_.:-]+$/.test(key)
+function uiOps(ops: unknown): UiOp[] {
+  if (!Array.isArray(ops)) throw new HttpError(400, 'Invalid UI update')
+  return ops.map((op: unknown) => {
+    if (!op || typeof op !== 'object' || Array.isArray(op))
+      throw new HttpError(400, 'Invalid UI update')
+    const { key, value, who, seq } = op as Record<string, unknown>
+    if (!validUiKey(key)) throw new HttpError(400, 'Invalid UI key')
+    if (key === UI_REVISION) throw new HttpError(400, 'The UI revision is the server’s')
+    if (who !== undefined && who !== 'person' && who !== 'agent' && who !== 'app')
+      throw new HttpError(400, 'Invalid UI writer')
+    if (seq !== undefined && !Number.isSafeInteger(seq))
+      throw new HttpError(400, 'Invalid UI sequence')
+    return { key, value: value as JsonValue | undefined, who, seq: seq as number | undefined }
+  })
+}
+const maxUiWriters = 1000
 const actionPath = /^\/api\/extensions\/([^/]+)\/actions\/([^/]+)$/
 const subscriptionPath = /^\/api\/events\/([0-9a-f-]+)\/(\d+)$/
 const maxResentSummaryTitleCharacters = 200
@@ -149,6 +170,7 @@ async function runAction(
       id === undefined ? undefined : parseConversationId(id),
       'ui',
       device,
+      sourceOf(request.headers),
     )
     reply(response, 200, { result })
   } catch (error) {
@@ -519,22 +541,55 @@ export async function createApi(
           return true
         }
         if (url.pathname === '/api/ui') {
-          const set = data.set === undefined ? {} : data.set
-          const remove = data.delete === undefined ? [] : data.delete
-          if (!set || typeof set !== 'object' || Array.isArray(set) || !Array.isArray(remove))
-            throw new HttpError(400, 'Invalid UI update')
-          if (!Object.keys(set).every(validUiKey) || !remove.every(validUiKey))
-            throw new HttpError(400, 'Invalid UI key')
-          if (UI_REVISION in set || remove.includes(UI_REVISION))
-            throw new HttpError(400, 'The UI revision is the server’s')
+          const { tab } = data
+          const requested = uiOps(data.ops)
+          if (new Set(requested.map(({ key }) => key)).size > maxUiWriters)
+            throw new HttpError(413, 'Too many UI keys in one write')
+          if (tab !== undefined && (typeof tab !== 'string' || tab.length > 64))
+            throw new HttpError(400, 'Invalid UI tab')
+          const by = {
+            ...sourceOf(request.headers),
+            ...deviceOf(request.headers['user-agent'], identity),
+          }
           const rev = await root.commit(async (tx) => {
+            const writers = await tx.doc(UiWriters, root.id)
+            const ops = requested.filter(({ key, seq }) => {
+              if (tab === undefined || seq === undefined) return true
+              const writer = `${tab} ${key}`
+              if ((writers[writer] ?? -Infinity) >= seq) return false
+              delete writers[writer]
+              writers[writer] = seq
+              return true
+            })
+            const writtenNow = new Set(requested.map(({ key }) => `${tab} ${key}`))
+            const older = Object.keys(writers).filter((writer) => !writtenNow.has(writer))
+            const overCap = Object.keys(writers).length - maxUiWriters
+            for (const writer of older.slice(0, Math.max(0, overCap))) delete writers[writer]
             const value = await tx.doc(UiState, root.id)
-            const next = { ...value, ...(set as Record<string, JsonValue>) }
-            for (const key of remove) delete next[key]
+            const written = new Map<string, JsonValue | undefined>()
+            const stored = (key: string) =>
+              written.has(key)
+                ? written.get(key)
+                : Object.hasOwn(value, key)
+                  ? value[key]
+                  : undefined
+            const changes = ops.map(({ key, value: after, who }) => {
+              const change = uiChange(who ? { ...by, source: who } : by, {
+                key,
+                value: after,
+                previous: stored(key),
+              })
+              written.set(key, after)
+              return change
+            })
+            const next = { ...value, ...Object.fromEntries(written) }
+            for (const [key, item] of written) if (item === undefined) delete next[key]
             if (Buffer.byteLength(JSON.stringify(next)) > 256 * 1024)
               throw new HttpError(413, 'UI state too large')
-            for (const [key, item] of Object.entries(set)) value[key] = item as JsonValue
-            for (const key of remove) delete value[key]
+            for (const change of changes) if (change) await emit(tx, ChangedEvent, change)
+            for (const [key, item] of written)
+              if (item === undefined) delete value[key]
+              else value[key] = item
             const previous = value[UI_REVISION]
             const revisionInSameCommit = (typeof previous === 'number' ? previous : 0) + 1
             value[UI_REVISION] = revisionInSameCommit

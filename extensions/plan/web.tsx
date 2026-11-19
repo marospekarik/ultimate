@@ -39,6 +39,7 @@ import {
   useToolDuration,
   useUiState,
   useUltimate,
+  writingAs,
 } from '@/sdk'
 import type { ConversationSummary, ToolCallView } from '@/sdk'
 import { ConversationEpic, ConversationTask } from '../conversations/ui.tsx'
@@ -673,7 +674,8 @@ function PlanOverlay() {
     if (!key) return
     url.searchParams.delete('task')
     history.replaceState(history.state, '', url)
-    if (Number.isSafeInteger(conversation) && conversation > 0) setRequest({ conversation, key })
+    if (Number.isSafeInteger(conversation) && conversation > 0)
+      writingAs('app', () => setRequest({ conversation, key }))
   }, [setRequest])
   if (surface !== 'agent' || conversationId === undefined || !anchor) return null
   return (
@@ -708,9 +710,9 @@ function CoordinatorPlan({
   const [focus, setFocus] = useState<DeepLinkFocus>()
   useEffect(() => {
     if (!request || plan === undefined) return
-    setExpanded(true)
+    writingAs('app', () => setExpanded(true))
     setFocus({ key: request.key })
-    settle()
+    writingAs('app', settle)
   }, [request, plan, setExpanded, settle])
   const shown = pillOf(plan?.epics ?? {})
   if (!shown && !expanded) return null

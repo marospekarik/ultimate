@@ -31,7 +31,7 @@ import { Metadata } from './metadata.ts'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { AgentDoc, LiveDoc } from '@earendil-works/pi-durable'
 import type { Access } from './request-security.ts'
-import { EventFeed, eventLog } from './events.ts'
+import { EventFeed, eventLog, uiChange } from './events.ts'
 import { contractOutline } from '../lib/api-files.ts'
 import type { EventHost } from './events.ts'
 import { extensionApis } from './extension-apis.ts'
@@ -39,7 +39,8 @@ import type { TraceReader } from './trace.ts'
 import type { Api, Catalogue } from '../shared/extension-api.ts'
 import { inExtensionTests } from '../shared/extension-api.ts'
 import { secretMetadata } from '../lib/secrets.ts'
-import type { Device } from '../shared/events.ts'
+import { ChangedEvent } from '../shared/events.ts'
+import type { Device, UiSource } from '../shared/events.ts'
 import { inProcess, isMissing, meansNone } from '../lib/errors.ts'
 
 export type ExtensionHost = Pick<
@@ -302,6 +303,7 @@ export async function loadExtensions(
     conversationId?: ConversationId,
     caller = 'ui',
     device?: Device,
+    source: UiSource = { source: 'person' },
   ) {
     const table = actions.get(name)
     const fn = table && Object.hasOwn(table, action) ? table[action] : undefined
@@ -313,11 +315,16 @@ export async function loadExtensions(
       throw new Error('Invalid conversationId')
     const call = { caller, callee: name, name: `${name}/${action}`, args, conversationId }
     const poll = pollActions.get(name)?.includes(action)
+    const by = caller === 'agent' ? { source: 'agent' as const } : { ...source, ...device }
     return trace.run({ kind: 'action', ...call, ...(poll ? { poll } : {}) }, () =>
       fn(args, {
         host: facetHosts.get(name)!,
         conversationId,
         ...(device ? { device } : {}),
+        uiChanged: async (tx, change) => {
+          const data = uiChange(by, { ...change, conversation: conversationId })
+          if (data) await log.emit(tx, ChangedEvent, data)
+        },
         signal,
         exec: async (command, commandArgs, options) => {
           const agent =

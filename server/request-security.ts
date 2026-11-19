@@ -1,5 +1,6 @@
 import type { IncomingHttpHeaders, IncomingMessage } from 'node:http'
-import type { Device } from '../shared/events.ts'
+import type { Device, UiSource } from '../shared/events.ts'
+import { SOURCE_HEADER } from '../shared/protocol.ts'
 import { meansNone } from '../lib/errors.ts'
 
 export type Identity = { login: string; address?: string }
@@ -63,6 +64,17 @@ export async function admit(
     }
   }
   return undefined
+}
+
+export function sourceOf(headers: IncomingHttpHeaders): UiSource {
+  return {
+    source:
+      headers[SOURCE_HEADER] === 'agent'
+        ? 'agent'
+        : headers[SOURCE_HEADER] === 'app'
+          ? 'app'
+          : 'person',
+  }
 }
 
 export function deviceOf(agent = '', identity: Partial<Identity>): Device {

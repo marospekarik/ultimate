@@ -70,9 +70,25 @@ export const NavigatedEvent = defineEvent<
   { surface: string; conversation?: ConversationId } & Partial<Device>
 >('ui.navigated')
 
-export const CORE_EVENTS = [NoticeEvent, StartedEvent, UserInputEvent, NavigatedEvent].map(
-  (event) => event.name,
-)
+export type UiSource = { source: 'person' | 'agent' | 'app' }
+export type UiAttribution = UiSource & Partial<Device>
+
+export const ChangedEvent = defineEvent<
+  {
+    key: string
+    value?: JsonValue
+    previous?: JsonValue
+    conversation?: ConversationId
+  } & UiAttribution
+>('ui.changed', { version: 2 })
+
+export const CORE_EVENTS = [
+  NoticeEvent,
+  StartedEvent,
+  UserInputEvent,
+  NavigatedEvent,
+  ChangedEvent,
+].map((event) => event.name)
 
 export const EVENT_FEED = 'ultimate.event-feed'
 export const EVENT_FEED_SIZE = 100
