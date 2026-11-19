@@ -25,10 +25,11 @@ bugs. The skills that the libraries ship match the exact pinned versions: read t
 The toolchain, lint, these skills, and the SDK's Solid side. A `*.solid.tsx` file compiles with Solid and lints with the
 rules below. An extension mounts a Solid component from its `web.tsx` with `island(Component)` from `@/sdk`, and the
 component reads documents, UI state and client state as accessors from `@/sdk/solid`
-([Solid facets](../../docs/extensions/sdk.md#solid-facets)). The Solid UI kit is growing one component at a time
-(`popover.solid.tsx`, `switch.solid.tsx`, `segmented-control.solid.tsx` so far): import it as `@/components/ui/<name>.solid.tsx`, and check
-`web/src/components/ui/` before assuming a component exists. `extensions/keep-warm/chip.solid.tsx` is the reference
-migration, with its agent test beside it. Icons come from `@lucide/solid`.
+([Solid facets](../../docs/extensions/sdk.md#solid-facets)). The Solid UI kit ships Button, Checkbox, Kbd and KbdGroup,
+Popover, Row and Rows, SegmentedControl, Skeleton, StatusPopoverTrigger (in `status-trigger.solid.tsx`), Switch and
+Tooltip. Import from `@/components/ui/<name>.solid.tsx`, and check `web/src/components/ui/` before assuming a component
+exists. `extensions/keep-warm/chip.solid.tsx` is the reference migration, with its agent test beside it. Icons come
+from `@lucide/solid`.
 
 ## Ultimate's rules (on top of those skills)
 
@@ -47,6 +48,9 @@ migration, with its agent test beside it. Icons come from `@lucide/solid`.
 - **Our theme, ui-sdk's states.** Style with our tokens (`text-muted-foreground`, `bg-muted`, `border-border/70`,
   `text-brand`) and ui-sdk's state attributes (`data-pressed:`, `data-checked:`, `data-open:`, `data-disabled:`), never
   inline styles for state. The UI stays dense and quiet, with `font-mono` for meta.
+- **The pointer cursor is a default.** `web/src/index.css` gives every clickable element (buttons, clickable roles,
+  links, labels of controls, `summary`, `select`) the pointer and a disabled one the default cursor; never add
+  `cursor-pointer` by hand.
 - **Name every control** with a visible label or `aria-label`: people using screen readers and agents both find
   controls by name.
 - **Say what agents may do**, as the ui-sdk skill's `references/agent-ready.md` describes:
@@ -67,10 +71,18 @@ migration, with its agent test beside it. Icons come from `@lucide/solid`.
     `REACTIVE_WRITE_IN_OWNED_SCOPE`, tests included: create the store inside the root, write from outside it.
   - A context created without a default throws when nothing provides it, and a provider passing `undefined` counts as
     nothing. For an optional context, declare a `null` default and provide `null`, as `ExtensionName` does.
-  - `solid/reactivity` rejects memos built inside an array literal; give each memo its own name.
+  - `solid/reactivity` rejects memos built inside an array literal; give each memo its own name. It also needs a named
+    variable for merged props before you spread them in JSX.
 - **ui-sdk facts that tripped agents here:**
   - Popups render in the browser's top layer, not a portal: they stay in their trigger's DOM tree and inherit its
     text styles (a status line's `whitespace-nowrap`, `font-mono`). Kit popups reset the inherited text styles.
+  - Button uses `onClick(event, details)`, not `onPress`; return the handler's Promise so ui-sdk tracks its pending
+    state. A press itself need not produce a change event; test its callback and the write it starts.
+  - Checkbox can report `"indeterminate"`; a boolean `bind` only accepts boolean changes. The SDK indicator sits inside
+    the checkbox button and is separate from the native form input.
+  - Tooltip needs no provider. `delay` controls hover; keyboard focus opens at once. It keeps `data-slot="tooltip-content"`
+    mounted (hidden when closed) so it can name an icon-only trigger before focus. In jsdom, dispatch a Tab `keydown`
+    before `.focus()` to test the keyboard path, and `await settle()` for the deferred accessible name.
   - A closed popover hides its controls from the agent bridge: `snapshot()` shows only the popover, so open it first
     (`setOpen(true)` through `act`).
   - Packages that ship raw JSX under the `solid` export condition (ui-sdk, `@lucide/solid`) must be in the Solid
@@ -110,6 +122,9 @@ migration, with its agent test beside it. Icons come from `@lucide/solid`.
   UI-state writes before it closes the page, whatever the last step was.
 - To type into a ui-sdk text field in jsdom, use `setRangeText` and dispatch `input`, as ui-sdk's own `type` helper
   does: assigning `.value` counts as a program's write, not typing, and reports no `input-change`.
+- Read state where it lives. `useAction` follows the shown conversation, so on a fresh page its read switches when the
+  view arrives, starts unanswered, and a `<Show when={data()}>` unmounts what an agent was about to act on. State that
+  lives on the root reads `useAction(ref, args, { conversation: ROOT })` and `useDocOf(() => ROOT, ref)`.
 - A Solid `useAction` with getter args: each read keeps the args its key was made from, so switching args mid-flight
   never answers the old read with the new args.
 - A person's click inside `data-agent-hidden` still changes the control, but the bridge reports nothing: a secret
