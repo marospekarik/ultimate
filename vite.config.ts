@@ -1,14 +1,77 @@
 import { fileURLToPath } from 'node:url'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
+import solid from '@solidjs/vite-plugin'
+import solidV2Strict from 'eslint-plugin-solid/configs/v2-strict'
 import { defineConfig } from 'vite-plus'
+
+const solidFiles = /\.solid\.tsx$/
+const uiSdkSolidBuild = /\/@ui-sdk\/solid\/dist\/solid\/.*\.jsx$/
+const solidRules = Object.fromEntries(
+  Object.entries(solidV2Strict.rules as Record<string, number>)
+    .filter(([rule, level]) => rule.startsWith('solid/') && level > 0)
+    .map(([rule]) => [rule, 'error' as const]),
+)
+const reactRulesEnabledByCategory = [
+  'capitalized-calls',
+  'error-boundaries',
+  'exhaustive-deps',
+  'exhaustive-effect-dependencies',
+  'forward-ref-uses-ref',
+  'globals',
+  'hooks',
+  'iframe-missing-sandbox',
+  'immutability',
+  'incompatible-library',
+  'jsx-key',
+  'jsx-no-comment-textnodes',
+  'jsx-no-duplicate-props',
+  'jsx-no-script-url',
+  'jsx-no-undef',
+  'jsx-props-no-spread-multi',
+  'memo-dependencies',
+  'no-children-prop',
+  'no-danger-with-children',
+  'no-did-mount-set-state',
+  'no-did-update-set-state',
+  'no-direct-mutation-state',
+  'no-find-dom-node',
+  'no-is-mounted',
+  'no-namespace',
+  'no-render-return-value',
+  'no-string-refs',
+  'no-this-in-sfc',
+  'no-unsafe',
+  'no-unstable-nested-components',
+  'no-will-update-set-state',
+  'preserve-manual-memoization',
+  'purity',
+  'react-in-jsx-scope',
+  'refs',
+  'set-state-in-effect',
+  'set-state-in-render',
+  'static-components',
+  'style-prop-object',
+  'use-memo',
+  'void-dom-elements-no-children',
+  'void-use-memo',
+]
+const noReactRules = Object.fromEntries(
+  reactRulesEnabledByCategory.map((rule) => [`react/${rule}`, 'off' as const]),
+)
+
 export default defineConfig({
   root: 'web',
-  plugins: [react(), tailwindcss()],
+  plugins: [
+    react({ exclude: [solidFiles, /\/node_modules\//] }),
+    solid({ include: [solidFiles, uiSdkSolidBuild] }),
+    tailwindcss(),
+  ],
   resolve: { alias: { '@': fileURLToPath(new URL('web/src', import.meta.url)) } },
   lint: {
     plugins: ['typescript', 'unicorn', 'import', 'promise', 'vitest', 'react'],
-    jsPlugins: ['./lint/ultimate.ts'],
+    jsPlugins: ['./lint/ultimate.ts', 'eslint-plugin-solid'],
+    settings: solidV2Strict.settings,
     categories: { correctness: 'error', suspicious: 'error' },
     rules: {
       'import/no-cycle': 'error',
@@ -200,23 +263,12 @@ export default defineConfig({
         rules: { 'ultimate/no-raw-stream': 'error' },
       },
       {
-        files: ['web/src/**', 'extensions/**/*.tsx'],
-        excludeFiles: ['extensions/*/test/**'],
-        plugins: ['react'],
+        files: ['web/src/**', 'extensions/**/*.tsx', '.ultimate/extensions/**/*.tsx'],
+        excludeFiles: ['extensions/*/test/**', '.ultimate/extensions/*/test/**'],
         rules: {
           // In the page `void` marks a call not awaited on purpose: client.ts turns an unhandled action failure into a
           // notice, and nothing can take the process down.
           'typescript/no-floating-promises': ['error', { ignoreVoid: true }],
-          'react/rules-of-hooks': 'error',
-          'react/exhaustive-deps': 'error',
-          'react/jsx-key': 'error',
-          'react/react-in-jsx-scope': 'off',
-          'react/hooks': 'off',
-          'react/set-state-in-effect': 'off',
-          'react/refs': 'off',
-          'react/purity': 'off',
-          'react/memo-dependencies': 'off',
-          'react/exhaustive-effect-dependencies': 'off',
           'no-restricted-imports': [
             'error',
             {
@@ -234,6 +286,46 @@ export default defineConfig({
             },
           ],
         },
+      },
+      {
+        files: ['web/src/**', 'extensions/**/*.tsx'],
+        excludeFiles: ['extensions/*/test/**', '**/*.solid.tsx'],
+        rules: {
+          'react/rules-of-hooks': 'error',
+          'react/exhaustive-deps': 'error',
+          'react/jsx-key': 'error',
+          'react/react-in-jsx-scope': 'off',
+          'react/hooks': 'off',
+          'react/set-state-in-effect': 'off',
+          'react/refs': 'off',
+          'react/purity': 'off',
+          'react/memo-dependencies': 'off',
+          'react/exhaustive-effect-dependencies': 'off',
+        },
+      },
+      {
+        files: ['**/*.solid.tsx'],
+        plugins: ['jsx-a11y'],
+        rules: {
+          ...noReactRules,
+          'no-unassigned-vars': 'off',
+          ...solidRules,
+          'ultimate/solid-jsx-pragma': 'error',
+          'ultimate/ui-kit-roles': 'error',
+          'jsx-a11y/control-has-associated-label': 'error',
+          'jsx-a11y/label-has-associated-control': 'error',
+          'jsx-a11y/no-static-element-interactions': 'error',
+          'jsx-a11y/click-events-have-key-events': 'error',
+          'jsx-a11y/interactive-supports-focus': 'error',
+          'jsx-a11y/no-noninteractive-element-interactions': 'error',
+          'jsx-a11y/prefer-tag-over-role': 'error',
+          'jsx-a11y/no-autofocus': 'error',
+        },
+      },
+      {
+        files: ['web/**', 'extensions/**', '.ultimate/extensions/**'],
+        excludeFiles: ['extensions/*/test/**', '.ultimate/extensions/*/test/**'],
+        rules: { 'ultimate/ui-framework-boundaries': 'error' },
       },
       {
         // Replaces the browser restriction above for web/src, so it repeats it and adds extensions.
@@ -264,6 +356,7 @@ export default defineConfig({
   fmt: { semi: false, singleQuote: true },
   test: {
     root: '.',
+    environment: 'node',
     globalSetup: ['test/sweep-temp.ts'],
     setupFiles: ['test/setup.ts', 'test/no-group-signals.ts'],
     // Core and integration tests in test/, each extension's own in extensions/<name>/test/: `pnpm test extensions/<name>/`

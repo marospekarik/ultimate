@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { apiSummary } from '../lib/api-files.ts'
 import { coreTier } from '../shared/extension-api.ts'
@@ -105,6 +105,55 @@ const membersOf = (declaration: Node): Node[] =>
   declaration.type === 'TSInterfaceDeclaration'
     ? (((declaration.body as Node | undefined)?.body as Node[] | undefined) ?? [])
     : literals(declaration.typeAnnotation)
+const repositoryPath = (filename: string) =>
+  path.relative(process.cwd(), filename).split(path.sep).join('/')
+const solidFile = (filename: string) => filename.endsWith('.solid.tsx')
+const uiKitFile = (filename: string) =>
+  repositoryPath(filename).startsWith('web/src/components/ui/')
+const reactOnly =
+  /^(react|react-dom|lucide-react|radix-ui|cmdk|streamdown|use-stick-to-bottom|@radix-ui\/.*|@pierre\/diffs\/react)(\/|$)/
+const solidOnly = /^(solid-js|@solidjs\/.*|@ui-sdk\/solid)(\/|$)/
+const uiSdkComponents = /^@ui-sdk\/solid(\/|$)/
+const solidJsxPragma = '@jsxImportSource @solidjs/web'
+const isSolidJsxPragma = (comment: Comment | undefined) =>
+  comment?.type === 'Block' && comment.value.trim().replace(/^\*\s*/, '') === solidJsxPragma
+const moduleSuffixes = ['', '.ts', '.tsx', '/index.ts', '/index.tsx']
+const localModule = (filename: string, source: string) => {
+  const base = source.startsWith('@/')
+    ? path.resolve(process.cwd(), 'web/src', source.slice(2))
+    : source.startsWith('.')
+      ? path.resolve(path.dirname(filename), source)
+      : undefined
+  if (base === undefined) return undefined
+  const found = moduleSuffixes
+    .map((suffix) => base + suffix)
+    .find((file) => existsSync(file) && statSync(file).isFile())
+  return found ?? base
+}
+const staticString = (value: Node | null | undefined): unknown =>
+  value?.type === 'JSXExpressionContainer'
+    ? staticString(value.expression)
+    : value?.type === 'TemplateLiteral' &&
+        (value as { expressions?: unknown[] }).expressions?.length === 0
+      ? (value as { quasis?: { value?: { cooked?: string } }[] }).quasis?.[0]?.value?.cooked
+      : value?.value
+const kitRoles = new Map([
+  ['listbox', 'Listbox or Select'],
+  ['menu', 'Menu'],
+  ['menubar', 'Menubar'],
+  ['dialog', 'Dialog'],
+  ['alertdialog', 'AlertDialog'],
+  ['tablist', 'Tabs'],
+  ['tab', 'Tabs'],
+  ['separator', 'Separator'],
+  ['switch', 'Switch'],
+  ['slider', 'Slider'],
+  ['radiogroup', 'Radio'],
+  ['toolbar', 'Toolbar'],
+  ['tree', 'Tree'],
+  ['combobox', 'Combobox'],
+  ['tooltip', 'Tooltip'],
+])
 const onlyDefineEntry = (node: Node) =>
   node.source?.value === '@earendil-works/pi-durable' &&
   node.specifiers?.length === 1 &&
@@ -239,7 +288,8 @@ export default {
             for (const comment of context.sourceCode.getAllComments()) {
               if (
                 comment.type === 'Shebang' ||
-                /^\s*Pi upstream:|License — Copyright/.test(comment.value)
+                /^\s*Pi upstream:|License — Copyright/.test(comment.value) ||
+                (solidFile(context.filename) && isSolidJsxPragma(comment))
               )
                 continue
               if (isJsDoc(comment) && contractDocs.has(comment.start)) continue
@@ -249,6 +299,84 @@ export default {
                   'A comment is an excuse for unclear code: make the names and structure say it. An invariant (ordering, durability, replay) becomes a name, a type or a small function; a workaround keeps its why in the commit message and a regression test. Only contract JSDoc (on the exports of api.ts, refs.ts, ui.tsx and web/src/sdk), `Pi upstream:` markers and licence headers of copied code stay.',
               })
             }
+          },
+        }
+      },
+    },
+    'ui-framework-boundaries': {
+      meta: { schema: [] },
+      create(context: Context) {
+        const solid = solidFile(context.filename)
+        const check = (node: ImportNode) => {
+          const source = node.source?.value
+          if (typeof source !== 'string') return
+          if (node.importKind === 'type' || node.exportKind === 'type') return
+          const local = localModule(context.filename, source)
+          const localReact = local?.endsWith('.tsx') === true && !solidFile(local)
+          const localSolid = local !== undefined && solidFile(local)
+          if (solid && (reactOnly.test(source) || localReact))
+            context.report({
+              node,
+              message: `A Solid file renders with Solid alone, so React code in it never runs as written. Replace ${source} with its Solid counterpart: our UI kit (@/components/ui), @lucide/solid for icons, or a ui-sdk component in the kit.`,
+            })
+          else if (!solid && !inSdk(context.filename) && (solidOnly.test(source) || localSolid))
+            context.report({
+              node,
+              message: `React and Solid meet only in the SDK's island mount, so each file has one renderer and one set of JSX types. Move this code into a .solid.tsx file, or mount a Solid component through @/sdk instead of importing ${source}.`,
+            })
+          else if (
+            uiSdkComponents.test(source) &&
+            !uiKitFile(context.filename) &&
+            !inSdk(context.filename)
+          )
+            context.report({
+              node,
+              message: `ui-sdk is in beta and changes weekly, so its components are wrapped once in our UI kit, which also carries the theme. Import the component from @/components/ui; for a behavior the kit lacks, compose it with definePrimitive from @ui-sdk/core.`,
+            })
+        }
+        return {
+          ImportDeclaration: check,
+          ImportExpression: check,
+          ExportNamedDeclaration: check,
+          ExportAllDeclaration: check,
+        }
+      },
+    },
+    'solid-jsx-pragma': {
+      meta: { schema: [] },
+      create(context: Context) {
+        if (!solidFile(context.filename)) return {}
+        return {
+          Program(program: Node) {
+            const first = context.sourceCode.getAllComments()[0] as Comment | undefined
+            const statements = (program.body as Node[] | undefined) ?? []
+            if (
+              !isSolidJsxPragma(first) ||
+              (statements.length > 0 && first!.end > statements[0].start!)
+            )
+              context.report({
+                node: program,
+                message: `A Solid file shares the type-check project with React files, and TypeScript reads the JSX source only from a leading block comment, so without it the JSX is checked against React's types. Open the file with /** ${solidJsxPragma} */.`,
+              })
+          },
+        }
+      },
+    },
+    'ui-kit-roles': {
+      meta: { schema: [] },
+      create(context: Context) {
+        if (uiKitFile(context.filename)) return {}
+        return {
+          JSXAttribute(node: Node & { name?: Node }) {
+            if (node.name?.name !== 'role') return
+            const role = staticString(node.value as Node | null | undefined)
+            if (typeof role !== 'string') return
+            const component = kitRoles.get(role)
+            if (component)
+              context.report({
+                node,
+                message: `A hand-made role="${role}" lacks the keyboard, focus and ARIA behavior people and agents rely on, and the agent bridge cannot see it. Use the kit's ${component} from @/components/ui.`,
+              })
           },
         }
       },

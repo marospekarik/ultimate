@@ -1,7 +1,9 @@
-import { resolve } from 'node:path'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { join, relative, resolve } from 'node:path'
 import { parseSync } from 'vite-plus'
 import { expect, it } from 'vitest'
 import ultimate from '../lint/ultimate.ts'
+import { temp } from './helpers.ts'
 
 type Rule = keyof typeof ultimate.rules
 type Located = { type: string; start: number; end: number; parent?: Located }
@@ -9,7 +11,8 @@ type Comment = { type: string; value: string; start: number; end: number }
 
 /** Run one rule over `source` as oxlint would for `file` (repository-relative): parse, walk, report full messages. */
 function diagnose(rule: Rule, file: string, source: string) {
-  const { program, comments } = parseSync(file, source, { lang: 'ts' }) as unknown as {
+  const lang = file.endsWith('.tsx') ? 'tsx' : 'ts'
+  const { program, comments } = parseSync(file, source, { lang }) as unknown as {
     program: Located
     comments: Comment[]
   }
@@ -293,6 +296,114 @@ export { TaskChip } from '../plan/chip.tsx'`
     browserMessage('messages/refs.ts'),
     browserMessage('plan/chip.tsx'),
   ])
+})
+
+it('keeps React and Solid apart, and ui-sdk components behind the UI kit', () => {
+  const solidSource = `/** @jsxImportSource @solidjs/web */
+import { useState } from 'react'
+import { Bell } from 'lucide-react'
+import { createSignal } from 'solid-js'
+import { Switch } from '@ui-sdk/solid/switch'
+import { definePrimitive } from '@ui-sdk/core'
+import { Button } from '@/components/ui/button.solid.tsx'
+import { Tooltip } from '@/components/ui/tooltip'
+import { Row } from './row.tsx'
+import { format } from './format.ts'
+import type { Props } from './card.tsx'`
+  const replace = (source: string) =>
+    `Replace ${source} with its Solid counterpart: our UI kit (@/components/ui), @lucide/solid for icons, or a ui-sdk component in the kit.`
+  expect(lint('ui-framework-boundaries', 'extensions/echo/panel.solid.tsx', solidSource)).toEqual([
+    replace('react'),
+    replace('lucide-react'),
+    'Import the component from @/components/ui; for a behavior the kit lacks, compose it with definePrimitive from @ui-sdk/core.',
+    replace('@/components/ui/tooltip'),
+    replace('./row.tsx'),
+  ])
+  expect(
+    lint('ui-framework-boundaries', 'web/src/components/ui/switch.solid.tsx', solidSource).length,
+  ).toBe(4)
+
+  const reactSource = `import { useState } from 'react'
+import { render } from '@solidjs/web'
+import { createSignal } from 'solid-js'
+import { Panel } from './panel.solid.tsx'
+import type { PanelProps } from './panel.solid.tsx'`
+  const move = (source: string) =>
+    `Move this code into a .solid.tsx file, or mount a Solid component through @/sdk instead of importing ${source}.`
+  expect(lint('ui-framework-boundaries', 'extensions/echo/web.tsx', reactSource)).toEqual([
+    move('@solidjs/web'),
+    move('solid-js'),
+    move('./panel.solid.tsx'),
+  ])
+  expect(lint('ui-framework-boundaries', 'web/src/sdk/solid.ts', reactSource)).toEqual([])
+})
+
+it('asks every Solid file for a leading block Solid JSX pragma, and only Solid files', () => {
+  const missing = ['Open the file with /** @jsxImportSource @solidjs/web */.']
+  const pragma = (source: string, file = 'extensions/echo/a.solid.tsx') =>
+    lint('solid-jsx-pragma', file, source)
+  expect(pragma('export const a = 1')).toEqual(missing)
+  expect(pragma('const a = 1\n/** @jsxImportSource @solidjs/web */')).toEqual(missing)
+  expect(pragma('// @jsxImportSource @solidjs/web\nexport const a = 1')).toEqual(missing)
+  expect(pragma('/** @jsxImportSource @solidjs/web */\nexport const a = 1')).toEqual([])
+  expect(pragma('/* @jsxImportSource @solidjs/web */\nexport const a = 1')).toEqual([])
+  expect(pragma('export const a = 1', 'extensions/echo/web.tsx')).toEqual([])
+  const header = '/** @jsxImportSource @solidjs/web */\nexport const a = 1'
+  expect(lint('no-comments', 'extensions/echo/a.solid.tsx', header)).toEqual([])
+  expect(lint('no-comments', 'extensions/echo/web.tsx', header)).toHaveLength(1)
+  expect(
+    lint(
+      'no-comments',
+      'extensions/echo/a.solid.tsx',
+      '// @jsxImportSource @solidjs/web\nexport const a = 1',
+    ),
+  ).toHaveLength(1)
+})
+
+it('classifies local imports by the file they resolve to, not how they are spelled', () => {
+  const solidSource = `/** @jsxImportSource @solidjs/web */
+import { Card } from '@/app/card'
+import { resize } from '@/components/image-resize'
+import { Button } from '@/components/ui/button'`
+  expect(lint('ui-framework-boundaries', 'web/src/app/panel.solid.tsx', solidSource)).toEqual([
+    'Replace @/app/card with its Solid counterpart: our UI kit (@/components/ui), @lucide/solid for icons, or a ui-sdk component in the kit.',
+    'Replace @/components/ui/button with its Solid counterpart: our UI kit (@/components/ui), @lucide/solid for icons, or a ui-sdk component in the kit.',
+  ])
+})
+
+it('resolves a directory import to its index file, and .ts before .tsx as Vite does', async () => {
+  const folder = await temp('lint-resolve-', resolve('extensions'))
+  await mkdir(join(folder, 'card'))
+  await writeFile(join(folder, 'card/index.tsx'), '')
+  await writeFile(join(folder, 'format.ts'), '')
+  await writeFile(join(folder, 'format.tsx'), '')
+  const file = join(relative('.', folder), 'panel.solid.tsx')
+  const source = `/** @jsxImportSource @solidjs/web */
+import { Card } from './card'
+import { format } from './format'`
+  expect(lint('ui-framework-boundaries', file, source)).toEqual([
+    'Replace ./card with its Solid counterpart: our UI kit (@/components/ui), @lucide/solid for icons, or a ui-sdk component in the kit.',
+  ])
+})
+
+it('sends hand-made widget roles to the UI kit, outside the kit itself', () => {
+  const source = `export const List = () => (
+  <div role="listbox">
+    <span role="option" />
+    <span role="switch" />
+    <span role={'slider'} />
+    <span role={\`tab\`} />
+    <span role={dynamic} />
+    <span role={\`\${kind}\`} />
+  </div>
+)`
+  expect(lint('ui-kit-roles', 'extensions/echo/list.solid.tsx', source)).toEqual([
+    "Use the kit's Listbox or Select from @/components/ui.",
+    "Use the kit's Switch from @/components/ui.",
+    "Use the kit's Slider from @/components/ui.",
+    "Use the kit's Tabs from @/components/ui.",
+  ])
+  expect(lint('ui-kit-roles', 'web/src/components/ui/listbox.solid.tsx', source)).toEqual([])
 })
 
 const coreMessage = (optional: string) =>
