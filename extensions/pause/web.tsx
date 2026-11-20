@@ -20,10 +20,10 @@ import {
 import type { EntryRecord } from '@/sdk'
 import { store } from '@/sdk/client'
 import { ConversationRef } from '../conversations/ui.tsx'
-import { checks, clock, lasted, unwrappedProviderError } from './lasted.ts'
+import { lasted, unwrappedProviderError } from './lasted.ts'
 import { parkedConversations } from './parked.ts'
 import { PauseAction, PauseDoc, PlayAction } from './refs.ts'
-import type { AutoPlayed, GaveUp, HeldNote, PauseNote, RateLimit } from './refs.ts'
+import type { AutoPlayed, HeldNote, PauseNote, RateLimit } from './refs.ts'
 import { Hint, Item, Play } from './status.solid.tsx'
 
 const usePaused = () => useDocOf(ROOT, PauseDoc)?.paused === true
@@ -86,6 +86,7 @@ function Limit({ entry }: { entry: EntryRecord }) {
   const holding = doc?.paused === true && doc.limit?.at === limit.at
   const now = useNow(1000, holding)
   const { switchConversation } = useUltimate()
+  const [busy, setBusy] = useState(false)
   if (limit.error === undefined || limit.conversationId === undefined) return null
   const conversationId = limit.conversationId
   return (
@@ -112,8 +113,8 @@ function Limit({ entry }: { entry: EntryRecord }) {
           · no reset time given
         </p>
         <p className="text-[12px] text-muted-foreground">
-          {holding && doc.autoPlay && !doc.manual && doc.gaveUp === undefined
-            ? `Checks every ${doc.autoPlay} min with one short request and plays once ${limit.provider} answers again (for up to 6 h), or press Play`
+          {holding && doc.autoPlay && !doc.manual
+            ? `Plays by itself ${doc.autoPlay} min after the limit, or press Play`
             : 'Nothing retries until you press Play'}
           ; held runs then continue where they stopped. A model you switch meanwhile applies on
           Play.
@@ -123,70 +124,24 @@ function Limit({ entry }: { entry: EntryRecord }) {
         {holding ? (
           <>
             <span>paused for {lasted(Math.max(0, now - (doc.since ?? now)))}</span>
-            <PlayButton />
-          </>
-        ) : (
-          <span className="flex items-center gap-1.5">
-            <PlayIcon className="size-3" />
-            continued after Play
-          </span>
-        )}
-      </footer>
-    </Card>
-  )
-}
-
-function PlayButton() {
-  const [busy, setBusy] = useState(false)
-  return (
-    <Button
-      className="h-7 font-sans text-[12px]"
-      disabled={busy}
-      onClick={() => {
-        setBusy(true)
-        void api
-          .action(PlayAction)
-          .catch((error: unknown) => store.notify({ level: 'error', message: errorMessage(error) }))
-          .finally(() => setBusy(false))
-      }}
-      size="sm"
-      variant="outline"
-    >
-      <PlayIcon className="size-3" />
-      Play
-    </Button>
-  )
-}
-
-function GaveUpCard({ entry }: { entry: EntryRecord }) {
-  const data = (entry.data ?? {}) as Partial<GaveUp>
-  const doc = useDocOf(ROOT, PauseDoc)
-  if (!data.limit || data.since === undefined || data.at === undefined) return null
-  const holding = doc?.paused === true && doc.since === data.since
-  return (
-    <Card attention={holding} className="border-l-warning/60" data-pause-gave-up>
-      <header className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
-        <PauseIcon className="size-3.5 text-warning" />
-        <span className="text-foreground">{data.limit.provider}</span>
-        <span>still rate limited · stopped checking</span>
-        <span className="ml-auto truncate">{data.limit.model}</span>
-      </header>
-      <div className="space-y-2 px-3 py-3 text-[13px] leading-relaxed">
-        <p>
-          Still limited after {lasted(data.at - data.since)}
-          {data.checks === undefined ? '' : ` and ${checks(data.checks)}`}: Ultimate stays paused
-          and checks no more.
-        </p>
-        <p className="text-[12px] text-muted-foreground">
-          Press Play once the limit resets, or switch the held agents to another provider’s model
-          first; held runs then continue where they stopped.
-        </p>
-      </div>
-      <footer className="flex items-center justify-between gap-2 border-t border-border/60 px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
-        {holding ? (
-          <>
-            <span>since {clock(data.since)}</span>
-            <PlayButton />
+            <Button
+              className="h-7 font-sans text-[12px]"
+              disabled={busy}
+              onClick={() => {
+                setBusy(true)
+                void api
+                  .action(PlayAction)
+                  .catch((error: unknown) =>
+                    store.notify({ level: 'error', message: errorMessage(error) }),
+                  )
+                  .finally(() => setBusy(false))
+              }}
+              size="sm"
+              variant="outline"
+            >
+              <PlayIcon className="size-3" />
+              Play
+            </Button>
           </>
         ) : (
           <span className="flex items-center gap-1.5">
@@ -211,13 +166,8 @@ function AutoPlayedNote({ entry }: { entry: EntryRecord }) {
         <PlayIcon className="size-3 shrink-0 text-warning" />
         <span className="text-warning">Played by itself</span>
         <span className="truncate">
-          · {lasted(data.at - data.since)}{' '}
-          {data.held && data.minutes === undefined
-            ? `held by ${data.held.source}`
-            : data.checks !== undefined
-              ? `after the rate limit · answered at check ${data.checks + 1}`
-              : 'after the rate limit'}{' '}
-          · {clock(data.at)}
+          · {lasted(data.at - data.since)} after the rate limit ·{' '}
+          {new Date(data.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
         </span>
       </span>
     </div>
@@ -245,7 +195,6 @@ export default defineWebExtension({
     'pause.note': Note,
     'pause.limit': attention(Limit),
     'pause.autoplay': AutoPlayedNote,
-    'pause.gave-up': attention(GaveUpCard),
     'pause.held': Held,
   },
   commands: [

@@ -3,6 +3,7 @@ allowBuilds:
   esbuild: true
   protobufjs: false
   workerd: set this to true or false
+minimumReleaseAge: 1440
 minimumReleaseAgeExclude:
   - '@earendil-works/chord@1.5.2'
   - '@earendil-works/pi-agent-core@1.5.2'

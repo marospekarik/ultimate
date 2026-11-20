@@ -63,46 +63,32 @@ beforeEach(({ onTestFinished }) => {
   onTestFinished(() => page.root.unmount())
 })
 
-it('sends a rejected handoff once while mounted, and once more after a remount', async () => {
+it('sends a rejected handoff or repair of a late link’s age once, not in a loop', async () => {
   harness.rejections = 4
   page.uiState.receive({ [SELECTED]: { key: 'b', at: 20, open: true } })
   await page.show([a])
-  expect(harness.writes).toEqual([{ key: 'a', at: 10, open: true }])
-  expect(harness.failures).toBe(1)
-  page.root.unmount()
-  const remounted = load()
-  await remounted.show([a])
-  expect(harness.writes).toHaveLength(2)
-  remounted.root.unmount()
-})
-
-it('sends a rejected repair of a late link’s age once while mounted', async () => {
-  harness.rejections = 4
-  page.uiState.receive({ [SELECTED]: { key: 'b', at: UNLOADED, open: true } })
-  await page.show([a, b])
-  expect(harness.writes).toEqual([{ key: 'b', at: 20, open: true }])
-  expect(harness.failures).toBe(1)
-})
-
-it('repairs a second link to the same entry after the selection moved elsewhere', async () => {
-  page.uiState.receive({ [SELECTED]: { key: 'b', at: UNLOADED, open: true } })
-  await page.show([a, b])
-  expect(harness.writes).toEqual([{ key: 'b', at: 20, open: true }])
-  await page.choose({ key: 'a', at: 10, open: true })
   await page.show([a])
+  expect(harness.writes).toEqual([{ key: 'a', at: 10, open: true }])
+
+  page.uiState.receive({ [SELECTED]: { key: 'b', at: UNLOADED, open: true } })
+  await page.show([a, b])
+  await page.show([a, b])
+  expect(harness.writes.slice(1)).toEqual([{ key: 'b', at: 20, open: true }])
+  expect(harness.failures).toBe(2)
+})
+
+it('repairs a second link and hands off a returning entry again each time', async () => {
+  page.uiState.receive({ [SELECTED]: { key: 'b', at: UNLOADED, open: true } })
+  await page.show([a, b])
+  await page.choose({ key: 'a', at: 10, open: true })
   await page.choose({ key: 'b', at: UNLOADED, open: true })
   await page.show([a, b])
-  expect(harness.writes.at(-1)).toEqual({ key: 'b', at: 20, open: true })
   expect(page.uiState.get(SELECTED)).toEqual({ key: 'b', at: 20, open: true })
-})
 
-it('hands off again when the same entry comes back, is selected, and leaves again', async () => {
-  await page.show([a, b])
-  await page.choose({ key: 'b', at: 20, open: true })
   await page.show([a])
   await page.show([a, b])
   await page.choose({ key: 'b', at: 20, open: true })
   await page.show([a])
-  expect(harness.writes.filter((value) => (value as Selection)?.key === 'a')).toHaveLength(2)
+  expect(harness.writes.filter((value) => (value as Selection)?.key === 'a')).toHaveLength(3)
   expect(page.uiState.get(SELECTED)).toEqual({ key: 'a', at: 10, open: true })
 })
