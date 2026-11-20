@@ -24,7 +24,7 @@ export type McpServerStatus = {
 export const StatusAction = actionRef<null, McpServerStatus[]>('mcp', 'status')
 /** `{ name }` → connects that server again now, and returns every server's state once it is connected or failed. */
 export const ReconnectAction = actionRef<{ name: string }, McpServerStatus[]>('mcp', 'reconnect')
-/** `{ name, enabled }` → switches it on or off for this project; `{ name, only }` → `true` runs it only in this project, `false` everywhere again. Written to the user's settings, which reloads the servers. */
+/** `{ name, enabled }` → switches it on or off for this project; `{ name, only }` → `true` runs it only in this project, `false` everywhere again. Written to the user's `~/.ultimate/mcp.json`; the extension reloads itself. */
 export const ChooseAction = actionRef<{ name: string; enabled?: boolean; only?: boolean }, null>(
   'mcp',
   'choose',

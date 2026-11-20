@@ -174,10 +174,8 @@ it('leaves a server switched off for a project out of that project, with no mcp 
   await mkdir(here)
   await mkdir(elsewhere)
   await mkdir(join(home, '.ultimate'))
-  await writeFile(
-    join(home, '.ultimate/settings.json'),
-    JSON.stringify({ mcpServers: { echo: { command: 'true' } } }),
-  )
+  const settings = JSON.stringify({ mcpServers: { echo: { command: 'true' } } })
+  await writeFile(join(home, '.ultimate/settings.json'), settings)
   const load = async (projectRoot: string) => {
     const host = {
       userHome: home,
@@ -185,6 +183,7 @@ it('leaves a server switched off for a project out of that project, with no mcp 
       projectSettings: async () => ({}),
       onOpen: () => {},
       onClose: () => {},
+      reloadSelf: async () => {},
     } as unknown as ExtensionHost
     const extension = await mcp(host)
     return {
@@ -207,7 +206,8 @@ it('leaves a server switched off for a project out of that project, with no mcp 
   expect((await load(here)).tools).toEqual([])
   expect((await load(elsewhere)).tools).toEqual(['mcp'])
   await (await load(here)).choose({ enabled: true })
-  expect(JSON.parse(await readFile(join(home, '.ultimate/settings.json'), 'utf8'))).toEqual({
-    mcpServers: { echo: { command: 'true' } },
+  expect(JSON.parse(await readFile(join(home, '.ultimate/mcp.json'), 'utf8'))).toEqual({
+    servers: {},
   })
+  expect(await readFile(join(home, '.ultimate/settings.json'), 'utf8')).toBe(settings)
 })

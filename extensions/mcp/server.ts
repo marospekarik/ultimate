@@ -1,4 +1,4 @@
-import { basename } from 'node:path'
+import { basename, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { map, obj, opt, str, unknown } from '@earendil-works/pi-schema'
 import { defineExtension, defineTool } from '@earendil-works/pi-durable'
@@ -16,7 +16,8 @@ import type { Tool } from '@earendil-works/pi-mcp'
 import { implementAction } from '../../lib/actions.ts'
 import { readSecret } from '../../lib/secrets.ts'
 import { retryAfter, type Cancel } from '../../lib/timers.ts'
-import { readSettings, updateSettings, userSettingsPath } from '../../lib/settings.ts'
+import { readJson, updateJson } from '../../lib/json-file.ts'
+import { readSettings, userSettingsPath } from '../../lib/settings.ts'
 import { decisionRoot } from '../../lib/project-setup.ts'
 import type { ExtensionAction } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
@@ -115,6 +116,9 @@ const redact = (server: Server, error: unknown) =>
   )
 
 type Choice = { only?: string[]; off?: string[] }
+type Choices = { servers?: Record<string, Choice> }
+
+const choicesPath = (host: ExtensionHost) => join(host.userHome, '.ultimate/mcp.json')
 
 const enabledIn = (choice: Choice, project: string) =>
   choice.only ? choice.only.includes(project) : !choice.off?.includes(project)
@@ -136,11 +140,10 @@ export function choose(
 }
 
 async function configured(host: ExtensionHost) {
-  const user = await readSettings(userSettingsPath(host.userHome))
-  const choices = (isObject(user.mcpProjects) ? user.mcpProjects : {}) as Record<string, Choice>
+  const choices = (await readJson<Choices>(choicesPath(host), {})).servers ?? {}
   const project = decisionRoot(host.projectRoot)
   const layers: [McpServerStatus['source'], JsonObject][] = [
-    ['user', user],
+    ['user', await readSettings(userSettingsPath(host.userHome))],
     ['project', await host.projectSettings()],
   ]
   const servers = new Map<string, Server>()
@@ -220,14 +223,18 @@ export const actions: Record<string, ExtensionAction> = {
           : undefined
     if (!change) throw new Error('choose: enabled or only is required')
     const project = decisionRoot(host.projectRoot)
-    await updateSettings(userSettingsPath(host.userHome), (settings) => {
-      const choices = isObject(settings.mcpProjects) ? settings.mcpProjects : {}
-      const choice = choose((choices[name] ?? {}) as Choice, project, change)
-      if (Object.keys(choice).length) choices[name] = choice
-      else delete choices[name]
-      if (Object.keys(choices).length) settings.mcpProjects = choices
-      else delete settings.mcpProjects
-    })
+    await updateJson(
+      choicesPath(host),
+      (path) => readJson<Choices>(path, {}),
+      (file) => {
+        const servers = file.servers ?? {}
+        const choice = choose(servers[name] ?? {}, project, change)
+        if (Object.keys(choice).length) servers[name] = choice
+        else delete servers[name]
+        file.servers = servers
+      },
+    )
+    await host.reloadSelf()
     return null
   }),
 }

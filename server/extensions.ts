@@ -82,6 +82,7 @@ export type ExtensionHost = Pick<
   projectExtensions(): Promise<ExtensionInfo[]>
   setProjectDecision(local: boolean): Promise<void>
   reloadExtensions(): Promise<void>
+  reloadSelf(): Promise<void>
   invoke(
     name: string,
     action: string,
@@ -240,6 +241,13 @@ export async function loadExtensions(
       onBeforeLoad: (callback) => {
         beforeLoad.add(callback)
         stops.add(() => beforeLoad.delete(callback))
+      },
+      reloadSelf: async () => {
+        const work = chain
+          .then(() => (closed ? undefined : prepareLoadBestEffort()))
+          .then(() => (closed ? undefined : reload(new Set([name]))))
+        chain = work.catch(() => changed())
+        await work
       },
       react: (reactorName, tokens, handler, options) => {
         const reactor = log.reactor(`${name}/${reactorName}`, tokens, handler, options)
@@ -433,6 +441,9 @@ export async function loadExtensions(
         local,
       )
       await extensionHost.reloadExtensions()
+    },
+    reloadSelf: async () => {
+      throw new Error('reloadSelf is only available to an extension facet')
     },
     reloadExtensions: async () => {
       const work = chain
