@@ -5,7 +5,7 @@ import { implementAction } from '../../../lib/actions.ts'
 import { isMissing, meansNone } from '../../../lib/errors.ts'
 import { git } from '../../../lib/git.ts'
 import { ProgressAction } from './refs.ts'
-import type { Entry, Live, PreviewWeek } from './refs.ts'
+import type { Entry, Live, PreviewWeek, Status } from './refs.ts'
 
 export default defineExtension({ name: 'solid-progress' })
 
@@ -15,6 +15,15 @@ const frontend = (file: string) =>
   !/(^|\/)test\//.test(file) &&
   (file.startsWith('web/src/') || /^extensions\/[^/]+\/.*\.tsx$/.test(file)) &&
   /\.(tsx?|css)$/.test(file)
+
+const status = (solid: boolean, reactViews: number): Status =>
+  !solid ? 'react' : reactViews === 0 ? 'solid' : 'partly'
+
+const isReactView = (file: string, glue: boolean) =>
+  file.endsWith('.tsx') && !file.endsWith('.solid.tsx') && !glue
+
+const isGlue = (file: string, text: string) =>
+  file.endsWith('/web.tsx') && text.includes('island(') && !text.includes('className=')
 
 async function live(root: string): Promise<Live[]> {
   const files = (await git(root, 'ls-files')).split('\n').filter(frontend)
@@ -31,42 +40,64 @@ async function live(root: string): Promise<Live[]> {
       byName.set(name, counts)
       if (file.endsWith('.solid.tsx')) counts.solid += lines
       else counts.react += lines
-      const glue = file.endsWith('/web.tsx') && text.includes('island(')
-      if (file.endsWith('.tsx') && !file.endsWith('.solid.tsx') && !glue) counts.reactViews++
+      if (isReactView(file, isGlue(file, text))) counts.reactViews++
     }),
   )
-  return [...byName]
-    .map(([name, { react, solid, reactViews }]) => ({
-      name,
-      react,
-      solid,
-      status:
-        solid === 0
-          ? ('react' as const)
-          : reactViews === 0
-            ? ('solid' as const)
-            : ('partly' as const),
-    }))
-    .toSorted(
-      (a, b) =>
-        Number(a.status === 'react') - Number(b.status === 'react') ||
-        b.react + b.solid - (a.react + a.solid),
-    )
+  return [...byName].map(([name, { react, solid, reactViews }]) => ({
+    name,
+    react,
+    solid,
+    status: status(solid > 0, reactViews),
+  }))
 }
 
-async function coordinators(root: string, commits: string[]) {
-  const found = await Promise.all(
-    commits.map((commit) =>
-      git(
-        root,
-        'log',
-        '-1',
-        '--format=%(trailers:key=Ultimate-Conversation,valueonly)',
-        commit,
-      ).catch(meansNone),
+async function statuses(root: string, commit: string) {
+  const [listed, islands] = await Promise.all([
+    git(root, 'ls-tree', '-r', '--name-only', commit, '--', 'extensions'),
+    git(root, 'grep', '-F', '-l', 'island(', commit, '--', 'extensions/*/web.tsx').catch(
+      (error: unknown) => {
+        if ((error as { code?: unknown }).code === 1) return undefined
+        throw error
+      },
     ),
+  ])
+  const tree = listed.split('\n').filter(frontend)
+  const webs = await Promise.all(
+    (islands ? islands.split('\n') : []).map(async (found) => {
+      const file = found.slice(commit.length + 1)
+      return [file, await git(root, 'show', `${commit}:${file}`)] as const
+    }),
   )
-  return found.map((value) => (value && /^\d+$/.test(value) ? Number(value) : undefined))
+  const glue = new Set(webs.filter(([file, text]) => isGlue(file, text)).map(([file]) => file))
+  const byName = new Map<string, { solid: boolean; reactViews: number }>()
+  for (const file of tree) {
+    const name = file.split('/')[1]
+    const counts = byName.get(name) ?? { solid: false, reactViews: 0 }
+    byName.set(name, counts)
+    if (file.endsWith('.solid.tsx')) counts.solid = true
+    if (isReactView(file, glue.has(file))) counts.reactViews++
+  }
+  return Object.fromEntries(
+    [...byName].map(([name, { solid, reactViews }]) => [name, status(solid, reactViews)]),
+  )
+}
+
+async function step(root: string, entry: Entry): Promise<Entry> {
+  const log = await git(
+    root,
+    'log',
+    '-1',
+    '--format=%s%x00%(trailers:key=Ultimate-Conversation,valueonly)',
+    entry.commit,
+  ).catch(meansNone)
+  if (log === undefined) return entry
+  const [subject, trailer] = log.split('\0')
+  return {
+    ...entry,
+    summary: entry.summary ?? subject,
+    coordinator: /^\d+$/.test(trailer) ? Number(trailer) : undefined,
+    statuses: await statuses(root, entry.commit),
+  }
 }
 
 async function series(
@@ -81,12 +112,8 @@ async function series(
     entries: Entry[]
     previewUsage?: PreviewWeek[]
   }
-  const ids = await coordinators(
-    root,
-    entries.map((entry) => entry.commit),
-  )
   return {
-    entries: entries.map((entry, index) => ({ ...entry, coordinator: ids[index] })),
+    entries: await Promise.all(entries.map((entry) => step(root, entry))),
     previewUsage,
   }
 }
