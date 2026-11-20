@@ -27,7 +27,8 @@ The libraries ship skills that match the pinned versions: read them, not your me
 - **Durable by default.** State that should survive a reload, a restart or a second tab is a document or UI state, not
   a local signal. Kit controls take it whole through `bind`.
 - **Who acted is part of every change.** Kit controls run their handlers in `writingAs(details.source, …)`, so a write
-  an agent starts is recorded as the agent's. Keep that path: start writes from a kit control's handler.
+  an agent starts is recorded as the agent's. Keep that path: start writes from a kit control's handler. The page bus
+  (`events.emit`) runs its handlers as the writer of the moment, so an event emitted from a handler needs no `source`.
 - **Agents are users.** Every control has a unique name, says when it needs a person, and hides what agents must not
   read.
 - **Lint is the floor.** `pnpm check` runs eslint-plugin-solid's `v2-strict` set, accessibility rules and ours on every
@@ -46,12 +47,15 @@ The libraries ship skills that match the pinned versions: read them, not your me
   actions) or its `ui.solid.tsx` (its Solid components, such as conversations' `ConversationRef`); its `ui.tsx` is
   React. A `.tsx` sibling counts as React even without JSX: data a Solid file shares goes in a `.ts` file or `lib/`
   (`lib/conversation-ref.ts`, `extensions/sounds/variants.ts`). Lint: `ultimate/api-only-imports`.
+- **Module stores** that both renderers read (a cache, a picker's target) live in a `.ts` file as one small cell with
+  `get`, `set` and `subscribe`; React reads it with `useSyncExternalStore`, Solid with a signal set from `subscribe`
+  (`extensions/models/state.ts`, `readers.solid.tsx`).
 - **What moves now:** slot items, panels and overlays of an extension's own (`component: island(SecretsPanel)`). A React
   point another extension renders stays React and returns an island (`provide(ExtensionDetails, …)` in
   `extensions/mcp/web.tsx`). A Solid part that needs what only React reads takes it as a prop from a small React
   wrapper in `web.tsx`; `island` passes props on live, without a remount (`extensions/todos/web.tsx`). A React point
   a moved part would render (`Review` in a commit count) gets a page-bus event its provider also listens to
-  (`events.emit('review:open', { spec, source })`), never a Solid copy of the point.
+  (`events.emit('review:open', { spec })`), never a Solid copy of the point.
 - **Contracts:** `ui.solid.tsx` holds only what other extensions use; parts an extension keeps to itself live in their
   own file (`extensions/workspaces/panel.solid.tsx`, re-exported). A pure `.ts` helper counts as server code to
   `ultimate/api-only-imports`: it imports other extensions' refs only as types, or takes their tokens as arguments
@@ -70,8 +74,9 @@ bare `<form>`s).
 | Component                                                                      | Notes                                                                                                                                                |
 | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Button                                                                         | `onClick(event, details)`; return the Promise so it shows pending. `render` replaces `asChild`.                                                      |
-| Form                                                                           | Never navigates; its `type="submit"` Button's `onClick` submits, which Enter in a field presses too.                                                 |
-| Input, SecretInput, Textarea (`input.solid.tsx`)                               | A secret field agents may fill but never read; Textarea takes `submitShortcut`.                                                                      |
+| Form                                                                           | Never navigates; its `type="submit"` Button's `onClick` submits, which Enter in a field and a Textarea's `submitShortcut` press too.                 |
+| Input, SecretInput, Textarea (`input.solid.tsx`)                               | A secret field agents may fill but never read; Textarea's `submitShortcut` presses its form's submit Button.                                         |
+| CopyValue                                                                      | A value in a row that copies itself when pressed; `field` names it.                                                                                  |
 | Checkbox, Switch, SegmentedControl, Slider, NumberInput                        | Take `bind`. Checkbox may report `"indeterminate"`; NumberInput's agent `setValue` fires `onValueChange`; Slider's agent acts on its labelled thumb. |
 | Collapsible                                                                    | Unmounts its panel when closed; `keepMounted` keeps it.                                                                                              |
 | Popover, StatusPopoverTrigger (`status-trigger.solid.tsx`), HoverCard, Tooltip | Popups in the top layer; Tooltip needs no provider.                                                                                                  |
@@ -92,7 +97,9 @@ Icons come from `@lucide/solid`. `extensions/keep-warm/chip.solid.tsx` is the re
   from a `.ts` file that its React and Solid sides share (`extensions/wire/state.ts`).
 - **A durable selection names what is shown.** When the selected row leaves, store the row that took its place, not
   just a rule for finding it again, or a later arrival takes over the pane under the person's cursor
-  (`selectionAfterChange` in `extensions/inbox/items.ts`). Order rows with a tie-breaker, never by time alone.
+  (`selectionAfterChange` in `extensions/inbox/items.ts`). Order rows with a tie-breaker, never by time alone. An
+  effect that repairs stored state writes in `writingAs('app', …)`; UI state never resends an `app` value the server
+  refused until a write goes through, the key changes or someone writes it, so the effect needs no guard of its own.
 - **Reading the server:** `useAction(ref, args, options)` shares one call per action, args and conversation. `every` takes ms or
   `(data) => ms` (`extensions/mcp/chip.solid.tsx` polls fast while connecting). Every read in use refetches after a
   restart, keeping its last answer meanwhile; on reconnect only active reads that failed with a network error retry.
@@ -107,13 +114,15 @@ Icons come from `@lucide/solid`. `extensions/keep-warm/chip.solid.tsx` is the re
   hangs off one `AbortController`: listeners take its `signal`, the effect keyed on what ends it calls `abort()`
   (`extensions/voice/button.solid.tsx`), instead of a ref mirroring state for a cleanup to read.
 - **The conversation's model:** `useAgent()`, not a whole conversation replica.
+- **Formatting:** `formatAgo`, `formatDuration`, `formatBytes`, `formatTokens`, `plural`, `shortenPath`, `elidePath` and
+  `prettyName` come from `@/sdk/solid`; a shared `.ts` helper takes `formatAgo` and `plural` from `lib/`. Never a local
+  copy.
 - **Writes after an `await`:** `writingAs` holds only for the synchronous call. Take `details.source` before the
   `await` and re-enter `writingAs(source, …)` at the write (`start` in `extensions/todos/panel.solid.tsx`). A write the
   person didn't make with this action (a URL, a timer, an effect) runs in `writingAs('app', …)` and records nothing.
 - **Forms:** the kit `Form`, with the change started in its submit Button's `onClick`, which receives `details.source`.
-  A native `onSubmit` has no source, so an agent's submit would be recorded as the person's. A `Textarea` with
-  `submitShortcut` submits the form, which skips the Button's `onClick`: pass `onSubmit={() => submit?.click()}` with a
-  ref to the submit Button (`extensions/goal/dialog.solid.tsx`).
+  A native `onSubmit` has no source, so an agent's submit would be recorded as the person's. Enter in an Input and
+  `submitShortcut` in a Textarea press that Button (`extensions/goal/dialog.solid.tsx`).
 - **One row per id:** `mapArray(ids, (id) => …)` gives each id its own owner and reads, disposed when it leaves. A
   polled list whose objects are replaced on each fetch keeps its DOM with `<For keyed={(row) => row.id}>`; with a key
   function both the item and the index are accessors (`index()`).
@@ -164,8 +173,12 @@ ui-sdk:
   `press` with an inner action's text opens it; a destructive item needs a `confirm` sentence, checked before the
   press.
 - `DropdownMenuLabel` goes inside `DropdownMenuGroup` or `DropdownMenuRadioGroup`; the SDK throws otherwise.
-- Menu and Command `onAction` details have an optional `event` and no `source`; item `onSelect` takes only an event.
-  Their open, radio value and query callbacks do carry `details.source`.
+- Start a menu's or a Command's write from its root's `onAction(value, details)`: the kit adds `details.source` and runs
+  the handler as that writer. Item `onSelect` takes only an event, so a write started there is always the person's.
+  A Command's `onValueChange` is the highlight moving, never activation.
+- Command with `filter={false}` and rows the app filters itself: set `autoHighlight={false}` and derive the highlighted
+  value (current row, else the first match), or typing leaves the highlight on a footer row
+  (`extensions/models/picker.solid.tsx`).
 - Command filters `fuzzy` by default, keywords included; items with long `keywords` want `filter="contains"` (the skill
   picker). `label` is what search matches; the bridge names an item by its rendered text. `CommandEmpty` stays mounted
   with `data-empty`; the kit hides it with `not-data-empty:hidden`.
@@ -176,6 +189,10 @@ ui-sdk:
   `open`, before the modal makes the page inert, and write to that element's own conversation
   (`dataset.conversation`). Focusing in `onOpenChangeComplete` loses to the SDK's own return to the trigger.
 - The installed Solid SDK documents agent permissions in `docs/agents.md#permissions`.
+- A Solid dialog opened from a React Radix modal (Get ready's Connect, an editor's Configure) sits under the modal's
+  focus trap and pointer lock. The opener steps aside while that one child is open (keyed on the child's dialog id, not
+  on any open dialog: a stale flag would hide it) and restores focus to its button
+  (`extensions/onboarding/pages.tsx`, `extensions/automations/form.solid.tsx`).
 - Tooltip keeps its content mounted (hidden) so it can name an icon-only trigger; keyboard focus opens it at once.
 - Packages shipping raw JSX under the `solid` condition (ui-sdk, `@lucide/solid`) belong in the Solid plugin's `include`
   in `vite.config.ts`; delete `node_modules/.vitest-cache` after changing it.
@@ -216,6 +233,8 @@ Tooling:
   write). For keyboard focus on a Tooltip, dispatch a Tab `keydown` before `.focus()`. Modal Tab wrapping, inertness
   and Enter submitting a form need a real browser. `switchConversation` and `showSurface` read `matchMedia`: stub it
   with `vi.stubGlobal` in a test that navigates.
+- **Who wrote it, in a preview:** a page the browser tool drives counts every write as the agent's, clicks and keys
+  included. Prove a person's attribution in a jsdom test or by the user's own click, not through the browser tool.
 - **Whole page:** the browser tool's `ui` steps (`snapshot`, `query`, `act`) wait for the first render and every
   mounted read's first answer, or its first network failure (it stays unsettled): ready to interact does not mean the
   server answered. A change is recorded only when it reaches stored state (`ui.changed`, see
