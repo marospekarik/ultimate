@@ -111,7 +111,9 @@ function Row(props: { server: McpServerStatus; refresh: () => void }) {
             onClick={() => choose({ only: !props.server.only })}
             size={null}
             title={
-              props.server.only ? 'Only in chosen projects: run everywhere' : 'Only in this project'
+              props.server.only
+                ? 'Pinned to its projects: click to run everywhere'
+                : 'Only in this project'
             }
             variant={null}
           >
@@ -193,8 +195,7 @@ export function Chip() {
         <PopoverContent align="end" class="w-80 max-w-[calc(100vw-1rem)] p-1" side="top">
           <Servers refresh={refresh} servers={servers()} />
           <p class="border-t border-border/70 px-2 pt-1.5 pb-1 font-mono text-[11px] text-muted-foreground/70">
-            mcpServers in ~/.ultimate/settings.json or the project's .ultimate/settings.json; your
-            switches go to mcpProjects in ~/.ultimate/settings.json
+            mcpServers in ~/.ultimate/settings.json or the project's .ultimate/settings.json
           </p>
         </PopoverContent>
       </Popover>
