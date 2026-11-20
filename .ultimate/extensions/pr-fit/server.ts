@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { defineExtension } from '@earendil-works/pi-durable'
 import { ClassifyApi } from '../../../extensions/classify/api.ts'
+import type { ClassifyAnswer } from '../../../extensions/classify/api.ts'
 import { implementAction } from '../../../lib/actions.ts'
 import { inProcess } from '../../../lib/errors.ts'
 import { exec } from '../../../lib/exec.ts'
@@ -18,7 +19,12 @@ const REPO = 'HazAT/ultimate'
 /** How long a read of the open PRs is reused before the next `fits` call reads them again. */
 const LIST_EVERY = 5 * 60_000
 
-type Stored = { fits: Record<string, Fit & { key: string }> }
+/**
+ * Jev's answers per open PR, not the verdicts: the mapping in `verdictOf` can change without asking again. `answers` is
+ * absent on the user's own PRs.
+ */
+type Judged = { key: string; head: string; at: string; answers?: Record<string, ClassifyAnswer> }
+type Stored = { judged: Record<string, Judged> }
 /** The background round of this process; `failed` is the last error logged, so a repeating one (a paused classify) logs once. */
 type Round = { running?: Promise<void>; finishedAt: number; failed?: string }
 
@@ -74,18 +80,18 @@ async function judge(ctx: ActionContext) {
     readFile(join(import.meta.dirname, 'profile.md'), 'utf8'),
   ])
   const basis = basisOf(profile)
-  const stored = await readJson<Stored>(memoFile(ctx), { fits: {} })
+  const stored = await readJson<Stored>(memoFile(ctx), { judged: {} })
   const open = new Set(raw.map((pr) => String(pr.number)))
-  const fits = Object.fromEntries(
-    Object.entries(stored.fits).filter(([number]) => open.has(number)),
+  const judged = Object.fromEntries(
+    Object.entries(stored.judged).filter(([number]) => open.has(number)),
   )
-  const save = () => writeTextAtomically(memoFile(ctx), `${JSON.stringify({ fits }, null, 2)}\n`)
+  const save = () => writeTextAtomically(memoFile(ctx), `${JSON.stringify({ judged }, null, 2)}\n`)
   for (const pr of raw) {
     const key = memoKey(pr.number, pr.headRefOid, basis)
-    if (fits[pr.number]?.key === key) continue
+    if (judged[pr.number]?.key === key) continue
     const at = new Date().toISOString()
     if (pr.author.login === viewer) {
-      fits[pr.number] = { verdict: 'ours', head: pr.headRefOid, at, key }
+      judged[pr.number] = { key, head: pr.headRefOid, at }
       continue
     }
     const text: PrText = {
@@ -101,8 +107,7 @@ async function judge(ctx: ActionContext) {
       { state: stateOf(profile, text), questions },
       AbortSignal.timeout(30_000),
     )
-    const fit = verdictOf(result.answers, pr.headRefOid, at)
-    if (fit) fits[pr.number] = { ...fit, key }
+    judged[pr.number] = { key, head: pr.headRefOid, at, answers: result.answers }
     await save()
   }
   await save()
@@ -130,10 +135,13 @@ export const actions = {
         })
       inProcess('a verdict not yet saved is asked again by the next fits call', round.running)
     }
-    const { fits } = await readJson<Stored>(memoFile(ctx), { fits: {} })
-    return Object.fromEntries(
-      Object.entries(fits).map(([number, { key: _key, ...fit }]) => [number, fit]),
-    )
+    const { judged } = await readJson<Stored>(memoFile(ctx), { judged: {} })
+    const fits: Record<string, Fit> = {}
+    for (const [number, { head, at, answers }] of Object.entries(judged)) {
+      const fit = answers ? verdictOf(answers) : { verdict: 'ours' as const }
+      if (fit) fits[number] = { ...fit, head, at }
+    }
+    return fits
   }),
 }
 

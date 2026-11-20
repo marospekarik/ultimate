@@ -17,11 +17,19 @@ One `classify` request per PR, with four questions (`fit.ts`):
 - `overlap` (yes/no): does it touch a local feature the fork carries?
 - `cost` (score 0–3): integration cost and conflict risk against the local diff.
 
-An `adopt` with no clear need or a large cost (3) shows as `watch`. The reason line comes from `needed`, `overlap` and
-`cost`.
+Jev leans towards adopt and calls most PRs needed, so `verdictOf` in `fit.ts` turns its answers into the mark:
 
-Verdicts are kept in `pr-fit.json` in the instance home, keyed by PR number, head commit, and a hash of the profile and
-questions: a PR is asked again only when it gets new commits or you change the profile. At most one round runs every
+- **skip** when Jev gives skip at least 40% or `needed` is under 0.45;
+- **adopt** only with adopt at least 60%, `needed` at least 0.85, no `overlap` (under 0.5: a PR in the area of a local
+  feature needs a closer look first) and `cost` under 2.5;
+- **watch** otherwise.
+
+The confidence shown is Jev's probability for that verdict. The reason line comes from `needed`, `overlap` and `cost`
+(`cost` is an expected level, 0–3, rounded).
+
+Jev's answers, not the verdicts, are kept in `pr-fit.json` in the instance home, keyed by PR number, head commit, and a
+hash of the profile and questions: a PR is asked again only when it gets new commits or you change the profile or the
+questions. Changing the thresholds in `verdictOf` asks nothing again. At most one round runs every
 five minutes, started when the PRs surface asks for the verdicts. Closed PRs drop out.
 
 ## What leaves the machine

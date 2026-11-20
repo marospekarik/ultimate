@@ -80,51 +80,57 @@ export function stateOf(profile: string, pr: PrText): JsonValue {
   }
 }
 
-/** What a verdict depends on besides the PR: the profile and the questions. A change in either judges every PR again. */
+/** What Jev's answers depend on besides the PR: the profile and the questions. A change in either asks again for every PR. */
 export const basisOf = (profile: string) =>
   createHash('sha256').update(profile).update(JSON.stringify(questions)).digest('hex').slice(0, 12)
 
-/** A PR is judged once per head commit and basis. */
+/** A PR is asked about once per head commit and basis. */
 export const memoKey = (number: number, head: string, basis: string) => `${number}@${head}@${basis}`
 
-const reasons = {
-  needed: ['fits a need here', 'no clear need here'],
-  overlap: ['touches a local feature', undefined],
-} as const
 const costs = [
   'trivial to pull in',
   'small to pull in',
-  'medium integration cost',
-  'large integration cost',
+  'medium cost to pull in',
+  'large cost to pull in',
 ]
 
 /**
- * The verdict from Jev's answers. An `adopt` with no clear need or a large cost is held back to `watch`; the reason line
- * is built from the yes/no and score answers.
+ * Jev leans to adopt and rates most PRs as needed, so adopt takes a clear lead, a strong need, no overlap with a local
+ * feature (that needs a closer look first) and a cost below large.
+ */
+const ADOPT = { lead: 0.6, need: 0.85, overlap: 0.5, cost: 2.5 }
+/** Skip once skip is likely or the need is weak. */
+const SKIP = { lead: 0.4, need: 0.45 }
+
+/**
+ * The verdict from Jev's answers: adopt and skip need the side answers to agree, everything between is watch. Its
+ * confidence is Jev's probability for that verdict (for skip, or the weakness of the need); the reason line comes from
+ * the need, overlap and cost answers.
  */
 export function verdictOf(
   answers: Record<string, ClassifyAnswer>,
-  head: string,
-  at: string,
-): Fit | undefined {
+): Omit<Extract<Fit, { confidence: number }>, 'head' | 'at'> | undefined {
   const { verdict, needed, overlap, cost } = answers
-  if (verdict?.type !== 'choice' || !(verdict.choice in questions.verdict.criteria))
+  if (verdict?.type !== 'choice' || needed?.type !== 'noul' || overlap?.type !== 'noul')
     return undefined
-  const need = needed?.type === 'noul' ? needed.noul : undefined
-  const touches = overlap?.type === 'noul' ? overlap.noul : undefined
-  const level = cost?.type === 'score' ? cost.score : undefined
-  let choice = verdict.choice as 'adopt' | 'watch' | 'skip'
-  if (
-    choice === 'adopt' &&
-    ((need !== undefined && need < 0.5) || (level !== undefined && level >= 3))
-  )
-    choice = 'watch'
+  if (cost?.type !== 'score') return undefined
+  const p = (option: string) => verdict.probabilities[option] ?? 0
+  const choice =
+    p('skip') >= SKIP.lead || needed.noul < SKIP.need
+      ? 'skip'
+      : p('adopt') >= ADOPT.lead &&
+          needed.noul >= ADOPT.need &&
+          overlap.noul < ADOPT.overlap &&
+          cost.score < ADOPT.cost
+        ? 'adopt'
+        : 'watch'
   const reason = [
-    need === undefined ? undefined : need >= 0.5 ? reasons.needed[0] : reasons.needed[1],
-    touches !== undefined && touches >= 0.5 ? reasons.overlap[0] : undefined,
-    level === undefined ? undefined : costs[level],
+    needed.noul >= SKIP.need ? 'fits a need here' : 'no clear need here',
+    overlap.noul >= ADOPT.overlap && 'touches a local feature',
+    costs[Math.min(costs.length - 1, Math.max(0, Math.round(cost.score)))],
   ]
     .filter(Boolean)
     .join(' · ')
-  return { verdict: choice, confidence: verdict.confidence, reason, head, at }
+  const confidence = choice === 'skip' ? Math.max(p('skip'), 1 - needed.noul) : p(choice)
+  return { verdict: choice, confidence, reason }
 }
