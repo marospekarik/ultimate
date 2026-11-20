@@ -182,8 +182,33 @@ function metrics(entries: Entry[]): Metric[] {
     series('front-end lines', 'lines', (entry) => entry.lines.total),
     series('bundle JS, gzip', 'KB', (entry) => entry.bundleGzipKB),
     series('entry assets, gzip', 'KB', (entry) => entry.entryGzipKB),
+
     series('switch, cold', 'ms', (entry) => entry.switch?.cold, 'settledMs median'),
     series('switch, warm', 'ms', (entry) => entry.switch?.warm, 'settledMs median'),
+    series(
+      'DOM mutations / streamed event',
+      'records',
+      (entry) => entry.stream?.mutations,
+      'median in the transcript; counts Solid and React alike',
+    ),
+    series(
+      'mutations p95 / streamed event',
+      'records',
+      (entry) => entry.stream?.mutationsP95,
+      'the busiest streamed events; from C0 on',
+    ),
+    series(
+      'latency / streamed event',
+      'ms',
+      (entry) => entry.stream?.taskMs,
+      'median time until the next task of a scripted stream',
+    ),
+    series(
+      'latency p95 / streamed event',
+      'ms',
+      (entry) => entry.stream?.taskP95Ms,
+      'the slow streamed events; from C0 on',
+    ),
     series(
       'React renders / streamed event',
       'components',
