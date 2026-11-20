@@ -48,7 +48,7 @@ export function Control() {
   return (
     <Popover>
       <StatusPopoverTrigger
-        aria-label="Sounds"
+        aria-label="Sound settings"
         class={cn(muted() && 'text-muted-foreground/60', playing() && 'text-brand')}
       >
         {muted() ? (
@@ -159,6 +159,7 @@ export function Control() {
               >
                 <label class="flex flex-1 items-center gap-2">
                   <Checkbox
+                    aria-label={`Sound on for ${label}`}
                     bind={[
                       () => !off().includes(sound),
                       (on) => {

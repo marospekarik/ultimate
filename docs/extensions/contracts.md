@@ -53,9 +53,10 @@ An extension's `api.ts` is its whole server-side surface for others, so lint (`l
   and every member of a service type passed to `defineApi` has a doc comment saying what it does and when to use it.
 - `api-naming`: `defineApi<…>()('<folder>')` or an extension point `('<folder>.<point>')`,
   `defineEvent('<folder>.<event>')` and `actionRef('<folder>', name)`.
-- `api-only-imports`: a server-side `.ts` file imports another extension's runtime code only from its `api.ts`, a
-  browser `.tsx` file only from its `ui.tsx`, and its `api.ts` or `refs.ts` only as types; types come with
-  `import type`, pure helpers from `lib/`.
+- `api-only-imports`: another extension's runtime code comes only from its `api.ts` in a server-side `.ts` file, its
+  `ui.tsx` in a React `.tsx` file (its `api.ts` and `refs.ts` only as types there), and its `refs.ts` or
+  `ui.solid.tsx` in a Solid `.solid.tsx` file. Types come with `import type` from any contract; pure helpers from
+  `lib/`.
 
 ## The browser side: `refs.ts` and `ui.tsx`
 
@@ -102,7 +103,9 @@ export const actions = {
 doc ref names a kind no server facet's `docs` exports.
 
 What other extensions' browser code uses (shared components, hooks and the refs they need) is exported from the
-owner's `ui.tsx`, which starts with a doc comment on what it offers.
+owner's `ui.tsx`, which starts with a doc comment on what it offers. Its Solid components go in `ui.solid.tsx`, which
+opens with the Solid JSX pragma and then that doc comment (`extensions/conversations/ui.solid.tsx`); data both share
+lives in `lib/` (`lib/conversation-ref.ts`).
 
 ## Web points
 
