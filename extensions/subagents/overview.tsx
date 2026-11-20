@@ -338,7 +338,6 @@ function Row({
         {meta && (
           <span className="min-w-0 truncate text-[10.5px] text-muted-foreground/70">{meta}</span>
         )}
-        {mark && <span className="ml-auto flex shrink-0 items-center pl-2">{mark}</span>}
       </div>
       <p className="line-clamp-1 pl-4.5 font-sans text-[11.5px] leading-snug text-muted-foreground/80">
         {description}
@@ -357,7 +356,10 @@ function Row({
       ) : (
         <div className="min-w-0 flex-1 py-1 pl-2.5">{body}</div>
       )}
-      <div className="shrink-0 pt-1 pr-2">{move}</div>
+      <div className="flex shrink-0 items-center gap-1 pt-1 pr-2">
+        {mark}
+        {move}
+      </div>
     </div>
   )
 }

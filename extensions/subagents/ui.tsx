@@ -25,7 +25,7 @@ export {
 
 /**
  * A quiet mark another extension shows at the end of an agent definition's row in the Agents panel (`name` is the
- * definition's name), right-aligned before its move menu. Undefined or null shows nothing.
+ * definition's name), in the row's right column before its move menu. Undefined or null shows nothing.
  */
 export const AgentMark = definePoint<{ name: string }, ReactNode>('subagents.mark')
 
