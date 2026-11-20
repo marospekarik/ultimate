@@ -31,6 +31,7 @@ import {
   defineWebExtension,
   errorMessage,
   formatTime,
+  island,
   provide,
   useAction,
   useConversations,
@@ -42,7 +43,7 @@ import {
   writingAs,
 } from '@/sdk'
 import type { ConversationSummary, ToolCallView } from '@/sdk'
-import { ConversationEpic, ConversationTask } from '../conversations/ui.tsx'
+import { ConversationEpic, ConversationTask, ConversationTaskChip } from '../conversations/ui.tsx'
 import { InfoAction, LandedNote, stateLabel, useWorkspaces } from '../workspaces/ui.tsx'
 import { meansNone } from '../../lib/errors.ts'
 import { criteriaOf, sectionsOf, verbatim } from './body.ts'
@@ -59,6 +60,9 @@ import {
 import { PlanDoc, ProgressDoc } from './refs.ts'
 import type { Epic, Estimate, Plan, Task, TaskLink } from './refs.ts'
 import { StatusIcon, TaskChip, statusOf, useOpenTask, useTaskOf } from './ui.tsx'
+import { PLAN_OPEN } from './status.ts'
+import type { PlanOpen } from './status.ts'
+import { ConversationTaskChip as TaskChipOf } from './task-chip.solid.tsx'
 
 const text = (value: unknown) => (typeof value === 'string' ? value : '')
 
@@ -656,13 +660,11 @@ function useAnchor(conversationId: ConversationId | undefined) {
   return anchor
 }
 
-type Open = { conversation: ConversationId; key: string } | null
-
 function PlanOverlay() {
   const { surface, conversationId } = useUltimate()
   const task = useTaskOf(conversationId)
   const anchor = useAnchor(conversationId)
-  const [request, setRequest] = useUiState<Open>('plan.open', null)
+  const [request, setRequest] = useUiState<PlanOpen>(PLAN_OPEN, null)
   useEffect(() => {
     const url = new URL(location.href)
     const key = url.searchParams.get('task')
@@ -698,7 +700,7 @@ function CoordinatorPlan({
   settle,
 }: {
   conversation: ConversationId
-  request: Open
+  request: PlanOpen
   settle: () => void
 }) {
   const plan = useDoc(PlanDoc)
@@ -958,6 +960,7 @@ export default defineWebExtension({
   slots: { overlay: PlanOverlay },
   provides: [
     provide(ConversationTask, useConversationTask),
+    provide(ConversationTaskChip, island(TaskChipOf)),
     provide(ConversationEpic, useConversationEpic),
     provide(LandedNote, useLandedNote),
   ],

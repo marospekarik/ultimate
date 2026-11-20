@@ -4,7 +4,8 @@ import type { ConversationId } from '@earendil-works/pi-durable'
 import type { Accessor } from 'solid-js'
 import { Button } from '@/components/ui/button.solid.tsx'
 import { ROOT, cn, switchConversation, useDocOf, useUiState } from '@/sdk/solid'
-import { statusDots } from './status.ts'
+import { openRequest, PLAN_OPEN, statusDots } from './status.ts'
+import type { PlanOpen } from './status.ts'
 import { TaskIndexDoc } from './refs.ts'
 import type { TaskLink } from './refs.ts'
 
@@ -23,18 +24,15 @@ export function useTaskOf(
  * A task's key with its status dot; click shows its coordinator with the task open in its plan (`plan.open`). A
  * button: place it beside a row's button, not inside it.
  */
-export function TaskChip(props: { task: TaskLink; class?: string }) {
-  const [, setOpen] = useUiState<{ conversation: ConversationId; key: string } | null>(
-    'plan.open',
-    null,
-  )
+export function TaskChip(props: { task: TaskLink; on?: string; class?: string }) {
+  const [, setOpen] = useUiState<PlanOpen>(PLAN_OPEN, null)
   const open = () => {
     switchConversation(props.task.coordinator)
-    setOpen({ conversation: props.task.coordinator, key: props.task.key })
+    setOpen(openRequest(props.task))
   }
   return (
     <Button
-      aria-label={`Open task #${props.task.coordinator}/${props.task.key}: ${props.task.title}`}
+      aria-label={`Open task #${props.task.coordinator}/${props.task.key}: ${props.task.title}${props.on ? ` (${props.on})` : ''}`}
       class={cn(
         'inline-flex shrink-0 items-center gap-1 rounded bg-muted/60 px-1.5 font-mono text-[10px] leading-4 text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring',
         props.class,

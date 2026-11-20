@@ -13,6 +13,7 @@ import { MarksDoc, OverviewDoc } from './refs.ts'
 
 export { Unsummarized } from './points.ts'
 export { hiddenConversationIds } from './visible.ts'
+export { ConversationTaskChip } from './points.ts'
 
 export function useAgentTitle(name: () => string) {
   const marks = useDocOf(() => ROOT, MarksDoc)
