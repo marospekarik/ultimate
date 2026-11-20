@@ -93,6 +93,16 @@ function OutcomeBody({ outcome }: { outcome: LanderOutcome }) {
           flaky: {command}
         </p>
       ))}
+      {outcome.slow?.map((command) => (
+        <p className="text-warning" key={command}>
+          slow: {command}
+        </p>
+      ))}
+      {outcome.skipped?.map((command) => (
+        <p className="text-muted-foreground" key={command}>
+          skipped: {command}
+        </p>
+      ))}
       {outcome.needsRestart && <p className="text-warning">Needs restart.</p>}
       {outcome.pr && (
         <a
