@@ -97,6 +97,11 @@ function OutcomeBody({ outcome }: { outcome: LanderOutcome }) {
           slow: {command}
         </p>
       ))}
+      {outcome.skipped?.map((command) => (
+        <p className="text-muted-foreground" key={command}>
+          skipped: {command}
+        </p>
+      ))}
       {outcome.needsRestart && <p className="text-warning">Needs restart.</p>}
       {outcome.pr && (
         <a
