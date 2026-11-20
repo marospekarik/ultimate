@@ -44,7 +44,19 @@ const ci = (checks: RawPr['statusCheckRollup']) => {
     (check) => check.conclusion || check.state || check.status || '',
   )
   if (states.length === 0) return 'none'
-  if (states.some((state) => ['FAILURE', 'ERROR', 'CANCELLED', 'TIMED_OUT'].includes(state)))
+  if (
+    states.some((state) =>
+      [
+        'FAILURE',
+        'ERROR',
+        'CANCELLED',
+        'TIMED_OUT',
+        'ACTION_REQUIRED',
+        'STARTUP_FAILURE',
+        'STALE',
+      ].includes(state),
+    )
+  )
     return 'failing'
   if (states.every((state) => ['SUCCESS', 'NEUTRAL', 'SKIPPED'].includes(state))) return 'passing'
   return 'running'

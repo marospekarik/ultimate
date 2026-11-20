@@ -42,7 +42,8 @@ characters), changed file paths (first 60) and CI state. No diffs, comments or c
 Edit `profile.md` in this folder: describe the setup the PRs are judged against. Saving it changes the basis, so every
 open PR is judged again on the next round. Change the questions in `fit.ts` the same way.
 
-Without a TypeSafe key, or while `classify` is paused, the action returns nothing and the PRs list shows no marks.
+Without a TypeSafe key (classify off), the action returns nothing and the PRs list shows no marks. While `classify` is
+paused (out of credits, a refused key), marks already judged stay and no new PR is judged; the failure is logged once.
 
 ## Wiring
 
