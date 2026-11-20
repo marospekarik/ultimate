@@ -9,7 +9,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { cn, errorMessage, shortenPath, useAction, useDialog, useSystem } from '@/sdk'
+import { cn, errorMessage, Provided, shortenPath, useAction, useDialog, useSystem } from '@/sdk'
 import { store } from '@/sdk/client'
 import { DEFAULT_FAMILY, familyColor, familyTitle } from '../../lib/families.ts'
 import {
@@ -25,6 +25,7 @@ import { definitionDialog, moveDefinition, parseError, useOpenDefinition } from 
 import { Heading, Tag } from './parts.tsx'
 import { DefinitionsAction } from './refs.ts'
 import type { Definition, Discovery } from './refs.ts'
+import { AgentMark } from './ui.tsx'
 
 const short = (ref: string) => ref.slice(ref.indexOf('/') + 1)
 
@@ -283,6 +284,11 @@ function AgentRow({
           {thinking && thinking !== familyThinking && <span> · {thinking}</span>}
         </>
       }
+      mark={
+        <Provided input={{ name: definition.name }} point={AgentMark}>
+          {(mark) => mark}
+        </Provided>
+      }
       move={<MoveMenu current={family?.name} label={definition.name} onMove={onMove} view={view} />}
       onOpen={onOpen}
       tags={
@@ -308,6 +314,7 @@ function Row({
   description,
   tags,
   meta,
+  mark,
   move,
   title,
   onOpen,
@@ -317,6 +324,7 @@ function Row({
   description: string
   tags?: ReactNode
   meta?: ReactNode
+  mark?: ReactNode
   move: ReactNode
   title?: string
   onOpen?: () => void
@@ -330,6 +338,7 @@ function Row({
         {meta && (
           <span className="min-w-0 truncate text-[10.5px] text-muted-foreground/70">{meta}</span>
         )}
+        {mark && <span className="ml-auto flex shrink-0 items-center pl-2">{mark}</span>}
       </div>
       <p className="line-clamp-1 pl-4.5 font-sans text-[11.5px] leading-snug text-muted-foreground/80">
         {description}
