@@ -187,7 +187,15 @@ export function Chip() {
         <StatusPopoverTrigger
           aria-label="MCP servers"
           class={cn(failed() && 'text-error')}
-          data-mcp={failed() ? 'failed' : connected() === total() ? 'connected' : 'connecting'}
+          data-mcp={
+            failed()
+              ? 'failed'
+              : !total()
+                ? 'off'
+                : connected() === total()
+                  ? 'connected'
+                  : 'connecting'
+          }
         >
           <Plug class="size-3" />
           {total() ? `mcp ${connected()}/${total()}` : 'mcp off'}

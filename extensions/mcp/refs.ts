@@ -7,7 +7,7 @@ export type McpServerStatus = {
   /** Which settings file it comes from; a project entry replaces a user one of the same name. */
   source: 'user' | 'project'
   transport: 'stdio' | 'http'
-  /** `off`: switched off for this project in the user's `mcpProjects`; agents here do not see it. */
+  /** `off`: switched off for this project in the user's `~/.ultimate/mcp.json`; agents here do not see it. */
   state: 'connecting' | 'connected' | 'failed' | 'off'
   /** It runs only in the projects the user listed for it. */
   only?: boolean

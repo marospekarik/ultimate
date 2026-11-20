@@ -160,7 +160,7 @@ async function configured(host: ExtensionHost) {
         name,
         source,
         transport: isObject(value) && typeof value.url === 'string' ? 'http' : 'stdio',
-        ...(choice.only ? { only: true } : {}),
+        ...(choice.only?.length ? { only: true } : {}),
         ...(!enabledIn(choice, project)
           ? { state: 'off' }
           : typeof entry === 'string'
