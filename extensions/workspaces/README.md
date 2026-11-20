@@ -57,7 +57,11 @@ commits is checked out unchanged, with its tip as the new base; a merged or miss
 target tip. Nested isolates prepare their source ancestor checkouts first.
 The existing `workspace_workflow` prompt section starts and waits for the same durable preparation task used
 on creation; setup commands run again before the model can use tools.
-Failed setup keeps its output tail and never force-removes dirty output. The conversation's next tool call retries it (checkout and setup again), so fixing the cause, such as a PATH without `pnpm`, takes effect in the same conversation; until it succeeds every tool call is blocked with the setup's error.
+Failed setup keeps its output tail and never force-removes dirty output. It runs once: the failure wakes the
+conversation once with its error (a `workspaces.setup-failed` card), and every tool call but `message` and `workspace`
+is blocked with that error without rerunning setup. The next `workspace` call retries it (checkout and setup again), so
+fixing the cause, such as a PATH without `pnpm` or a rejected install, takes effect in the same conversation; a retry
+that fails again blocks the same way without another wake.
 
 Info's Workspace section (`Workspaces` in `ui.solid.tsx`) shows the lander queue, the shown conversation's checkout and
 statistics over every checkout, read-only: landing goes through agents. Concluding a conversation can release its clean, landed checkout.
@@ -172,7 +176,9 @@ lander's sidebar row shows the feature it lands or landed last.
    reports it as `skipped`. A passing check that took more than 80 % of its total limit is reported as `slow`.
    A failing check
    reruns once: passing then is reported as flaky, failing again reports the output tail to the submitter once every
-   command of its group settled. Each command keeps its own memo, steps and flaky note; the note names what failed on the
+   command of its group settled, with the machine's load when the rerun failed: one line on the card (`load 21.7 on
+   12 cores`, as the outcome's `load`) and the five processes using the most CPU (pid, %CPU, command) in the report,
+   so a failure caused by a busy machine shows as one. Each command keeps its own memo, steps and flaky note; the note names what failed on the
    first run (`pnpm test · exit 1: test/a.test.ts > its name`, or `Out of memory: exit 137`). A passed or flaky check records its last
    output line (ANSI stripped, at most 200 characters) as `summary`, shown muted after the command on its step row.
    A failed run's log entry keeps its output tail as `output` (not in `steps`), under a collapsed "Output" in the

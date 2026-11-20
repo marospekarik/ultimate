@@ -110,6 +110,9 @@ export function OutcomeBody(props: { outcome: LanderOutcome; context: string }) 
           </a>
         )}
       </Show>
+      <Show when={props.outcome.load}>
+        {(load) => <p class="text-warning">at failure: {load()}</p>}
+      </Show>
       <Show when={props.outcome.hint}>
         <p class="text-muted-foreground">{props.outcome.hint}</p>
       </Show>
