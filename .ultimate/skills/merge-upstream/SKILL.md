@@ -22,6 +22,10 @@ some.
      upstream's new API, so both changes survive. Don't revive an API upstream removed.
    - **Moved files** (for example tests moving into `extensions/<name>/test/`): follow upstream's layout, carry our extra
      cases into the new place, and leave nothing behind at the old path.
+   - **Upstream moved the file to Solid** (`*.solid.tsx`) and our edit conflicts: take upstream's file and move our
+     behaviour into it (as #59784 did for login's `auth:changed` emit).
+   - Before keeping any local edit in a file upstream changes, apply memory `shrink-local-diff`: drop the edit when
+     upstream already covers the need, otherwise name it in the report as a candidate for an upstream PR.
 4. Keep this checkout's local intent:
    - `.ultimate/settings.json`: model families hold colours only (models are per person), the lander checks run one
      after the other with 2 test workers, `lander.push` is `fork`. Take new upstream keys.
@@ -32,8 +36,10 @@ some.
    resolved, fast and e2e (`pnpm test <path>`, `pnpm test:e2e <path>`). Then `workspace submit`.
 7. Report:
    - how each conflict was resolved, and what was dropped;
-   - whether `server/`, `shared/`, `patches/` or `pnpm-lock.yaml` changed (a restart), and whether `bin/` did (a
-     human `pnpm start`).
+   - whether a restart is needed: diff against the sha the host runs (codemode `ultimate.system()`, `code.sha`), never
+     against the merge base: `git diff --name-only <running sha> HEAD -- server shared patches pnpm-lock.yaml`. Any
+     output means a restart; the same diff on `bin` means a human `pnpm start`. (#59114 compared against the base and
+     claimed a restart it didn't need.)
 
 ## Setup errors right after a merge
 
