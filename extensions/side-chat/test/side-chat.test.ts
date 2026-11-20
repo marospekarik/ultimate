@@ -1,7 +1,7 @@
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { awaitWithContext } from '@earendil-works/chord/context'
-import { afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import type { ConversationId } from '@earendil-works/pi-durable'
@@ -24,19 +24,22 @@ import type { endTask } from '../server.ts'
 import { fauxServer, post, sourceCopy, temp, until } from '../../../test/helpers.ts'
 
 let ultimateRoot: string
+let copied: Promise<string> | undefined
 const servers: Awaited<ReturnType<typeof fauxServer>>[] = []
-beforeAll(async () => {
-  ultimateRoot = await sourceCopy(await temp())
+// Copying the source takes seconds under load: done in the first fixture, inside a test's budget, not a 5 s hook.
+async function copySource() {
+  const root = await sourceCopy(await temp())
   // A watcher that inherits faux and only answers: creation must not launch a real script.
   await writeFile(
-    join(ultimateRoot, 'agents/watcher.md'),
+    join(root, 'agents/watcher.md'),
     '---\nname: watcher\ndescription: Test automation writer\ntools: [read]\n---\nAnswer without writing or starting any script.\n',
   )
   await writeFile(
-    join(ultimateRoot, '.ultimate/settings.json'),
+    join(root, '.ultimate/settings.json'),
     JSON.stringify({ summaryModel: 'unavailable/test' }),
   )
-})
+  return root
+}
 // Each test's servers close when it ends: closing every test's servers at once overruns the hook timeout under load.
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => server.close()))
@@ -49,6 +52,7 @@ const textOf = (content: unknown): string =>
       : JSON.stringify(content)
 
 async function fixture() {
+  ultimateRoot = await (copied ??= copySource())
   const home = await temp('ultimate-sidechat-')
   const server = await fauxServer({ ultimateRoot, home, userHome: home })
   servers.push(server)

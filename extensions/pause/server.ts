@@ -15,9 +15,7 @@ import { lasted } from './lasted.ts'
 import { AutoPlayAction, PauseAction, PauseDoc, PlayAction, StateAction } from './refs.ts'
 import type {
   AutoPlayed,
-  GaveUp,
   HeldNote,
-  Hold,
   PauseDocState,
   PauseNote,
   PauseState,
@@ -38,30 +36,14 @@ export const docs = [State]
 
 type Host = Pick<
   ExtensionHost,
-  | 'harness'
-  | 'resource'
-  | 'onOpen'
-  | 'onClose'
-  | 'onRelease'
-  | 'implement'
-  | 'conversations'
-  | 'modelRuntime'
+  'harness' | 'resource' | 'onOpen' | 'onClose' | 'onRelease' | 'implement' | 'conversations'
 >
 
 const sharedPauseFlag = (host: Pick<ExtensionHost, 'resource'>) =>
-  host.resource('pause.flag', () => ({ paused: false, heldSince: undefined as number | undefined }))
-
-const onlyTimedHoldsSince = (doc: PauseDocState) =>
-  doc.paused && !doc.manual && !doc.limit && doc.held?.until !== undefined ? doc.since : undefined
-
-function mirrorPauseFlag(host: Pick<ExtensionHost, 'resource'>, doc: PauseDocState) {
-  sharedPauseFlag(host).paused = doc.paused
-  sharedPauseFlag(host).heldSince = onlyTimedHoldsSince(doc)
-}
+  host.resource('pause.flag', () => ({ paused: false }))
 
 function holdRetryDuringPublication(host: Host) {
   sharedPauseFlag(host).paused = true
-  sharedPauseFlag(host).heldSince = undefined
   host.harness().hold()
 }
 
@@ -140,32 +122,25 @@ async function state(host: Host): Promise<PauseState> {
     paused: doc.paused,
     ...(doc.since === undefined ? {} : { since: doc.since }),
     ...(doc.limit === undefined ? {} : { limit: doc.limit }),
-    ...(doc.held === undefined ? {} : { held: doc.held }),
     ...(doc.autoPlay === undefined ? {} : { autoPlay: doc.autoPlay }),
     ...(autoPlayAt(doc) === undefined ? {} : { autoPlayAt: autoPlayAt(doc) }),
-    ...(doc.checks === undefined ? {} : { checks: doc.checks }),
-    ...(doc.gaveUp === undefined ? {} : { gaveUp: doc.gaveUp }),
     running: await activeTasks(host),
   }
 }
 
-type PauseCause = { limit: RateLimit } | { held: Hold }
-
 // Pi upstream: @earendil-works/pi-durable@1.5.2 — patched Harness.hold()/release() keep the scheduler from starting tasks.
-async function holdAndRecordPause(host: Host, cause?: PauseCause) {
+async function holdAndRecordPause(host: Host, limit?: RateLimit) {
   const harness = host.harness()
   harness.hold()
   sharedPauseFlag(host).paused = true
-  sharedPauseFlag(host).heldSince = undefined
   await harness.commit(async (tx) => {
     const doc = await tx.doc(State, ROOT_CONVERSATION_ID)
-    const waitsForPlay = !cause || ('held' in cause && cause.held.until === undefined)
-    if (waitsForPlay) doc.manual = true
-    if (cause && 'limit' in cause && !doc.limit) doc.limit = cause.limit
-    if (cause && 'held' in cause && !doc.held) doc.held = cause.held
-    else if (cause && 'held' in cause && (cause.held.until ?? 0) > (doc.held?.until ?? Infinity))
-      doc.held!.until = cause.held.until
-    if (doc.paused) return
+    if (doc.paused) {
+      if (limit && !doc.limit) doc.limit = limit
+      const userPressedPause = !limit
+      if (userPressedPause) doc.manual = true
+      return
+    }
     const runs: NonNullable<PauseDocState['runs']> = {}
     const statusesWithRetryBackoff = ['pending', 'running', 'waiting', 'sleeping'] as const
     for (const status of statusesWithRetryBackoff) {
@@ -180,11 +155,14 @@ async function holdAndRecordPause(host: Host, cause?: PauseCause) {
         cursor = page.next
       } while (cursor)
     }
-    Object.assign(doc, { paused: true, since: Date.now(), runs })
+    Object.assign(doc, {
+      paused: true,
+      since: Date.now(),
+      runs,
+      ...(limit ? { limit } : { manual: true }),
+    })
   }, context)
-  const doc = await read(host)
-  mirrorPauseFlag(host, doc)
-  rearmAutoPlay(host, doc)
+  rearmAutoPlay(host, await read(host))
 }
 
 async function pause(host: Host) {
@@ -192,47 +170,10 @@ async function pause(host: Host) {
   return state(host)
 }
 
-async function holdForExtension(host: Host, request: Hold) {
-  const { source, reason, until } = (request ?? {}) as Partial<Hold>
-  if (typeof source !== 'string' || !source.trim() || typeof reason !== 'string' || !reason.trim())
-    throw new Error('hold needs { source, reason }: the extension holding the pause, and why')
-  if (until !== undefined && !Number.isFinite(until))
-    throw new Error('hold until must be a time in ms')
-  const flagBeforeHold = { ...sharedPauseFlag(host) }
-  try {
-    await holdAndRecordPause(host, {
-      held: {
-        source: source.trim(),
-        reason: reason.trim(),
-        ...(until === undefined ? {} : { until }),
-      },
-    })
-  } catch (error) {
-    Object.assign(sharedPauseFlag(host), flagBeforeHold)
-    if (!flagBeforeHold.paused) host.harness().release()
-    throw error
-  }
-  return state(host)
-}
-
-const CLOCK_SKEW_GRACE_AFTER_HOLD_END_MS = 2 * 60_000
-
-function autoPlayAt(doc: PauseDocState): number | undefined {
-  if (!doc.paused || doc.manual || doc.since === undefined || (!doc.limit && !doc.held))
-    return undefined
-  const causeEnds: number[] = []
-  if (doc.limit) {
-    if (!doc.autoPlay || doc.gaveUp !== undefined) return undefined
-    causeEnds.push((doc.checks?.at ?? doc.since) + doc.autoPlay * 60_000)
-  }
-  if (doc.held) {
-    if (doc.held.until === undefined) return undefined
-    causeEnds.push(doc.held.until + CLOCK_SKEW_GRACE_AFTER_HOLD_END_MS)
-  }
-  return Math.max(...causeEnds)
-}
-
-const LONGEST_TIMER_DELAY_MS = 2 ** 31 - 1
+const autoPlayAt = (doc: PauseDocState) =>
+  doc.paused && doc.limit && !doc.manual && doc.autoPlay && doc.since !== undefined
+    ? doc.since + doc.autoPlay * 60_000
+    : undefined
 
 const outsideSchedulerTimer = (host: Pick<ExtensionHost, 'resource'>) =>
   host.resource('pause.autoplay', () => ({ cancel: undefined as Cancel | undefined }))
@@ -244,103 +185,25 @@ function rearmAutoPlay(host: Host, doc: PauseDocState) {
   const at = autoPlayAt(doc)
   if (at === undefined) return
   slot.cancel = deadline(
-    Math.min(LONGEST_TIMER_DELAY_MS, Math.max(0, at - Date.now())),
+    Math.max(0, at - Date.now()),
     () => {
       rebuiltOnOpen(
         'open re-arms auto-play from the persisted pause deadline',
-        autoPlay(host)
-          .then(async (played) => played || rearmAutoPlay(host, await read(host)))
-          .catch((error: unknown) => {
-            console.error('pause: playing by itself failed:', error)
-          }),
+        autoPlay(host).catch((error: unknown) => {
+          console.error('pause: playing by itself failed:', error)
+        }),
       )
     },
     { unref: true },
   )
 }
 
-const GIVE_UP_AFTER_MS = 6 * 60 * 60_000
-const CHECK_TIMEOUT_MS = 60_000
-
-async function refusal(host: Host, limit: RateLimit, now: number) {
-  const model = host.modelRuntime.getModel(limit.provider, limit.model)
-  if (!model) return `${limit.provider}/${limit.model} is not available`
-  try {
-    const answer = await host.modelRuntime
-      .streamSimple(
-        model,
-        { messages: [{ role: 'user', content: 'Reply with OK.', timestamp: now }] },
-        {
-          maxTokens: 16,
-          cacheRetention: 'none',
-          ...(model.reasoning ? { reasoning: 'minimal' } : {}),
-          signal: AbortSignal.timeout(CHECK_TIMEOUT_MS),
-        },
-      )
-      .result()
-    return answer.stopReason === 'error' || answer.stopReason === 'aborted'
-      ? answer.errorMessage || answer.stopReason
-      : undefined
-  } catch (error) {
-    return String(error)
-  }
-}
-
-async function recordRefusedCheck(host: Host, now: number) {
-  await host.harness().commit(async (tx) => {
-    const current = await tx.doc(State, ROOT_CONVERSATION_ID)
-    current.checks = { count: (current.checks?.count ?? 0) + 1, at: now }
-    if (now + current.autoPlay! * 60_000 > current.since! + GIVE_UP_AFTER_MS) current.gaveUp = now
-  }, context)
-  await writeGaveUpOnce(host, await read(host))
-}
-
-async function writeGaveUpOnce(host: Host, doc: PauseDocState) {
-  const harness = host.harness()
-  const ultimate = (await harness.snapshot(Standing, ROOT_CONVERSATION_ID, context))?.ultimate
-  if (!doc.paused || doc.gaveUp === undefined || ultimate === undefined) return
-  const data: GaveUp = {
-    limit: doc.limit!,
-    since: doc.since!,
-    at: doc.gaveUp,
-    checks: doc.checks!.count,
-  }
-  await (
-    await harness.conversation(ultimate, context)
-  )?.submit(
-    {
-      type: 'write',
-      requestId: `pause.gave-up:${doc.since}`,
-      entry: { kind: 'pause.gave-up', data },
-    },
-    context,
-  )
-}
-
 export async function autoPlay(host: Host, now = Date.now()) {
-  const due = (doc: PauseDocState) => {
-    const at = autoPlayAt(doc)
-    return at !== undefined && now >= at
-  }
-  const before = await read(host)
-  if (!due(before)) return false
-  const refused = before.limit && (await refusal(host, before.limit, now))
   return serializePause(host, async () => {
     const doc = await read(host)
-    if (doc.since !== before.since || !doc.limit !== !before.limit || !due(doc)) return false
-    if (refused) {
-      await recordRefusedCheck(host, now)
-      return false
-    }
-    const data: AutoPlayed = {
-      since: doc.since!,
-      at: now,
-      ...(doc.limit ? { minutes: doc.autoPlay!, checks: doc.checks?.count ?? 0 } : {}),
-      ...(doc.held ? { held: doc.held } : {}),
-    }
-    const why = doc.limit
-      ? `after the rate limit paused it, once ${doc.limit.provider} answered again (checked every ${data.minutes} min, the user's setting)`
-      : `after ${doc.held!.source} held it (${doc.held!.reason}), once the time it named passed`
+    const at = autoPlayAt(doc)
+    if (at === undefined || now < at) return false
+    const data: AutoPlayed = { since: doc.since!, at: now, minutes: doc.autoPlay! }
     const autoPlayOncePerPause = `pause.autoplay:${data.since}`
     const harness = host.harness()
     const ultimate = (await harness.snapshot(Standing, ROOT_CONVERSATION_ID, context))?.ultimate
@@ -357,7 +220,7 @@ export async function autoPlay(host: Host, now = Date.now()) {
             model: [
               {
                 role: 'user',
-                content: `Ultimate played by itself ${lasted(now - data.since)} ${why}.`,
+                content: `Ultimate played by itself ${lasted(now - data.since)} after the rate limit paused it (the user's setting: ${data.minutes} min).`,
                 timestamp: now,
               },
             ],
@@ -387,7 +250,7 @@ async function setAutoPlay(host: Host, minutes: unknown) {
 
 async function holdRetryOrRelease(host: Host, limit: RateLimit) {
   try {
-    await holdAndRecordPause(host, { limit })
+    await holdAndRecordPause(host, limit)
   } catch (error) {
     sharedPauseFlag(host).paused = false
     host.harness().release()
@@ -461,13 +324,7 @@ async function noteRunsThenRelease(host: Host, auto = false) {
   const doc = await read(host)
   if (doc.paused && doc.since !== undefined) {
     const until = Date.now()
-    const span = `${lasted(until - doc.since)}${
-      doc.limit
-        ? ` (${doc.limit.provider} rate limited ${doc.limit.model})`
-        : doc.held
-          ? ` (${doc.held.source}: ${doc.held.reason})`
-          : ''
-    }`
+    const span = `${lasted(until - doc.since)}${doc.limit ? ` (${doc.limit.provider} rate limited ${doc.limit.model})` : ''}`
     for (const [key, recorded] of Object.entries(doc.runs ?? {})) {
       const id = parseConversationId(Number(key))
       const how = await recordedRunOutcome(host, id, recorded)
@@ -504,24 +361,16 @@ async function noteRunsThenRelease(host: Host, auto = false) {
     delete current.since
     delete current.runs
     delete current.limit
-    delete current.held
     delete current.manual
-    delete current.checks
-    delete current.gaveUp
   }, context)
-  const after = await read(host)
-  rearmAutoPlay(host, after)
-  mirrorPauseFlag(host, after)
+  rearmAutoPlay(host, await read(host))
+  sharedPauseFlag(host).paused = false
   harness.release()
   return state(host)
 }
 
 export default function pauseExtension(host: Host) {
-  host.implement(PauseApi, {
-    paused: () => sharedPauseFlag(host).paused,
-    hold: (request) => serializePause(host, () => holdForExtension(host, request)),
-    heldSince: () => sharedPauseFlag(host).heldSince,
-  })
+  host.implement(PauseApi, { paused: () => sharedPauseFlag(host).paused })
   let unsubscribe: (() => void) | undefined
   const close = async () => {
     unsubscribe?.()
@@ -534,12 +383,11 @@ export default function pauseExtension(host: Host) {
     unsubscribe?.()
     await serializePause(host, async () => {
       const doc = await read(host)
-      mirrorPauseFlag(host, doc)
+      sharedPauseFlag(host).paused = doc.paused
       if (!doc.paused) return
       host.harness().hold()
       rearmAutoPlay(host, doc)
       await writePauseLimitOnce(host, doc)
-      await writeGaveUpOnce(host, doc)
     })
     unsubscribe = onCommit(host.harness(), (publication) => {
       const generationsSleepingBeforeRetry = new Set(

@@ -74,11 +74,6 @@ async function lastCacheRenewingAnswerAtMs(
   return undefined
 }
 
-export function stopped(pause: { paused(): boolean; heldSince(): number | undefined } | undefined) {
-  const pausedUntilPlayOrRateLimit = !!pause?.paused() && pause.heldSince() === undefined
-  return pausedUntilPlayOrRateLimit
-}
-
 async function activity(host: ExtensionHost, doc: WarmDocState, now: number) {
   const id = await ultimateOf(host)
   const conversation = id === undefined ? undefined : await host.harness().conversation(id, context)
@@ -96,7 +91,6 @@ async function activity(host: ExtensionHost, doc: WarmDocState, now: number) {
     lastRequest,
     failedAfter: last?.error ? last.at : undefined,
     inputAt: doc.inputAt,
-    heldSince: host.want(PauseApi)?.heldSince(),
     tokens: (await host.harness().snapshot(ContextUsageDoc, id!, context))?.tokens,
   }
 }
@@ -151,7 +145,7 @@ async function sendOneShotPingWithoutSession(
   },
   signal: AbortSignal,
 ) {
-  const paused = () => stopped(host.want(PauseApi))
+  const paused = () => !!host.want(PauseApi)?.paused()
   const { id, provider } = found
   const conversation = (await host.harness().conversation(id, context))!
   const agent = await conversation.agent(context)
@@ -246,7 +240,7 @@ async function sendOneShotPingWithoutSession(
 }
 
 async function tick(host: ExtensionHost, signal: AbortSignal) {
-  if (stopped(host.want(PauseApi))) return
+  if (host.want(PauseApi)?.paused()) return
   const doc = await read(host)
   const now = Date.now()
   const found = await activity(host, doc, now)

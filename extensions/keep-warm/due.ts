@@ -10,19 +10,17 @@ export type Activity = {
   lastRequest?: number
   inputAt?: number
   failedAfter?: number
-  heldSince?: number
 }
 
 export const failing = (failedAt: number | undefined, lastRequest: number | undefined) =>
   failedAt !== undefined && (lastRequest === undefined || failedAt >= lastRequest)
 
-export function due({ now, lastRequest, inputAt, failedAfter, heldSince }: Activity) {
+export function due({ now, lastRequest, inputAt, failedAfter }: Activity) {
   if (lastRequest === undefined || inputAt === undefined) return false
   if (failing(failedAfter, lastRequest)) return false
   const cacheAgeMs = now - lastRequest
   const cacheStillWarmAndNearExpiry = cacheAgeMs >= LEAD && cacheAgeMs < TTL
-  const absenceUntilTimedHoldMs = Math.min(now, heldSince ?? now) - inputAt
-  return cacheStillWarmAndNearExpiry && absenceUntilTimedHoldMs < IDLE_STOP
+  return cacheStillWarmAndNearExpiry && now - inputAt < IDLE_STOP
 }
 
 export type PrecoldActivity = Activity & {

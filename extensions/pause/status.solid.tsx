@@ -21,7 +21,7 @@ import {
   useTasks,
 } from '@/sdk/solid'
 import { ConversationRef } from '../conversations/ui.solid.tsx'
-import { checks, clock, lasted, unwrappedProviderError } from './lasted.ts'
+import { lasted, unwrappedProviderError } from './lasted.ts'
 import { AutoPlayAction, PauseAction, PauseDoc, PlayAction, StateAction } from './refs.ts'
 import type { PauseState, RunningTask } from './refs.ts'
 
@@ -76,7 +76,7 @@ function AutoPlay(props: { minutes?: number }) {
   return (
     <div
       class="space-y-1 border-t border-border/50 pt-2 text-muted-foreground"
-      data-agent-confirm="Changes how often paused work checks a rate limit before it plays by itself."
+      data-agent-confirm="Changes when paused work plays by itself after a rate limit."
       data-pause-autoplay
     >
       <div class="flex items-center gap-2">
@@ -87,7 +87,7 @@ function AutoPlay(props: { minutes?: number }) {
               (on) => void save(on ? (draft() ?? props.minutes ?? 30) : null),
             ]}
           />
-          After a rate limit, check every
+          Play by itself after
         </label>
         <NumberInput
           aria-label="Auto-play delay in minutes"
@@ -106,8 +106,7 @@ function AutoPlay(props: { minutes?: number }) {
         <span>min</span>
       </div>
       <div class="text-muted-foreground/70">
-        One short request per check; plays once the provider answers, stops checking after 6 h. A
-        Pause you press waits for you.
+        Only after a rate limit, once per limit. A Pause you press waits for you.
       </div>
       <Show when={error()}>
         <div class="break-words text-error">{error()}</div>
@@ -124,11 +123,7 @@ function Popup(props: { state: PauseState; error?: string; toggle: () => Promise
   return (
     <>
       <div class="border-b border-border/70 px-3 py-2 section-label">
-        {state().limit
-          ? 'Rate limited'
-          : state().held
-            ? `Held by ${state().held!.source}`
-            : 'Pause'}
+        {state().limit ? 'Rate limited' : 'Pause'}
       </div>
       <div class="space-y-2 px-3 py-2 text-[11.5px] leading-[1.55]">
         <Show when={state().limit}>
@@ -144,50 +139,11 @@ function Popup(props: { state: PauseState; error?: string; toggle: () => Promise
               <div class="break-words text-muted-foreground" title={limit().error}>
                 “{unwrappedProviderError(limit().error)}”
               </div>
-              <div class="text-muted-foreground" data-pause-checks>
-                <Switch fallback="No reset time given: nothing retries until Play.">
-                  <Match when={autoPlayAt() !== undefined}>
-                    No reset time given: next check at{' '}
-                    <span class="text-foreground">{clock(autoPlayAt()!)}</span> (in{' '}
-                    {lasted(Math.max(0, autoPlayAt()! - now()))}), plays once {limit().provider}{' '}
-                    answers, or press Play.
-                  </Match>
-                  <Match when={state().gaveUp}>
-                    {(gaveUp) =>
-                      `Still limited after ${lasted(gaveUp() - (since() ?? gaveUp()))}: stopped checking. Press Play once it resets.`
-                    }
-                  </Match>
-                </Switch>{' '}
-                <Show when={state().checks}>
-                  {(last) => (
-                    <span>
-                      Still limited at {clock(last().at)} ({checks(last().count)}).{' '}
-                    </span>
-                  )}
-                </Show>
-                A model you switch meanwhile applies on Play.
-              </div>
-            </div>
-          )}
-        </Show>
-        <Show when={!state().limit && state().held}>
-          {(held) => (
-            <div class="space-y-1" data-pause-held-detail>
-              <div class="break-words text-warning" title={held().reason}>
-                “{held().reason}”
-              </div>
               <div class="text-muted-foreground">
-                <span class="text-foreground">{held().source}</span> paused Ultimate
-                <Show when={since() !== undefined}> · {lasted(now() - since()!)} ago</Show>:{' '}
-                <Show
-                  when={autoPlayAt() !== undefined}
-                  fallback="nothing starts until you press Play."
-                >
-                  <span data-pause-resumes>
-                    plays by itself at <span class="text-foreground">{clock(autoPlayAt()!)}</span>{' '}
-                    (in {lasted(Math.max(0, autoPlayAt()! - now()))}), or press Play.
-                  </span>
-                </Show>
+                {autoPlayAt() !== undefined
+                  ? `No reset time given: plays by itself in ${lasted(Math.max(0, autoPlayAt()! - now()))}, or press Play.`
+                  : 'No reset time given: nothing retries until Play.'}{' '}
+                A model you switch meanwhile applies on Play.
               </div>
             </div>
           )}
@@ -259,14 +215,6 @@ export function Item() {
     <Show when={data()}>
       {(state) => {
         const pausing = () => state().paused && state().running.length > 0
-        const resumes = () => (
-          <Show when={state().autoPlayAt !== undefined && !pausing()}>
-            <span data-pause-until>
-              {' '}
-              · {state().limit ? 'next check' : 'until'} {clock(state().autoPlayAt!)}
-            </span>
-          </Show>
-        )
         const toggle = () => {
           setError(undefined)
           return api
@@ -294,12 +242,6 @@ export function Item() {
               ) : state().limit ? (
                 <>
                   Rate limited<span class="max-md:hidden"> · {state().limit?.provider}</span>
-                  {resumes()}
-                </>
-              ) : state().held ? (
-                <>
-                  Paused<span class="max-md:hidden"> · {state().held?.source}</span>
-                  {resumes()}
                 </>
               ) : state().paused ? (
                 <>
