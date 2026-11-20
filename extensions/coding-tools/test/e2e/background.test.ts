@@ -2,7 +2,7 @@ import { mkdir, readdir, readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { ConversationId } from '@earendil-works/pi-durable'
-import { afterEach, beforeEach, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, expect, it } from 'vitest'
 import type { ToolExecutionApi } from '@earendil-works/pi-durable'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import type { createBashTool } from '@earendil-works/pi-durable/tools'
@@ -14,21 +14,19 @@ import { fauxServer, post, removeTemp, temp, until } from '../../../../test/help
 
 let directory: string
 let server: Awaited<ReturnType<typeof fauxServer>>
+let starting: Promise<typeof server> | undefined
 const started: number[] = []
 
-beforeEach(async () => {
+beforeAll(async () => {
   directory = await temp('ultimate-background-')
-  server = await fauxServer({
-    ultimateRoot: resolve('.'),
-    home: join(directory, 'home'),
-    userHome: directory,
-  })
 })
 afterEach(async () => {
-  await server.close()
   await sweepEarlierProcesses(join(directory, 'home'), () => false)
   const groups = started.splice(0)
   await until(() => groups.every((pgid) => !groupAlive(pgid)))
+})
+afterAll(async () => {
+  await (await starting)?.close()
   await removeTemp(directory)
 })
 
@@ -50,7 +48,14 @@ async function background(conversation: ConversationId, command: string) {
   return { pgid, log: /Output: ([^\\]+)/.exec(text)![1] }
 }
 
-const create = async () => (await post(server, '/api/conversations', {})).data.id as ConversationId
+async function create() {
+  server = await (starting ??= fauxServer({
+    ultimateRoot: resolve('.'),
+    home: join(directory, 'home'),
+    userHome: directory,
+  }))
+  return (await post(server, '/api/conversations', {})).data.id as ConversationId
+}
 const conversationAction = (name: string, ids: number[]) =>
   post(server, `/api/extensions/conversations/actions/${name}`, { args: { ids } })
 const groupsOf = async (id: number) =>
