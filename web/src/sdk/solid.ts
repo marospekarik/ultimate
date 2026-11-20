@@ -2,7 +2,12 @@
  * The extension SDK for Solid facets (`*.solid.tsx`): live documents, durable UI state and client state as accessors.
  * Mount a Solid component from a `web.tsx` with `island` from `@/sdk`; docs/extensions/sdk.md#solid-facets.
  */
-import type { ConversationId } from '@earendil-works/pi-durable'
+import type {
+  AgentState,
+  ConversationId,
+  EntryRecord,
+  UsageState,
+} from '@earendil-works/pi-durable'
 import type { JsonValue } from '@earendil-works/chord/json'
 import {
   createContext,
@@ -49,12 +54,14 @@ export { writingAs } from './writer.ts'
 export { ROOT } from './api.ts'
 export { actionRef, docRef } from '../../../shared/extension-api.ts'
 export {
+  elidePath,
   errorMessage,
   formatAgo,
   formatBytes,
   formatDuration,
   formatTime,
   formatTokens,
+  shortenPath,
 } from './format.ts'
 export { formatKeys } from './keys.ts'
 export { keepLast } from '../../../lib/errors.ts'
@@ -320,8 +327,11 @@ export function useCommands() {
 export const { switchConversation, showSurface, runCommand, openPanel, focusComposer } = actions
 /** The composer input a person can type into now (the main one or a side chat's); `dataset.conversation` is its conversation. */
 export { uncoveredComposer } from './actions.ts'
-/** Replaces the draft in conversation `id`'s composer with `text`, as `fillComposer` from `@/sdk` does. */
-export { fillComposer } from '../app/drafts.ts'
+/**
+ * `fillComposer(id, text)` replaces conversation `id`'s composer draft, `insertIntoComposer(id, text)` inserts at its
+ * cursor, as in `@/sdk`.
+ */
+export { fillComposer, insertIntoComposer } from '../app/drafts.ts'
 
 /** The conversation `ConversationScope` gives, or the shown one once known. */
 export function useConversationId(): Accessor<ConversationId | undefined> {
@@ -330,11 +340,59 @@ export function useConversationId(): Accessor<ConversationId | undefined> {
   return createMemo(() => scoped ?? state().view?.conversation.id)
 }
 
+/** `pi.agent` of the conversation `ConversationScope` gives, or the shown one: model, thinking level, cwd, tools. */
+export function useAgent(): Accessor<AgentState> {
+  const view = useScopedView()
+  return createMemo(() => view()?.docs['pi.agent'] ?? {})
+}
+
+/** The page's notice stack, oldest first, as `useNotices` from `@/sdk` reads it. */
+export const useNotices = selected((state) => state.notices)
+/** Fetches the model list again, as `refreshModels` from `@/sdk` does, such as after a login changed it. */
+export const refreshModels = () => store.refreshModels()
+
 /** Whether dialog `id` is open, and a setter, as `useDialog` from `@/sdk` gives them. */
 export function useDialog(id: string): [Accessor<boolean>, (open: boolean) => void] {
   const { state } = shared()
   const open = createMemo(() => state().ui.dialogs[id] === true)
   return [open, (next) => (next ? actions.open(id) : actions.close(id))]
+}
+
+/** `GET /api/models`: providers with auth status, models with context window and cost; undefined until it arrives. */
+export const useModels = selected((state) => state.models)
+
+const noUsage: UsageState = { models: {}, tools: {} }
+
+/**
+ * The conversation `ConversationScope` gives, or the shown one, as `useConversation` from `@/sdk` reads it: `id`,
+ * `loading`, its streamed `entries` (oldest first), `agent` (`pi.agent`) and `usage` (`pi.usage`).
+ */
+export type ConversationState = {
+  id?: ConversationId
+  loading: boolean
+  entries: readonly EntryRecord[]
+  agent: AgentState
+  usage: UsageState
+}
+
+function useScopedView() {
+  const { state } = shared()
+  const scoped = useContext(ConversationScope)
+  return createMemo(() => (scoped === null ? state().view : state().viewsOf[scoped]))
+}
+
+export function useConversation(): Accessor<ConversationState> {
+  const view = useScopedView()
+  return createMemo((): ConversationState => {
+    const shown = view()
+    return {
+      id: shown?.conversation.id,
+      loading: !shown,
+      entries: shown?.entries ?? [],
+      agent: shown?.docs['pi.agent'] ?? {},
+      usage: (shown?.docs['pi.usage'] ?? noUsage) as UsageState,
+    }
+  })
 }
 
 /** Shows a notice in the page's notice stack, as a failed command does. */

@@ -26,13 +26,22 @@ The toolchain, lint, these skills, and the SDK's Solid side. A `*.solid.tsx` fil
 rules below. An extension mounts a Solid component from its `web.tsx` with `island(Component)` from `@/sdk`, and the
 component reads documents, UI state and client state as accessors from `@/sdk/solid`
 ([Solid facets](../../docs/extensions/sdk.md#solid-facets)). The Solid UI kit ships Button, Checkbox, Collapsible,
-Command, Dialog, DropdownMenu, HoverCard, Kbd and KbdGroup, NumberInput, Popover, Row and Rows, SegmentedControl,
-Skeleton, Slider, StatusPopoverTrigger (in `status-trigger.solid.tsx`), Switch and Tooltip. Import from
+Command, Dialog, DropdownMenu, HoverCard, Input and SecretInput (in `input.solid.tsx`), Kbd and KbdGroup, NumberInput,
+Popover, Row and Rows, SegmentedControl, Skeleton, Slider, StatusPopoverTrigger (in `status-trigger.solid.tsx`), Switch,
+Toast and Tooltip. Import from
 `@/components/ui/<name>.solid.tsx`, and check `web/src/components/ui/` before assuming a component exists.
 `extensions/keep-warm/chip.solid.tsx` is the reference migration, with its agent test beside it; the status chips of
 setup, mcp, tailscale, push, update, self, pause and sounds followed it. A React point that another extension renders
 (mcp's `ExtensionDetails`) stays React and returns an island: `provide(Point, () => <McpDetails />)` with
-`const McpDetails = island(Details)`. Icons come from `@lucide/solid`.
+`const McpDetails = island(Details)`. Panels and overlays take islands too (`component: island(SecretsPanel)`).
+Icons come from `@lucide/solid`. A Solid part that needs what only React reads
+(another extension's React point, such as inbox's `Waiting`) takes it as a prop: the `web.tsx` keeps a small React
+wrapper that reads it and renders `<List inbox={entries.length} />` with `const List = island(TodoList)`; island
+passes its props on live, without a remount (`extensions/todos/web.tsx`).
+
+What cannot move before the core switch: tool, entry and document renderers, message actions and details, the
+`composer` wrapper, `link`, and anything that renders other extensions' React contributions (the Documents panel,
+the agent surface, the panel tabs) or a `provide` hook. A slot item, a panel or an overlay of its own can move.
 
 ## Ultimate's rules (on top of those skills)
 
@@ -86,6 +95,15 @@ setup, mcp, tailscale, push, update, self, pause and sounds followed it. A React
     `every` takes `(data) => ms` (`extensions/mcp/chip.solid.tsx` polls fast while a server connects), never a
     second reader or an effect that writes the interval.
   - Read a callback prop (`props.onValueChange`) into a local before calling it inside `writingAs`, as `Switch` does.
+  - An effect's apply half is untracked, so reading a store-backed doc or an accessor there trips
+    `STRICT_READ_UNTRACKED` and reads a value that never updates. Build a plain value in the compute half by reading
+    each field you use (`{ runState, answerId } = row`, messages mapped to the fields you need, `catchingUp()`), and
+    hand only that to the apply half, as `extensions/sounds/player.solid.tsx` does. Never `snapshot()` there: it
+    subscribes to nothing nested, and a doc row the SDK keeps by identity changes a field without the effect rerunning.
+  - A row per item of a changing id list (one doc read per busy conversation) is `mapArray(ids, (id) => …)`: each id
+    gets its own owner and reads, disposed when it leaves; no child components reporting up through callbacks.
+  - A form's native `onSubmit` loses the agent's attribution: start the request from the kit Button's `onClick`, which
+    runs in `writingAs`.
   - For a polled list whose objects are replaced on each fetch, `<For keyed={(row) => row.id}>` keeps each row's DOM
     by id and gives the child an item accessor. The default keys by object identity.
   - When extracting a browser helper to `.ts`, add it to `tsconfig.web.json`'s `include`. A `.ts` helper shared by
@@ -144,6 +162,27 @@ setup, mcp, tailscale, push, update, self, pause and sounds followed it. A React
   - Collapsible unmounts the panel's children when closed by default. Keep local state that should survive a collapse
     in the owner outside the panel, or use `keepMounted` when the children themselves must survive.
   - An inline `<svg>` drawing is named by `aria-label` and a `<title>`, not `role="img"` (`jsx-a11y/prefer-tag-over-role`).
+  - The bridge resolves a label by prefix: "New to-do" also named "New to-do for", and `act` refused both. No
+    control's name may start with another's on the same page; jsdom tests with one component miss it, so act on the
+    whole page once in the preview.
+  - A form's submit runs from the native `submit` event, which carries no source: remember `details.source` in the
+    submit Button's `onClick` and run the write in `writingAs(source, …)` (`extensions/todos/panel.solid.tsx`).
+  - `useAction`'s `every` polls only after an answer and keeps the last data across a restart; a read that must give
+    up on a hung request or reset per server generation keeps its own effect keyed on them
+    (`extensions/status-line/status.solid.tsx`, `useRates`).
+  - A Tooltip trigger rendered as a `<span>` is not named by its text (only buttons and links are): give it an
+    `aria-label` that names the item (`Context use`, `Server connection`), or the SDK warns and agents cannot find
+    it.
+  - A list that comes and goes on its own (notices) is a kit `Toast` fed by a `createToaster()`, not a hand-made
+    clock, hover flag and dismissed set: the toaster owns each toast's `duration`, pauses while the pointer or focus is
+    in the region, caps `maxVisible`, and dismisses on Escape or swipe (`extensions/notices/toasts.solid.tsx`). The
+    agent sees one `toast` component for the whole region: its label is the region's name only when two or more show,
+    and it presses a toast's close button by name with `press` and the button's text as the argument.
+  - `aria-pressed` and other ARIA states take the strings `'true'`/`'false'` in Solid's JSX types, not a boolean.
+  - A one-time page effect (registering a service worker, reading a URL parameter once) goes in `onSettled` in the
+    component; it needs no refs or dependency lists as React's `useEffect` did (`extensions/share/receive.solid.tsx`).
+  - A facet that reads the conversation's model reads `useAgent()` (its `pi.agent`), not a whole conversation
+    replica.
 - **Lint is the floor, not the bar.** `pnpm check` runs eslint-plugin-solid's `v2-strict` set (Solid 2 semantics) as
   errors, plus accessibility rules and ours, on every `*.solid.tsx`. Never disable a rule inline. A false positive is a
   report to the coordinator, with the code and the rule.
@@ -161,7 +200,7 @@ setup, mcp, tailscale, push, update, self, pause and sounds followed it. A React
   before `vi.useFakeTimers()`.
 - The store drops a `system` event whose text equals the last one; a test of a restart or rollback sends a changed
   `system` (a new `booted`), as the server does.
-- Agent test: one `createAgent()` (from `@ui-sdk/core/agent`) per file; find controls in `snapshot()` by label and act
+- Agent test: one `createAgent()` (from `@ui-sdk/solid/agent`) per file; find controls in `snapshot()` by label and act
   on the ref it returns, never an assumed `c1`, since other controls may mount; subscribe before `act`; assert the
   result's `ok`, the DOM, `details.source === 'agent'` in your handlers, and the events the subscription saw
   (`test/web/solid-harness.test.solid.tsx`). `act`'s `values` are keyed `"<ref> <label>"`. Use `expect(x)` without a

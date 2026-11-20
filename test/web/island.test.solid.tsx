@@ -2,7 +2,7 @@
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { createElement as h, act } from 'react'
 import { createRoot } from 'react-dom/client'
-import { onSettled, useContext } from 'solid-js'
+import { flush, onSettled, useContext } from 'solid-js'
 import { expect, it, vi } from 'vitest'
 
 vi.mock('../../web/src/sdk/client.ts', async () => {
@@ -55,5 +55,68 @@ it('mounts a Solid component in React with its extension and conversation, and d
   act(() => react.unmount())
   expect(disposed).toHaveBeenLastCalledWith('echo@9')
   expect(container.innerHTML).toBe('')
+  container.remove()
+})
+
+it('hands React props to the Solid component and updates them without a remount', () => {
+  const mounted = vi.fn<() => void>()
+  const Count = island((props: { count: number }) => {
+    onSettled(mounted)
+    return <span>{props.count}</span>
+  })
+  const container = document.createElement('div')
+  document.body.append(container)
+  const react = createRoot(container)
+
+  act(() => react.render(h(Count, { count: 1 })))
+  expect(container.textContent).toBe('1')
+
+  act(() => react.render(h(Count, { count: 2 })))
+  flush()
+  expect(container.textContent).toBe('2')
+  expect(mounted).toHaveBeenCalledOnce()
+
+  act(() => react.unmount())
+  container.remove()
+})
+
+it('drops a prop React stops passing, and a scope remount starts from the props of that render', () => {
+  const mounts = vi.fn<() => void>()
+  const setup: string[] = []
+  const stale = () => 'old'
+  const Label = island((props: { note?: string; toString?: () => string }) => {
+    const scope = useContext(ConversationScope)
+    const first = { ...props }
+    setup.push(`${scope}:${first.note}`)
+    onSettled(mounts)
+    return (
+      <span>
+        {scope}:{props.note ?? 'none'}
+        {props.toString === stale ? '+stale' : ''}
+      </span>
+    )
+  })
+  const container = document.createElement('div')
+  document.body.append(container)
+  const react = createRoot(container)
+  const render = (conversation: number, props: { note?: string; toString?: () => string }) =>
+    act(() =>
+      react.render(
+        h(ConversationIdContext, { value: conversation as ConversationId }, h(Label, props)),
+      ),
+    )
+
+  render(1, { note: 'a', toString: stale })
+  expect(container.textContent).toBe('1:a+stale')
+  render(1, {})
+  flush()
+  expect(container.textContent).toBe('1:none')
+
+  render(2, { note: 'b' })
+  expect(container.textContent).toBe('2:b')
+  expect(mounts).toHaveBeenCalledTimes(2)
+  expect(setup).toEqual(['1:a', '2:b'])
+
+  act(() => react.unmount())
   container.remove()
 })
