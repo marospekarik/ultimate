@@ -6,13 +6,15 @@ import { join, resolve, sep } from 'node:path'
 import { applyImmutable } from '@earendil-works/chord/delta'
 import type { Op } from '@earendil-works/chord/delta'
 import type { ConversationId, ConversationView, Harness } from '@earendil-works/pi-durable'
-import { afterAll, vi } from 'vitest'
+import { afterAll, inject, vi } from 'vitest'
 import { ProjectTrustStore } from '@earendil-works/pi-coding-agent'
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import type { FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import { Tally } from '../extensions/lineage/api.ts'
 import { context } from '../server/harness.ts'
 import { createServer, prepareServer } from '../server/main.ts'
+import { webFacets } from '../server/web.ts'
+import { extensionSettingsFiles } from '../lib/extension-settings.ts'
 import type { ServerOptions } from '../server/main.ts'
 import type { ServerEvents, SystemInfo } from '../shared/protocol.ts'
 import type { Api } from '../shared/extension-api.ts'
@@ -190,8 +192,8 @@ type FixtureOptions = ServerOptions & {
 }
 async function isolated(options: FixtureOptions) {
   const { home, userHome } = options
-  const ultimateRoot =
-    options.ultimateRoot === resolve('.') ? await sourceCopy(home) : options.ultimateRoot
+  const copied = options.ultimateRoot === resolve('.')
+  const ultimateRoot = copied ? await sourceCopy(home) : options.ultimateRoot
   const projectRoot =
     !options.projectRoot || options.projectRoot === resolve('.')
       ? ultimateRoot
@@ -202,6 +204,7 @@ async function isolated(options: FixtureOptions) {
     await mkdir(join(userHome, '.ultimate'), { recursive: true })
     await writeFile(join(userHome, '.ultimate/onboarding.json'), '{"firstRunDone":true}\n')
   }
+  if (copied) await seedWebBundle(ultimateRoot, projectRoot, userHome, home)
   const { firstRun: _firstRun, ...server } = options
   return {
     ...server,
@@ -212,6 +215,43 @@ async function isolated(options: FixtureOptions) {
     faux: options.faux ?? fauxProvider(),
     port: options.port ?? 0,
   }
+}
+/**
+ * Give a server on the source copy `ultimateRoot` the run's shared web bundle (`test/e2e/web-bundle.ts`) when it would
+ * build the same facets, so its first page load skips a production build of its own. Others build as usual.
+ */
+async function seedWebBundle(
+  ultimateRoot: string,
+  projectRoot: string,
+  userHome: string,
+  home: string,
+) {
+  const shared = inject('webBundle')
+  if (!shared) return
+  const moved = (file: string) =>
+    file.startsWith(shared.root + sep) ? ultimateRoot + file.slice(shared.root.length) : file
+  const facets = await webFacets(ultimateRoot, projectRoot, userHome)
+  if (facets.join('\0') !== shared.facets.map(moved).join('\0')) return
+  const folder = join(home, 'web')
+  await mkdir(folder, { recursive: true })
+  await symlink(shared.bundle, join(folder, 'shared'))
+  await writeFile(
+    join(folder, 'manifest.json'),
+    JSON.stringify({
+      id: 'shared',
+      at: Date.now(),
+      inputs: [
+        ...shared.inputs.map(moved),
+        ...['vite.config.ts', 'pnpm-lock.yaml', 'web/index.html'].map((file) =>
+          join(ultimateRoot, file),
+        ),
+        ...extensionSettingsFiles(projectRoot, userHome).filter((file) => existsSync(file)),
+      ],
+      facets,
+      broken: [],
+      retired: {},
+    }),
+  )
 }
 export async function fauxServer(options: FixtureOptions) {
   const server = await createServer(await isolated(options))
