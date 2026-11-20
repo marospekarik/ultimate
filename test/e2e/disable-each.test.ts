@@ -11,6 +11,9 @@ vi.setConfig({ maxConcurrency: 6 })
 const graph = extensionGraph(resolve('extensions'))
 const optional = [...graph].filter(([, entry]) => !entry.core).map(([name]) => name)
 const core = [...graph].filter(([, entry]) => entry.core).map(([name]) => name)
+const depended = optional.filter((name) =>
+  [...graph.values()].some((entry) => entry.deps.has(name)),
+)
 
 /** A faux server on the built-ins with `disable` in the user's settings, and what it reports. */
 async function boot(disable: string[]) {
@@ -50,7 +53,17 @@ it('knows optional extensions and the core tier', () => {
   expect(core).toEqual(expect.arrayContaining(['conversations', 'subagents', 'workspaces']))
 })
 
-it.concurrent.each(optional)('boots cleanly with %s disabled', async (name) => {
+it.concurrent('boots cleanly with every optional extension disabled', async () => {
+  const state = await boot(optional)
+  expect(state.enabled).toEqual(expect.arrayContaining(core))
+  expect(state.enabled.filter((name) => optional.includes(name))).toEqual([])
+  expect(state.errors).toEqual([])
+  expect(state.diagnostics).toEqual([])
+  expect(state.missing).toEqual([])
+  expect(state.tools).toContain('bash')
+})
+
+it.concurrent.each(depended)('boots cleanly with %s disabled', async (name) => {
   const state = await boot([name])
   expect(state.enabled).not.toContain(name)
   expect(state.errors).toEqual([])
