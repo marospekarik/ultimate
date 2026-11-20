@@ -1,11 +1,9 @@
-import type { ConversationId } from '@earendil-works/pi-durable'
 import type { ReactNode } from 'react'
 import {
   cn,
   keepLast,
   useAction,
   useConversation,
-  useExtensionUiState,
   useTranscript,
   useUiState,
   useUltimate,
@@ -14,9 +12,9 @@ import type { EntryRecord } from '@/sdk'
 import { cacheBusts } from '../../lib/context-usage.ts'
 import { SYSTEM_TAB_KEY } from '../system/ui.tsx'
 import { ListAction } from './refs.ts'
+import { WIRE_PICKED_KEY } from './state.ts'
+import type { Picked } from './state.ts'
 import type { WireSummary } from './refs.ts'
-
-export type Picked = { conversation: ConversationId; n: number }
 
 export function useOpenWire() {
   const [, setTab] = useUiState<string>(SYSTEM_TAB_KEY, 'agents')
@@ -29,7 +27,7 @@ export function useOpenWire() {
 
 const MAX_RESPONSE_START_DISTANCE_MS = 60_000
 
-export function callFor(
+function callFor(
   calls: readonly WireSummary[],
   responseId: string | undefined,
   at: number,
@@ -54,7 +52,7 @@ export function WireLink({
   const busy = useConversation((conversation) => conversation.busy)
   const calls = useAction(ListAction, null, { on: busy, onError: keepLast })
   const bust = cacheBusts(useTranscript()).has(entry.id)
-  const [, setPicked] = useExtensionUiState<Picked | null>('picked', null)
+  const [, setPicked] = useUiState<Picked | null>(WIRE_PICKED_KEY, null)
   const openWire = useOpenWire()
   if (message?.role !== 'assistant' || (blocks && blocks[0] !== 0)) return core
   const call = calls.data && callFor(calls.data, message.responseId, message.timestamp)
@@ -64,7 +62,7 @@ export function WireLink({
       {core}
       <button
         className={cn(
-          'absolute right-0 cursor-pointer rounded-sm bg-background px-1.5 font-mono text-[11px] leading-4 transition-opacity hover:text-foreground focus-visible:opacity-100 pointer-coarse:opacity-100',
+          'absolute right-0 rounded-sm bg-background px-1.5 font-mono text-[11px] leading-4 transition-opacity hover:text-foreground focus-visible:opacity-100 pointer-coarse:opacity-100',
           bust
             ? 'top-0 text-warning/80'
             : 'top-0.5 text-muted-foreground/60 opacity-0 group-hover/wire:opacity-100',
