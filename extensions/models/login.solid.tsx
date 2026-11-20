@@ -33,6 +33,7 @@ import {
   api,
   cn,
   errorMessage,
+  events,
   refreshModels,
   useConversationId,
   useDialog,
@@ -208,7 +209,9 @@ function FlowView(props: {
   )
   createEffect(status, (next) => {
     if (next !== 'running') props.attempt.finish()
-    if (next === 'complete') void refreshModels()
+    if (next !== 'complete') return
+    void refreshModels()
+    events.emit('auth:changed', undefined)
   })
   return (
     <div class="flex flex-col">
