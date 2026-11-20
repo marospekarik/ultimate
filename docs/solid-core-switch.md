@@ -1,60 +1,72 @@
 # What waits for the core switch
 
 The React parts the Solid migration's batches (0.8 A–C, 0.9 D–F) left in extensions on purpose: each renders inside
-the React core or is a React hook the core calls, so it can only move once that core is Solid. This is the input for
-planning the core switch; nothing here has moved. Keep it current when a batch leaves a part React.
+the React core or is a React hook the core calls, so it can only move once that core is Solid. Keep it current when a
+batch leaves a part React.
 
-**Summary (P1):** 53 rows (a row is one part or a group of one extension's parts) in 30 extensions. By
-core host:
+**Done: P2's renderers.** Every transcript renderer of messages, questions, review, workspaces, conversations, goal,
+pause, self, setup and status-line is `island(C)`; goal, self, setup and status-line are whole. Solid renderers take the
+transcript's parts from `@/sdk/parts.solid.tsx` (`Card`, `Fold`, `MessageActions`, `UserView`, `useToolDuration`) and
+read another extension's point with its `Provided`, which renders an `island(C)` provider as Solid and a React one through
+the bridge; a React host's `Provided` renders an `island(C)` provider as an element. Points meant for `island(C)`
+providers take an object input (`MessageAnswers`, `MessageExtras`: `{ message }`; `LandingExtras`: `{ conversation }`).
+React callers outside the transcript (inbox's reading pane, side chat, voice-live, review's surface, sidebar, lineage)
+reach the moved parts through `island` wrappers in the owner's `ui.tsx`; voice-live keeps a small React `Bubble` shell
+because it passes React prompt and answer nodes into it.
 
-| Core host                                                                | Rows | Extensions |
-| ------------------------------------------------------------------------ | ---- | ---------- |
-| The transcript (tool and entry renderers, Markdown, message bar, bubble) | 33   | 25         |
-| The sidebar (React rows and sections other extensions provide)           | 3    | 3          |
-| Panel and surface hosts, System's tab host, documents' views             | 10   | 7          |
-| The composer                                                             | 2    | 2          |
-| React points of other extensions (onboarding, workspaces' landing card)  | 5    | 5          |
+**Done: the transcript host (C2).** `web/src/app/transcript.solid.tsx` and its rows (tool calls, user turns, message
+actions, folds, work runs, the live status) are Solid, with its own scroll-to-bottom (`web/src/app/follow.ts`). Its
+renderer points keep their framework: a tool, entry, tool-line, message-action, message-detail, answer-label,
+user-bubble or compact-summary renderer contributed as `island(C)` renders as Solid directly; any other is React and
+mounts through the temporary bridge in `web/src/sdk/react-island*.tsx`, which C5 deletes. The rows below under "The
+transcript" are what P2 and P3 move, each by writing `island(C)` in its `web.tsx`: `rg -n "(tools|entries|toolLines|
+messageActions|messageDetails|answerLabels|userBubble):" extensions/*/web.tsx` lists what is left. Points the host reads
+(`ParkedRuns`, `RunStart`, `MessageReference`, `FileUpload`, `EmptyTranscript`) and the `transcript.*` slots run their
+React providers through the same bridge until C4.
 
-The transcript blocks the most: two thirds of the rows, and it hosts most of the rest indirectly (inbox's reading pane
-and the landing card render its message parts). Switch it first.
+**Summary (C2):** 51 rows (a row is one part or a group of one extension's parts) in 29 extensions. By core host:
+
+| Core host                                                               | Rows | Extensions |
+| ----------------------------------------------------------------------- | ---- | ---------- |
+| The transcript's renderers (P2/P3; host done in C2)                     | 31   | 24         |
+| The sidebar (React rows and sections other extensions provide)          | 3    | 3          |
+| Panel and surface hosts, System's tab host, documents' views            | 10   | 7          |
+| The composer                                                            | 2    | 2          |
+| React points of other extensions (onboarding, workspaces' landing card) | 5    | 5          |
+
+User extensions outside this repository (`~/.ultimate/extensions`) contribute React renderers too: pr-triage's
+`pr-triage.request` entry, shell's `shell` tool and `shell.result` entry. They mount through the bridge unchanged; C5
+breaks them unless they move to `island(C)` first.
 
 ## The transcript
 
-| Extension     | Part                                                                                               | Where                       | Hook in the transcript       |
-| ------------- | -------------------------------------------------------------------------------------------------- | --------------------------- | ---------------------------- |
-| browser       | tool renderers `screenshot`, `browser`                                                             | `browser/web.tsx`           | tool calls                   |
-| codemode      | tool renderer and compact line `codemode`                                                          | `codemode/web.tsx`          | tool calls, compact lines    |
-| goal          | tool renderer `goal` (`call.tsx`)                                                                  | `goal/web.tsx`              | tool calls                   |
-| instance      | tool renderer `instance`                                                                           | `instance/web.tsx`          | tool calls                   |
-| parallel      | tool renderers `web_search`, `web_fetch`                                                           | `parallel/web.tsx`          | tool calls                   |
-| self          | tool renderer `restart`                                                                            | `self/web.tsx`              | tool calls                   |
-| todos         | tool renderer `todo`                                                                               | `todos/web.tsx`             | tool calls                   |
-| workspaces    | tool renderer `workspace`; entries `lineage.note` (landing card), `ultimate.lander`, lander report | `workspaces/web.tsx`        | tool calls, entries          |
-| context       | entries `pi.system`, `pi.reset`, `pi.compaction`, `pi.assistant`; point `CacheRebuiltLine`         | `context/web.tsx`, `ui.tsx` | entries                      |
-| context       | slots `Start`, `PinnedPrompt` (read `useTranscriptScroll`)                                         | `context/web.tsx`           | start and top                |
-| goal          | entries `goal.started`, `goal.report` (with End hands-off), `goal.note` (model-only)               | `goal/cards.tsx`            | entries                      |
-| pause         | entries `pause.note`, `pause.limit`, `pause.autoplay`, `pause.held`                                | `pause/web.tsx`             | entries                      |
-| prompt        | entry `prompt.build`                                                                               | `prompt/web.tsx`            | entries                      |
-| recall        | entry of recalled memories (model-only); user bubble `RecallBubble`                                | `recall/web.tsx`            | entries, user message        |
-| setup         | entry `setup.note` (model-only)                                                                    | `setup/web.tsx`             | entries                      |
-| todos         | entry `todos.note` (model-only)                                                                    | `todos/web.tsx`             | entries                      |
-| watchdog      | entry `watchdog.failure`                                                                           | `watchdog/web.tsx`          | entries                      |
-| models        | entries `pi.assistant` (model switch divider `Switched`), `models.fallback` (`FellBack`)           | `models/web.tsx`            | entries                      |
-| automations   | tool renderer `automation`; entries `automations.fired`, `.failed`, `.escalated`, `.writing`       | `automations/web.tsx`       | tool calls, entries          |
-| automations   | provided `WaitTimers` (`useWaitTimers`)                                                            | `automations/web.tsx`       | messages' wait timers        |
-| conversations | entries `conversations.*` (`SummaryAction`), `link` (`MentionLink`)                                | `conversations/web.tsx`     | entries, Markdown            |
-| conversations | provided `EmptyTranscript` (`standing.tsx`)                                                        | `conversations/web.tsx`     | empty transcript             |
-| wire          | entry `pi.assistant` (`WireLink`)                                                                  | `wire/web.tsx`              | entries                      |
-| diagrams      | code block `mermaid`                                                                               | `diagrams/web.tsx`          | Markdown                     |
-| instance      | `link` (preview links in messages)                                                                 | `instance/web.tsx`          | Markdown                     |
-| read-aloud    | message action                                                                                     | `read-aloud/web.tsx`        | message bar                  |
-| status-line   | message detail `MessageUsage`                                                                      | `status-line/web.tsx`       | message bar                  |
-| codemode      | provided `MessageReference`                                                                        | `codemode/web.tsx`          | message actions              |
-| reel          | provided `MessageExtras` (its player shows questions' React answer card)                           | `reel/web.tsx`              | message cards, inbox's cards |
-| questions     | provided `MessageAnswers`; the answer card agents cannot press yet                                 | `questions/web.tsx`         | message cards, inbox's cards |
-| tasks         | provided `RunStart`                                                                                | `tasks/web.tsx`             | the run timer                |
-| pause         | provided `ParkedRuns` (also read by the sidebar and System)                                        | `pause/web.tsx`             | parked runs                  |
-| review        | provided `workspaces.review` (`Review`) and the `ReviewLink` overlay that takes `review:open`      | `review/web.tsx`            | the landing card, sidebar    |
+| Extension     | Part                                                                                           | Where                       | Hook in the transcript       |
+| ------------- | ---------------------------------------------------------------------------------------------- | --------------------------- | ---------------------------- |
+| browser       | tool renderers `screenshot`, `browser`                                                         | `browser/web.tsx`           | tool calls                   |
+| codemode      | tool renderer and compact line `codemode`                                                      | `codemode/web.tsx`          | tool calls, compact lines    |
+| instance      | tool renderer `instance`                                                                       | `instance/web.tsx`          | tool calls                   |
+| parallel      | tool renderers `web_search`, `web_fetch`                                                       | `parallel/web.tsx`          | tool calls                   |
+| todos         | tool renderer `todo`                                                                           | `todos/web.tsx`             | tool calls                   |
+| context       | entries `pi.system`, `pi.reset`, `pi.compaction`, `pi.assistant`; point `CacheRebuiltLine`     | `context/web.tsx`, `ui.tsx` | entries                      |
+| context       | slots `Start`, `PinnedPrompt` (read `useTranscriptScroll`)                                     | `context/web.tsx`           | start and top                |
+| prompt        | entry `prompt.build`                                                                           | `prompt/web.tsx`            | entries                      |
+| recall        | entry of recalled memories (model-only); user bubble `RecallBubble`                            | `recall/web.tsx`            | entries, user message        |
+| todos         | entry `todos.note` (model-only)                                                                | `todos/web.tsx`             | entries                      |
+| watchdog      | entry `watchdog.failure`                                                                       | `watchdog/web.tsx`          | entries                      |
+| models        | entries `pi.assistant` (model switch divider `Switched`), `models.fallback` (`FellBack`)       | `models/web.tsx`            | entries                      |
+| automations   | tool renderer `automation`; entries `automations.fired`, `.failed`, `.escalated`, `.writing`   | `automations/web.tsx`       | tool calls, entries          |
+| automations   | provided `WaitTimers` (`useWaitTimers`)                                                        | `automations/web.tsx`       | messages' wait timers        |
+| conversations | provided `EmptyTranscript` (`standing.tsx`)                                                    | `conversations/web.tsx`     | empty transcript             |
+| wire          | entry `pi.assistant` (`WireLink`)                                                              | `wire/web.tsx`              | entries                      |
+| read-aloud    | message action                                                                                 | `read-aloud/web.tsx`        | message bar                  |
+| codemode      | provided `MessageReference`                                                                    | `codemode/web.tsx`          | message actions              |
+| reel          | provided `MessageExtras` (its player shows questions' answer card through `MessageAnswers`)    | `reel/web.tsx`              | message cards, inbox's cards |
+| tasks         | provided `RunStart`                                                                            | `tasks/web.tsx`             | the run timer                |
+| pause         | provided `ParkedRuns` (also read by the sidebar and System)                                    | `pause/web.tsx`             | parked runs                  |
+| review        | provided `workspaces.review` (`Review`) and the `ReviewLink` overlay that takes `review:open`  | `review/web.tsx`            | the sidebar                  |
+| messages      | slot `OffscreenQuestions` (reads the React `useTranscriptScroll` refs to find cards offscreen) | `messages/web.tsx`          | top                          |
+| messages      | `MessageNavigation` overlay, `OpenMessages` (composer status)                                  | `messages/web.tsx`          | overlay, composer            |
+| questions     | overlay `CrossSurfaceDraftSweep` (no controls)                                                 | `questions/web.tsx`         | overlay                      |
 
 ## The sidebar
 
@@ -88,13 +100,14 @@ and the landing card render its message parts). Switch it first.
 
 ## Other extensions' React points
 
-| Extension   | Part                                                                                                                                                | Where                    | Called by                                                           |
-| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ | ------------------------------------------------------------------- |
-| mcp         | provided `ExtensionDetails`                                                                                                                         | `mcp/web.tsx`            | onboarding's React details (returns an island)                      |
-| reel        | provided `LandingExtras`                                                                                                                            | `reel/web.tsx`           | workspaces' React landing card                                      |
-| workspaces  | `CommitCount`, `LandingCard` (React)                                                                                                                | `workspaces/landing.tsx` | the landing card in the transcript                                  |
-| models      | `FamilyPopover`, `AddFamily`, `moveFeature` (`family-editor.tsx`); `FamilyDot`, `FamilyLabel`, `useFamilies`, `usePicks` (`families.tsx`, `ui.tsx`) | `models/`                | subagents' Agents panel and definition form, onboarding's Get ready |
-| automations | `useAutomations`, `timerWaits` (`ui.tsx`); `Dot`, `useOpenAutomation` (`parts.tsx`) for its own entries                                             | `automations/`           | sidebar, system, its transcript entries                             |
+| Extension   | Part                                                                                                                                                | Where               | Called by                                                           |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | ------------------------------------------------------------------- |
+| mcp         | provided `ExtensionDetails`                                                                                                                         | `mcp/web.tsx`       | onboarding's React details (returns an island)                      |
+| reel        | provided `LandingExtras`                                                                                                                            | `reel/web.tsx`      | workspaces' Solid landing card, through `Provided`                  |
+| side-chat   | provided `CardActions` (`useTalkItThrough`)                                                                                                         | `side-chat/web.tsx` | questions' Solid answer card, through `Provided`                    |
+| plan        | provided `LandedNote`                                                                                                                               | `plan/web.tsx`      | workspaces' Solid landing card, through `Provided`                  |
+| models      | `FamilyPopover`, `AddFamily`, `moveFeature` (`family-editor.tsx`); `FamilyDot`, `FamilyLabel`, `useFamilies`, `usePicks` (`families.tsx`, `ui.tsx`) | `models/`           | subagents' Agents panel and definition form, onboarding's Get ready |
+| automations | `useAutomations`, `timerWaits` (`ui.tsx`); `Dot`, `useOpenAutomation` (`parts.tsx`) for its own entries                                             | `automations/`      | sidebar, system, its transcript entries                             |
 
 ## Shared state and keys
 

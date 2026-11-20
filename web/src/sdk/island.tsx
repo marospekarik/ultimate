@@ -2,24 +2,35 @@ import { render } from '@solidjs/web'
 import { createComponent, createStore } from 'solid-js'
 import type { Component } from 'solid-js'
 import { useContext, useEffect, useEffectEvent, useRef } from 'react'
-import { ConversationIdContext } from './conversation-scope.tsx'
+import type { ReactNode } from 'react'
+import { ConversationIdContext, TranscriptContext } from './conversation-scope.tsx'
 import { ExtensionNameContext } from './hooks.ts'
-import { ConversationScope, ExtensionName } from './solid.ts'
+import { markIsland } from './island-mark.ts'
+import { ConversationScope, ExtensionName, Transcript } from './solid.ts'
 
 type Props = Record<string, unknown>
 
+type IslandProps<P> = { [K in keyof P]: K extends 'core' ? ReactNode : P[K] }
+
 /**
  * A React component that mounts the Solid `component` (from a `*.solid.tsx`) in place, so a `web.tsx` can contribute it
- * anywhere it contributes React: `slots: { 'statusline.left': island(Status) }`. The Solid tree gets the extension name
- * and the conversation scope around it, and remounts when either changes. React props reach the Solid component as
+ * anywhere it contributes React: `slots: { 'statusline.left': island(Status) }`. The Solid tree gets the extension name,
+ * the conversation scope and the transcript around it, and remounts when one changes. React props reach the Solid component as
  * live props: a React wrapper can hand it what only React reads (`<Panel count={entries.length} />` with
- * `const Panel = island(List)`), and a new value updates it without a remount.
+ * `const Panel = island(List)`), and a new value updates it without a remount. It mounts in a `display: contents`
+ * `<div>`, or a `<span>` with `{ inline: true }` for a component that renders inside text. A Solid host (the
+ * transcript) renders an island's component directly: a tool, entry or message renderer contributed as `island(Card)`
+ * is plain Solid there.
  */
-export function island<P extends object = Record<string, never>>(component: Component<P>) {
-  return function Island(props: P) {
-    const host = useRef<HTMLDivElement>(null)
+export function island<P extends object = Record<string, never>>(
+  component: Component<P>,
+  { inline = false }: { inline?: boolean } = {},
+) {
+  function Island(props: P) {
+    const host = useRef<HTMLElement>(null)
     const extension = useContext(ExtensionNameContext) ?? null
     const conversation = useContext(ConversationIdContext) ?? null
+    const transcript = useContext(TranscriptContext) ?? null
     const committed = useEffectEvent(() => ({ ...(props as Props) }))
     const live = useRef<(next: Props) => void>(undefined)
     useEffect(() => live.current?.(props as Props))
@@ -38,7 +49,12 @@ export function island<P extends object = Record<string, never>>(component: Comp
               return createComponent(ConversationScope, {
                 value: conversation,
                 get children() {
-                  return createComponent(component, store as P)
+                  return createComponent(Transcript, {
+                    value: transcript,
+                    get children() {
+                      return createComponent(component, store as P)
+                    },
+                  })
                 },
               })
             },
@@ -49,7 +65,10 @@ export function island<P extends object = Record<string, never>>(component: Comp
         live.current = undefined
         dispose()
       }
-    }, [extension, conversation])
-    return <div ref={host} className="contents" />
+    }, [extension, conversation, transcript])
+    const Host = inline ? 'span' : 'div'
+    return <Host ref={host as never} className="contents" />
   }
+  markIsland(Island, component)
+  return Island as (props: IslandProps<P>) => ReactNode
 }

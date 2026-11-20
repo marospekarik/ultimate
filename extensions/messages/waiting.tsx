@@ -5,8 +5,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { cn, events, useConversation, useDocOf, useTranscript, useTranscriptScroll } from '@/sdk'
 import { callerOf } from './caller.ts'
-import { offscreen, openQuestion } from './data.tsx'
-import type { Place, Pointer } from './data.tsx'
+import { offscreen, openQuestion } from './data.ts'
+import type { Place, Pointer } from './data.ts'
 import { MessagesDoc } from './refs.ts'
 import { AskedEntry } from './entries.ts'
 import type { Message } from './refs.ts'
@@ -147,7 +147,9 @@ function Pointers({ questions }: { questions: Question[] }) {
     const resize = new ResizeObserver(measureBottomFromPinnedStripOffset)
     resize.observe(scroll)
 
-    if (strip.parentElement) resize.observe(strip.parentElement)
+    let pinned = strip.parentElement
+    while (pinned && getComputedStyle(pinned).display === 'contents') pinned = pinned.parentElement
+    if (pinned) resize.observe(pinned)
     return () => resize.disconnect()
   }, [scrollRef])
 
