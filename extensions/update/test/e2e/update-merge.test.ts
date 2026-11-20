@@ -6,7 +6,8 @@ import { git } from '../../../../lib/git.ts'
 import { context } from '../../../../server/harness.ts'
 import { Standing } from '../../../subagents/api.ts'
 import { Workspaces } from '../../../workspaces/workspaces.ts'
-import { fauxServer, post, sourceCopy, temp } from '../../../../test/helpers.ts'
+import { eventHost, fauxServer, post, sourceCopy, temp } from '../../../../test/helpers.ts'
+import { Applied } from '../../refs.ts'
 import { RESTORE_PREFIX } from '../../../../lib/merge.ts'
 
 const servers: Awaited<ReturnType<typeof fauxServer>>[] = []
@@ -199,6 +200,11 @@ it('merges a diverged clone through Update now, checks it and offers the undo', 
   expect(await fake.calls()).toEqual(['check'])
   const state = await post(server, '/api/extensions/update/actions/state', {})
   expect(state.data.result.updated).toMatchObject({ ok: true, merged: true, check: 'passed' })
+  // Automation A2 restarted the project units after every update; its filter reads this flat flag.
+  const [applied] = await eventHost(() => server.harness, 'test').eventLog.recent({
+    events: [Applied],
+  })
+  expect(applied.data).toMatchObject({ merged: true, needsRestart: false })
 })
 
 it('keeps a merged update whose check fails, offering @ultimate to fix it once', async () => {
