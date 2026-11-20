@@ -291,7 +291,7 @@ export default function messages(host: ExtensionHost) {
     tasks: [delivery(host), route(host), settle(host), notice(host), tellTask(host)],
     hooks: [
       hook(GenerationTask, {
-        // Pi upstream: @earendil-works/pi-durable@1.5.2 — patched transactional beforeInput hook.
+        // Pi upstream: @earendil-works/pi-durable@1.6.0 — patched transactional beforeInput hook.
         beforeInput: (_input, api, ctx) =>
           openQuestionsNote(host, api.tx, api.conversationId, Date.now(), ctx),
         onYield: async (_answer, api, ctx) => {
