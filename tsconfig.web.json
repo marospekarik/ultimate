@@ -134,6 +134,7 @@
     "extensions/review/link-state.ts",
     "extensions/review/sha256.ts",
     "lib/ago.ts",
+    "lib/cell.ts",
     "lib/plural.ts",
     "lib/compare.ts",
     "lib/context-usage.ts",
@@ -150,6 +151,7 @@
     "lib/question-cards.ts",
     "extensions/subagents/types.ts",
     "extensions/onboarding/points.ts",
+    "server/reads.ts",
     "test/web",
     "extensions/*/test/web"
   ]

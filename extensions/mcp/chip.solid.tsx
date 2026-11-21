@@ -1,8 +1,9 @@
 /** @jsxImportSource @solidjs/web */
 import { LoaderCircle, Pin, Plug, RefreshCw } from '@lucide/solid'
-import { createEffect, createMemo, createSignal, For, Show } from 'solid-js'
+import { createMemo, createSignal, For, Show } from 'solid-js'
 import { Button } from '@/components/ui/button.solid.tsx'
 import { Popover, PopoverContent } from '@/components/ui/popover.solid.tsx'
+import { Toggle } from '@/components/ui/toggle.solid.tsx'
 import { StatusPopoverTrigger } from '@/components/ui/status-trigger.solid.tsx'
 import { Switch } from '@/components/ui/switch.solid.tsx'
 import {
@@ -17,12 +18,14 @@ import {
   useNow,
   writingAs,
 } from '@/sdk/solid'
-import { retryAfter } from '../../lib/timers.ts'
 import { ChooseAction, ReconnectAction, StatusAction } from './refs.ts'
 import type { McpServerStatus } from './refs.ts'
 
-const settling = (servers: McpServerStatus[] | undefined) =>
-  servers?.some((server) => server.state === 'connecting') ? 2_000 : 60_000
+const settling = (servers: McpServerStatus[] | undefined) => {
+  if (servers?.some((server) => server.state === 'connecting')) return 2_000
+  const retryAt = Math.min(...(servers ?? []).map((server) => server.retryAt ?? Infinity))
+  return Math.min(60_000, Math.max(2_000, retryAt - Date.now() + 500))
+}
 
 function useServers() {
   const { data: servers, refetch } = useAction(StatusAction, null, {
@@ -31,12 +34,6 @@ function useServers() {
     every: settling,
   })
   const refresh = () => void refetch()
-  const retryAt = createMemo(() =>
-    Math.min(...(servers() ?? []).map((server) => server.retryAt ?? Infinity)),
-  )
-  createEffect(retryAt, (at) =>
-    at === Infinity ? undefined : retryAfter(Math.max(0, at - Date.now()) + 500, refresh),
-  )
   return { servers, refresh }
 }
 
@@ -100,15 +97,12 @@ function Row(props: { server: McpServerStatus; refresh: () => void }) {
             : props.server.state}
         </span>
         <Show when={!off()}>
-          <Button
+          <Toggle
             aria-label={`Only in this project: ${props.server.name}`}
-            aria-pressed={props.server.only ? 'true' : 'false'}
-            class={cn(
-              'rounded-sm p-0.5 transition-colors hover:bg-accent hover:text-foreground',
-              props.server.only ? 'text-foreground' : 'text-muted-foreground/70',
-            )}
+            pressed={props.server.only ?? false}
+            class="rounded-sm p-0.5 text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground data-pressed:bg-transparent data-pressed:text-foreground data-pressed:hover:bg-accent"
             disabled={busy()}
-            onClick={() => choose({ only: !props.server.only })}
+            onPressedChange={(only) => choose({ only })}
             size={null}
             title={
               props.server.only
@@ -117,8 +111,8 @@ function Row(props: { server: McpServerStatus; refresh: () => void }) {
             }
             variant={null}
           >
-            <Pin class={cn('size-3', props.server.only && 'fill-current')} />
-          </Button>
+            <Pin class="size-3 in-data-pressed:fill-current" />
+          </Toggle>
           <Button
             aria-label={`Reconnect ${props.server.name}`}
             class="rounded-sm p-0.5 text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground"
