@@ -2,6 +2,7 @@ import type { ConversationId, ToolExecutionApi, JsonObject } from '@earendil-wor
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import {
   cp,
+  lstat,
   mkdtemp,
   mkdir,
   readdir,
@@ -15,7 +16,7 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { basename, join, relative, resolve as resolvePath } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Context } from '@earendil-works/chord/context'
@@ -31,7 +32,14 @@ import type { WorkspaceService } from '../workspaces/api.ts'
 import { cleanPreview, makeOwnerWritable, sweepPreviews } from './cleanup.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { git, isolatable } from '../../lib/git.ts'
-import { inProcess, rebuiltOnOpen, meansNone, overshadowed } from '../../lib/errors.ts'
+import {
+  ignoring,
+  inProcess,
+  isMissing,
+  rebuiltOnOpen,
+  meansNone,
+  overshadowed,
+} from '../../lib/errors.ts'
 import { spawnGroup, stopGroup, sweepPidFiles } from '../../lib/process-group.ts'
 import { every, within } from '../../lib/timers.ts'
 import type { Cancel } from '../../lib/timers.ts'
@@ -89,25 +97,33 @@ const PRIVATE_CONFIG_COPIES = [
   'claude-accounts.json',
   'agents',
   'skills',
+  'extensions',
 ]
-const SHARED_CODE_AND_REGISTRY = ['extensions', 'tailscale.json']
 
 export async function seedUserHome(from: string, to: string) {
   const source = join(from, '.ultimate')
-  const target = join(to, '.ultimate')
-  await mkdir(target, { recursive: true, mode: 0o700 })
-  const missing = (error: NodeJS.ErrnoException) => {
-    if (error.code !== 'ENOENT') throw error
+  await mkdir(dirname(to), { recursive: true })
+  const staging = await mkdtemp(`${to}.seed-`)
+  const target = join(staging, '.ultimate')
+  try {
+    await mkdir(target, { mode: 0o700 })
+    for (const name of PRIVATE_CONFIG_COPIES) {
+      if (!(await lstat(join(source, name)).catch(ignoring(isMissing)))) continue
+      await cp(join(source, name), join(target, name), {
+        recursive: true,
+        dereference: true,
+        errorOnExist: true,
+        force: false,
+      })
+    }
+    await makeOwnerWritable(target)
+    await symlink(join(source, 'tailscale.json'), join(target, 'tailscale.json'))
+    await rename(staging, to)
+  } catch (error) {
+    await makeOwnerWritable(staging)
+    await rm(staging, { recursive: true, force: true })
+    throw error
   }
-  for (const name of PRIVATE_CONFIG_COPIES)
-    await cp(join(source, name), join(target, name), {
-      recursive: true,
-      dereference: true,
-      errorOnExist: true,
-      force: false,
-    }).catch(missing)
-  await makeOwnerWritable(target)
-  for (const name of SHARED_CODE_AND_REGISTRY) await symlink(join(source, name), join(target, name))
 }
 
 export async function linkHome(from: string, to: string) {
@@ -497,6 +513,10 @@ async function start(
   let pendingHome: string | undefined
   try {
     context.abortSignal?.throwIfAborted()
+    if (args.home !== undefined && !isAbsolute(args.home))
+      throw new Error(
+        `home must be an absolute path, got ${JSON.stringify(args.home)}: "~" is not expanded, so build it from $HOME`,
+      )
     if ([...instances.values()].filter(live).length + starts.pending >= 3)
       throw new Error('At most three instances may run at once')
     starts.pending++
@@ -537,6 +557,12 @@ async function start(
     const userHome = join(home, 'user')
     const reusedHomeAlreadyHasPrivateConfig = existsSync(userHome)
     if (!reusedHomeAlreadyHasPrivateConfig) await seedUserHome(host.userHome, userHome)
+    else if (
+      (await lstat(join(userHome, '.ultimate/extensions')).catch(meansNone))?.isSymbolicLink()
+    )
+      throw new Error(
+        `${home} links the live user extensions (seeded by an older Ultimate); start on a fresh home`,
+      )
     await linkHome(host.userHome, userHome)
     const env = previewEnv(process.env, {
       home,
@@ -602,7 +628,9 @@ async function start(
       child.on('exit', () => reject(notReady()))
       const signal = context.abortSignal
       if (signal?.aborted) reject(signal.reason)
-      signal?.addEventListener('abort', () => reject(signal.reason), { once: true })
+      signal?.addEventListener('abort', () => reject(signal.reason), {
+        once: true,
+      })
     })
     child.stderr?.on('data', append)
     try {
