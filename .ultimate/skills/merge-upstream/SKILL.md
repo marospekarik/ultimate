@@ -33,13 +33,21 @@ some.
 5. Upstream's `ultimate/no-comments` lint rejects comments in product code. Where our side carried a comment, say it in
    code (a name, a small function) instead of keeping or merely deleting the comment.
 6. Run `pnpm install --frozen-lockfile` when the lockfile changed, `pnpm check`, and the tests of every file you
-   resolved, fast and e2e (`pnpm test <path>`, `pnpm test:e2e <path>`). Then `workspace submit`.
-7. Report:
+   resolved, fast and e2e (`pnpm test <path>`, `pnpm test:e2e <path>`).
+7. When the merge touches `web/`, `extensions/ui` or an SDK file, check every personal and project extension in the
+   merged preview, because the clone's checks never build them (memory `solid-core-switch`): each facet in
+   `~/.ultimate/extensions` and `.ultimate/extensions`. Treat an error chip, an Extensions-panel failure, a page error,
+   `Minified React error` or `insertBefore` as a failure. Look at each on screen: the Docs surface and a `.md` link,
+   the PRs list with its chip and fit marks, the rail with Plans, the agent-usage counts. Fix only what breaks, in
+   the personal repo (commit and push, memory `personal-extensions-in-git`), and push it with this landing: Andrea's
+   nightly sync pulls both (memory `andrea-setup`). Then `workspace submit`.
+8. Report:
    - how each conflict was resolved, and what was dropped;
    - whether a restart is needed: diff against the sha the host runs (codemode `ultimate.system()`, `code.sha`), never
      against the merge base: `git diff --name-only <running sha> HEAD -- server shared patches pnpm-lock.yaml`. Any
      output means a restart; the same diff on `bin` means a human `pnpm start`. (#59114 compared against the base and
      claimed a restart it didn't need.)
+   - the personal and project extensions you checked, and what you fixed in them.
 
 ## Setup errors right after a merge
 
