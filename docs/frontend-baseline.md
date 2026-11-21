@@ -4,6 +4,24 @@ The migration's purpose is a front end that is more robust, faster, simpler and 
 reports its delta on the numbers below against this baseline, and after the UI kit and the first batch of extensions a
 decision gate compares the migrated extensions with their React originals on lines, renders and bundle size.
 
+The migration is done (C5, `f3e6078`): the core and every built-in extension are Solid, and React remains only in the
+lazily loaded compat layer for outside `web.tsx` facets ([React facets on a Solid core](extensions/react-compat.md)).
+Result against pure React, both trees measured on 2026-11-21 from one paused snapshot on a quiet machine (load 1–3),
+in two interleaved sessions (each value the median of three runs; the range spans the sessions):
+
+|                                  | `a0638de4` (pure React) |          `f3e6078` (C5) |
+| -------------------------------- | ----------------------: | ----------------------: |
+| Switch, cold                     |              565–633 ms |              443–598 ms |
+| Switch, warm                     |              171–196 ms |              210–219 ms |
+| Streamed event: task, mutations  |               4.9 ms, 1 |               4.1 ms, 1 |
+| React components per stream op   |                      92 |                       0 |
+| Entry assets / all JS, gzip      |          432 / 2 823 KB |          410 / 3 003 KB |
+| Front-end lines (Solid / compat) |          49 954 (0 / 0) | 56 750 (48 557 / 2 525) |
+
+Cold switches overlapped between the trees; warm switches were slower at C5 in both sessions. The `pure React` entry in `docs/frontend-progress.json` was measured under heavy load
+on an older snapshot (748.5 / 273.5 ms), so the progress page's switch percentages overstate the gain. The series of
+every step is in that file; the sections below say how each number is measured.
+
 Measured on main at `1c5d056` (step 0.3 landed; three Solid files: the keep-warm chip and two kit controls), 2026-11-19,
 on one machine. Speed numbers drift with machine load: compare within one session, medians of repeated runs.
 

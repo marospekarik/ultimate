@@ -1,6 +1,5 @@
 import { fileURLToPath } from 'node:url'
 import tailwindcss from '@tailwindcss/vite'
-import react from '@vitejs/plugin-react'
 import solid from '@solidjs/vite-plugin'
 import solidV2Strict from 'eslint-plugin-solid/configs/v2-strict'
 import { defineConfig } from 'vite-plus'
@@ -68,7 +67,8 @@ const noReactRules = Object.fromEntries(
 
 export default defineConfig({
   root: 'web',
-  plugins: [react({ exclude: [solidFiles, /\/node_modules\//] }), solidPlugin(), tailwindcss()],
+  plugins: [solidPlugin(), tailwindcss()],
+  oxc: { jsx: { runtime: 'automatic', importSource: 'react' } },
   resolve: { alias },
   lint: {
     plugins: ['typescript', 'unicorn', 'import', 'promise', 'vitest', 'react'],

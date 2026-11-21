@@ -152,7 +152,8 @@ function MetricCard(props: { metric: Metric; at?: number }) {
         </div>
       </Show>
       <div class="mt-1 flex justify-between font-mono text-[10px] text-muted-foreground/70">
-        <For each={props.metric.points}>{(point) => <span>{point.label}</span>}</For>
+        <span>{props.metric.points[0]?.label}</span>
+        <span>{props.metric.points.at(-1)?.label}</span>
       </div>
       <Show when={props.at === undefined && latest() && final() && latest() !== final()}>
         <p class="mt-1 font-mono text-[10.5px] text-amber-700 dark:text-amber-300">
@@ -607,7 +608,6 @@ function useStep(data: () => Data) {
 
 function StepBar(props: { data: Data; step: ReturnType<typeof useStep> }) {
   const chosen = (): Entry | undefined => props.data.entries[props.step.step()]
-  const labels = () => [...props.data.entries.map((item) => item.label), 'Live']
   return (
     <div class="rounded-lg border border-border/70 bg-card/40 px-3 py-2.5">
       <div class="flex items-center gap-3">
@@ -630,11 +630,8 @@ function StepBar(props: { data: Data; step: ReturnType<typeof useStep> }) {
             step={1}
           />
           <div class="flex justify-between font-mono text-[10px] text-muted-foreground/70">
-            <For each={labels()}>
-              {(label, index) => (
-                <span class={cn(index() === props.step.step() && 'text-foreground')}>{label}</span>
-              )}
-            </For>
+            <span>{props.data.entries[0]?.label}</span>
+            <span>Live</span>
           </div>
         </div>
       </div>
