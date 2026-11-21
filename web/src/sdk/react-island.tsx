@@ -3,19 +3,15 @@ import { useContext, useLayoutEffect, useRef } from 'react'
 import { flushSync } from 'react-dom'
 import { createRoot } from 'react-dom/client'
 import type { ConversationId } from '@earendil-works/pi-durable'
-import {
-  AllProvided,
-  ExtensionBoundary,
-  Provided,
-  Rendered as RenderedPoint,
-  Slot,
-} from '../app/boundary.tsx'
+import { AllProvided, ExtensionBoundary, Provided } from '../app/boundary.tsx'
 import { TooltipProvider } from '../components/ui/tooltip.tsx'
 import { ConversationIdContext, TranscriptContext } from './conversation-scope.tsx'
-import type { Point, SlotName } from './types.ts'
+import type { Point } from './types.ts'
 import type { TranscriptFrame } from './transcript-frame.ts'
 
 export type Rendered = { extension: string; version: number; component: unknown }
+
+export const ReactNodeView = ({ value }: { value: ReactNode }) => value
 
 export function reactRoot(
   host: HTMLElement,
@@ -56,11 +52,17 @@ export function SolidNode({ part }: { part: SolidPart }) {
   return <div className="contents" ref={host} />
 }
 
+type Failure = {
+  variant?: 'inline' | 'block'
+  onError?: (error: unknown, stack: string | undefined) => void
+}
+
 export function contribution(
   item: Rendered,
   props: object,
   parts: Record<string, SolidPart> = {},
   fallback: ReactNode = parts.core ? <SolidNode part={parts.core} /> : null,
+  failure: Failure = {},
 ) {
   const Renderer = item.component as ComponentType<object>
   const placed = Object.fromEntries(
@@ -71,6 +73,8 @@ export function contribution(
       extension={item.extension}
       fallback={fallback}
       key={item.extension}
+      onError={failure.onError}
+      variant={failure.variant}
       version={item.version}
     >
       <Renderer {...props} {...placed} />
@@ -85,17 +89,10 @@ export function chain(run: readonly Rendered[], props: object, core: SolidPart) 
   )
 }
 
-export const slot = (name: SlotName) => <Slot name={name} />
-
-export const renderedPoint = <Input extends object>(
-  point: Point<Input & { core: ReactNode }, ReactNode>,
-  input: Input,
-  core: SolidPart,
-) => (
-  <RenderedPoint input={input} point={point}>
-    <SolidNode part={core} />
-  </RenderedPoint>
-)
+export const icon = (component: unknown, className: string) => {
+  const Icon = component as ComponentType<{ className?: string }>
+  return <Icon className={className} />
+}
 
 export const provided = <Input, Value>(
   point: Point<Input, Value>,

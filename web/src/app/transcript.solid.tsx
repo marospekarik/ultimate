@@ -67,8 +67,8 @@ import {
 import {
   Contributed,
   Contribution,
-  ReactSlot,
   RenderedPoint,
+  Slot,
   useProvided,
 } from '../sdk/react-island.solid.tsx'
 import {
@@ -85,6 +85,7 @@ import {
 } from './compact.ts'
 import type { AsideGroup, BetweenGroup, CompactPart, WorkRun } from './compact.ts'
 import { ContributionError } from './contribution-error.solid.tsx'
+import { reportedFailure } from './error-stack.solid.tsx'
 import { foldKey, readFold, writeFold } from './fold-state.ts'
 import { follow } from './follow.ts'
 import type { Follow } from './follow.ts'
@@ -598,7 +599,15 @@ function TranscriptView(props: {
           >
             <div class="pointer-events-none sticky top-0 z-10 -mb-3 h-0 [overflow-anchor:none]">
               <div ref={pinned}>
-                <ReactSlot name="transcript.top" />
+                <Slot
+                  fallbackOnly
+                  fallback={(extension, error, trace) => (
+                    <div class="pointer-events-auto">
+                      {reportedFailure(extension, error, trace)}
+                    </div>
+                  )}
+                  name="transcript.top"
+                />
               </div>
             </div>
             <Show when={!props.loading && hasRows() && history.cursor() !== undefined}>
@@ -631,14 +640,19 @@ function TranscriptView(props: {
             <Show when={!props.loading && visible().length === 0 && !partial()}>
               <Show when={id !== undefined} fallback={<EmptyState />}>
                 <RenderedPoint
-                  staticCore={() => <EmptyState />}
+                  core={() => <EmptyState />}
+                  fallback={(extension, error, inner) => (
+                    <ContributionError error={error} extension={extension} inline>
+                      {inner()}
+                    </ContributionError>
+                  )}
                   input={{ conversation: id! }}
                   point={EmptyTranscript}
                 />
               </Show>
             </Show>
             <Show when={!props.loading && visible().length > 0 && history.cursor() === undefined}>
-              <ReactSlot name="transcript.start" />
+              <Slot fallback={reportedFailure} name="transcript.start" />
             </Show>
             <For each={threaded()} keyed={shownKey}>
               {(item, index) => {
@@ -691,7 +705,7 @@ function TranscriptView(props: {
                 />
               )}
             </Show>
-            <ReactSlot name="transcript.end" />
+            <Slot fallback={reportedFailure} name="transcript.end" />
             <LiveStatus busy={busy()} id={id} live={live()} partial={partial()} />
             <div aria-hidden="true" class="-mt-3 shrink-0" data-history-anchor-space ref={tail} />
           </div>

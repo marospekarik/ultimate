@@ -81,6 +81,9 @@ const sheetTransitionMs = 420
 const unmountAfterExitPaddingMs = 60
 const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches
 
+const conversationOf = (element: HTMLElement | null) =>
+  element?.closest<HTMLElement>('[data-ui="conversation"]') ?? null
+
 function Stage() {
   const { id, index } = useShownIndex()
   const [front, setFront] = useFront()
@@ -97,7 +100,7 @@ function Stage() {
   }, [current])
 
   useLayoutEffect(() => {
-    const parent = ref.current?.parentElement
+    const parent = conversationOf(ref.current)
     if (!parent) return undefined
     const observer = new ResizeObserver(() => setWidth(parent.clientWidth))
     observer.observe(parent)
@@ -106,7 +109,7 @@ function Stage() {
 
   const inFront = current !== undefined
   useLayoutEffect(() => {
-    const parent = ref.current?.parentElement
+    const parent = conversationOf(ref.current)
     if (!parent) return undefined
     const layers = [...parent.children].filter(
       (child): child is HTMLElement => child instanceof HTMLElement && !child.contains(ref.current),
@@ -549,7 +552,11 @@ const SummaryCard = renderEntry(SideChatSummaryEntry, function SummaryCard({ ent
   )
 })
 
-function useSideRows(main: ConversationId | undefined): ReactNode {
+function useSideRows({
+  conversation: main,
+}: {
+  conversation: ConversationId | undefined
+}): ReactNode {
   const index = useDocOf(main, SideChatsDoc) ?? undefined
   const [front, setFront] = useFront()
   const actions = useUltimate()

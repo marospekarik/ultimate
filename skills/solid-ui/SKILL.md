@@ -38,7 +38,8 @@ The libraries ship skills that match the pinned versions: read them, not your me
 
 - **One renderer per file.** Solid code is in `*.solid.tsx`, opens with `/** @jsxImportSource @solidjs/web */`, and
   imports no React. React files import no Solid, except an extension's `web.tsx`, which mounts Solid components with
-  `island(Component)` from `@/sdk`. The two meet only in `web/src/sdk/island.tsx` and `web/src/sdk/solid.ts`. Lint:
+  `island(Component)` from `@/sdk`. The two meet only in the bridges: `web/src/sdk/island.tsx`, `solid.ts`,
+  `react-island*.tsx`, `shell.tsx` and `web/src/app/boundary.tsx`, all frozen for C5's compat layer. Lint:
   `ultimate/ui-framework-boundaries`, `ultimate/solid-jsx-pragma`.
 - **`@/sdk/solid` in Solid files.** `@/sdk` is React's; take only types from it with `import type`. Its readers return
   accessors: call them where you use them (`doc()?.title` in JSX or a memo), never once at the top of a component
@@ -113,6 +114,13 @@ The libraries ship skills that match the pinned versions: read them, not your me
 - **A module several frameworks drive** (read-aloud's player) stays one plain module: `web.tsx` hands it to a Solid
   factory at module scope (`const Action = readAloudAction(player)`), and the factory's component subscribes to it.
   That keeps browser-only promises out of a `.ts` file the server lint would check.
+- **The sidebar is Solid (step C4b).** It reads every other extension's point through the bridge's public entry,
+  `@/sdk/parts.solid.tsx`: `useProvided` for one value, `useAllProvided` for every provider's (`Unlisted`), `Provided`
+  for UI another extension draws (`UnderUltimate`, the task chip) and `Slot` for a slot (`sidebar.top`). The bridge file
+  itself is only for `web/src`. Each `useProvided`/`useAllProvided` mounts one hidden React root, so read a point once
+  per row or once per list, never per cell. A point whose value is a React node (phase's `label`) is read for its plain
+  fields only (`word`) and drawn again in Solid; a point that returns UI takes an object input (`{ conversation }`) so
+  `Provided` can pass it to `island(C)` providers.
 - **The composer is Solid (step C3).** A `composer` wrapper is `island(C)` with `C` typed `SolidComposerProps`, an
   `inbox` renderer `island(C)` with `SolidInboxProps`; read the redirect target with `useContext(ComposerRedirect)`
   (an accessor) and provide it with `<ComposerRedirect value={target}>` around `props.core`. A core host renders every
@@ -121,6 +129,26 @@ The libraries ship skills that match the pinned versions: read them, not your me
   Solid parts a React contribution places (`core`, `cancel`) go in `Contribution`'s `elements`: the bridge renders each
   with Solid's `render` into the host React places it in, under the placement's conversation scope, and disposes it
   (DOM included) when React removes or hides it. A part React never places never runs.
+
+## The shell (step C4a)
+
+- **The page is Solid.** `web/src/main.solid.tsx` renders `App.solid.tsx`; the title bar, header, status line,
+  sidebar region, panels, dock, palette and error stack are Solid (`web/src/app/shell.solid.tsx` and its neighbours).
+  A Solid surface builds on `Header`, `StatusLine`, `Conversation`, `Dock`, `Sidebar`, `Panels`, `Slot` and
+  `ErrorCard` from `@/sdk/parts.solid.tsx` (`extensions/agent/surface.solid.tsx`).
+- **Every contribution goes through the bridge.** Surfaces, panels, badges, slots and points render through
+  `Contribution`, `Contributed`, `Slot` or `RenderedPoint`, never by calling the component, so a React one mounts
+  through the bridge and an `island(C)` one renders as Solid.
+- **React wrappers of Solid parts.** `@/sdk`'s `Header`, `Dock` and friends are `island(C)` of the Solid ones
+  (`web/src/sdk/shell.tsx`), one implementation each. React `children` reach the Solid part through `island`'s portal:
+  a `display: contents` element the Solid part places, into which React renders with `createPortal`, so React context
+  still reaches them.
+- **A Solid `render` started from React needs an owner.** An island mounted while the bridge's `flushSync` runs inside a
+  Solid effect throws `PRIMITIVE_IN_EFFECT_CALLBACK` and React loops: islands render under one page owner
+  (`runWithOwner`).
+- **React renders per streamed update are 0.** With no React above the surfaces, a React part re-renders on a stream
+  only when it reads the whole `useConversation()`: read the field you use (`useConversation((c) => c.id)`), and move
+  the part that needs `entries` below a cheap gate (dream's `TimeToDream`). `renders.ts --send` names the owner.
 
 ## The UI kit
 
@@ -249,6 +277,9 @@ Solid 2:
   rendered nothing (`data-empty`); `:empty` alone no longer matches once the bridge wraps React.
 - A Web Animation started from a `ref` callback runs before the element is inserted and stays at its first frame in
   Chromium: start it in `onSettled` (`extensions/questions/send.solid.tsx`).
+- A control that shows only on hover or focus (`invisible group-hover:visible group-focus-within:visible`, a row's
+  `…` menu) is absent from the agent snapshot at rest: an agent focuses the row first. Keep that look rather than
+  making the trigger always visible; test the focus-then-open path.
 - `expectDistinctAgentNames` is async: `await` it, or the test passes whatever the names.
 - React refused `javascript:` URLs in `href`; Solid sets the attribute as given. A link built from tool output or a
   provider's data parses the URL and links only `http(s):`, showing anything else as text
@@ -312,6 +343,13 @@ ui-sdk:
   on any open dialog: a stale flag would hide it) and restores focus to its button
   (`extensions/onboarding/pages.tsx`, `extensions/automations/form.solid.tsx`).
 - Tooltip keeps its content mounted (hidden) so it can name an icon-only trigger; keyboard focus opens it at once.
+- The kit Tooltip opens at once (`delay: 0`); the shell's tooltips pass `delay={400}`, the feel React's
+  `TooltipProvider` gave. When a `TooltipTrigger` renders a kit `Button`, put `onClick` and `aria-label` on the
+  `TooltipTrigger`, which hands them on: on the Button a press never reaches the trigger's close, and the tooltip
+  stays open over what the press changed.
+- A trigger that renders another part (`TooltipTrigger render={Button}`, `PopoverTrigger render={Button}`) registers
+  two agent components with one name in ui-sdk 0.1.0-beta.13: `snapshot()` lists one and a press by label works, but
+  `query({ within })` and `expectDistinctAgentNames` find two. It is upstream; don't work around it in the kit.
 - Packages shipping raw JSX under the `solid` condition (ui-sdk, `@lucide/solid`) belong in the Solid plugin's `include`
   in `vite.config.ts`; delete `node_modules/.vitest-cache` after changing it.
 - Each kit control a `<label>` wraps goes in `jsx-a11y/label-has-associated-control`'s `controlComponents`.

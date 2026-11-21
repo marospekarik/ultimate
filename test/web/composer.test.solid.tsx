@@ -1,7 +1,7 @@
 /** @jsxImportSource @solidjs/web */
 import { settle } from '@ui-sdk/core/testing'
 import { createAgent } from '@ui-sdk/solid/agent'
-import { flush } from 'solid-js'
+import { flush, For } from 'solid-js'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { parseConversationId } from '../../lib/ids.ts'
 import { expectDistinctAgentNames } from './agent-names.ts'
@@ -55,14 +55,17 @@ vi.mock('../../web/src/sdk/client.ts', async () => {
 
 import { getDraft } from '../../web/src/app/drafts.ts'
 import { Composer } from '../../web/src/app/composer.solid.tsx'
-import { registry, store } from '../../web/src/sdk/client.ts'
+import { StatusLine } from '../../web/src/app/shell.solid.tsx'
+import { registry, store, uiState } from '../../web/src/sdk/client.ts'
 import type { ConversationId } from '@earendil-works/pi-durable'
-import { act as act_, Activity, createElement as h, useState } from 'react'
+import { act as act_, Activity, createElement as h, StrictMode, useState } from 'react'
 import type { ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+import { createRoot } from 'react-dom/client'
 import type { EntryRecord } from '@earendil-works/pi-durable'
 import { ConversationScope, TranscriptContext } from '../../web/src/sdk/conversation-scope.tsx'
 import { island } from '../../web/src/sdk/island.tsx'
+import { Dock } from '../../web/src/sdk/shell.tsx'
 import { createTranscriptFrame, useTranscript } from '../../web/src/sdk/solid.ts'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
@@ -244,6 +247,34 @@ it('leaves no live editor when a React composer wrapper replaces the composer', 
   await registry.setLoaders({})
 })
 
+it('attaches no dropped file to the composer of a collapsed React Dock', async () => {
+  await show(16)
+  uiState.set('shell.dock.agent.right', { open: true })
+  const DockedComposer = island(Composer)
+  const container = renderSolid(() => <div />)
+  const root = createRoot(container)
+  act_(() => root.render(h(StrictMode, null, h(Dock, { children: h(DockedComposer) }))))
+  await settle()
+  flush()
+  expect(container.querySelectorAll('[data-ui="composer"]')).toHaveLength(1)
+  act_(() => uiState.set('shell.dock.agent.right', { open: false }))
+  await settle()
+  flush()
+  expect(container.querySelector('[data-ui="composer"]')).toBeNull()
+  const drop = new Event('drop', { bubbles: true }) as DragEvent
+  Object.defineProperty(drop, 'dataTransfer', {
+    value: { types: ['Files'], files: [new File(['x'], 'shot.png', { type: 'image/png' })] },
+  })
+  document.body.dispatchEvent(drop)
+  await settle()
+  expect(getDraft(16).get().images).toEqual([])
+  act_(() => uiState.set('shell.dock.agent.right', { open: true }))
+  await settle()
+  flush()
+  expect(container.querySelectorAll('[data-ui="composer"]')).toHaveLength(1)
+  act_(() => root.unmount())
+})
+
 const entry = (conversation: number, text: string) =>
   ({
     id: conversation * 100,
@@ -403,4 +434,25 @@ it('keeps a typed draft per conversation across a switch', async () => {
   expect(container.querySelector<HTMLTextAreaElement>('#composer-input')!.value).toBe(
     'half a thought',
   )
+})
+
+it('moves the phone status into the status line when both mount together', async () => {
+  await registry.setLoaders({
+    '/extensions/state/web.tsx': async () => ({
+      default: { slots: { 'composer.status': () => h('span', { 'data-status': '' }, 'ready') } },
+    }),
+  })
+  await show(19)
+  const container = renderSolid(() => (
+    <>
+      <Composer />
+      <For each={[0]}>{() => <StatusLine />}</For>
+    </>
+  ))
+  await settle()
+  flush()
+  expect(container.querySelector('[data-ui="status-line"] [data-status]')?.textContent).toBe(
+    'ready',
+  )
+  await registry.setLoaders({})
 })

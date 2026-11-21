@@ -1,5 +1,5 @@
 /** @jsxImportSource @solidjs/web */
-import { insert, registerDelegatedRoot, unregisterDelegatedRoot } from '@solidjs/web'
+import { Dynamic, insert, registerDelegatedRoot, unregisterDelegatedRoot } from '@solidjs/web'
 import type { JSX } from '@solidjs/web'
 import {
   createEffect,
@@ -12,6 +12,7 @@ import {
   onCleanup,
   onSettled,
   runWithOwner,
+  Show,
   untrack,
   useContext,
 } from 'solid-js'
@@ -20,21 +21,41 @@ import type { ReactNode } from 'react'
 import { nextTurn } from '../../../lib/timers.ts'
 import { islandSolid } from './island-mark.ts'
 import {
+  ReactNodeView,
   allProvided,
   chain,
   contribution,
+  icon,
   provided,
   reactRoot,
-  renderedPoint,
-  slot,
 } from './react-island.tsx'
 import type { Rendered, SolidPart } from './react-island.tsx'
-import { slotItems } from './registry.ts'
+import { provisionsOf, slotItems } from './registry.ts'
 import { ConversationScope, ExtensionName, Transcript, useExtensions } from './solid.ts'
 import type { Point, SlotName } from './types.ts'
 
-function MountReact(props: { render: () => ReactNode }) {
-  const host = (<div class="contents data-empty:hidden" />) as HTMLDivElement
+type MountProps = { render: () => ReactNode }
+
+function MountReact(props: MountProps) {
+  return mountReact((<div class="contents data-empty:hidden" />) as HTMLElement, props)
+}
+
+export function ReactValue(props: { value: ReactNode }) {
+  const extension = useContext(ExtensionName) ?? 'react'
+  return (
+    <Contribution
+      fallback={() => null}
+      item={{ component: ReactNodeView, extension, version: 0 }}
+      props={{ value: props.value }}
+    />
+  )
+}
+
+function MountReactInline(props: MountProps) {
+  return mountReact((<span class="contents data-empty:hidden" />) as HTMLElement, props)
+}
+
+function mountReact(host: HTMLElement, props: MountProps) {
   const root = reactRoot(host, {
     conversation: useContext(ConversationScope) ?? undefined,
     transcript: useContext(Transcript) ?? undefined,
@@ -163,7 +184,10 @@ export function Contribution(props: {
   item: Rendered
   props: Props
   elements?: Record<string, () => JSX.Element>
-  fallback: (extension: string, error: unknown) => JSX.Element
+  fallback: (extension: string, error: unknown, stack?: string) => JSX.Element
+  variant?: 'inline' | 'block'
+  fallbackOnly?: boolean
+  inline?: boolean
 }) {
   const mounted = createMemo(() => props.item, {
     equals: (a, b) => a.component === b.component && a.extension === b.extension,
@@ -177,7 +201,32 @@ export function Contribution(props: {
           const parts = Object.fromEntries(
             Object.entries(elements).map(([key, element]) => [key, solidPart(element)]),
           )
-          return <MountReact render={() => contribution(props.item, { ...props.props }, parts)} />
+          const [failure, setFailure] = createSignal<{
+            error: unknown
+            stack?: string
+            version: number
+          }>()
+          const onError = (error: unknown, stack: string | undefined) =>
+            setFailure({ error, stack, version: props.item.version })
+          const shownFailure = () => {
+            const failed = failure()
+            return failed?.version === props.item.version ? failed : undefined
+          }
+          const render = () =>
+            contribution(props.item, { ...props.props }, parts, undefined, {
+              variant: props.variant,
+              onError: props.fallbackOnly ? onError : undefined,
+            })
+          return (
+            <>
+              <Show when={props.inline} fallback={<MountReact render={render} />}>
+                <MountReactInline render={render} />
+              </Show>
+              <Show when={shownFailure()}>
+                {(failed) => props.fallback(current.extension, failed().error, failed().stack)}
+              </Show>
+            </>
+          )
         }
         const solidElements = Object.fromEntries(
           Object.keys(elements).map((key) => [key, elements[key]()]),
@@ -194,23 +243,37 @@ export function Contribution(props: {
   )
 }
 
-export function ReactSlot(props: { name: SlotName }) {
-  return <MountReact render={() => slot(props.name)} />
-}
-
 export function Slot(props: {
   name: SlotName
-  fallback: (extension: string, error: unknown) => JSX.Element
+  fallback: (extension: string, error: unknown, stack?: string) => JSX.Element
+  variant?: 'inline' | 'block'
+  phone?: boolean
+  fallbackOnly?: boolean
 }) {
   const extensions = useExtensions()
-  const items = createMemo(() => slotItems(extensions(), props.name), {
-    equals: (a, b) =>
-      a.length === b.length &&
-      a.every((item, at) => item.key === b[at].key && item.version === b[at].version),
-  })
+  const items = createMemo(
+    () =>
+      slotItems(extensions(), props.name).filter(
+        (item) => props.phone === undefined || item.phone === props.phone,
+      ),
+    {
+      equals: (a, b) =>
+        a.length === b.length &&
+        a.every((item, at) => item.key === b[at].key && item.version === b[at].version),
+    },
+  )
   return (
     <For each={items()} keyed={(item) => `${item.key}:${item.version}`}>
-      {(item) => <Contribution fallback={props.fallback} item={item()} props={{}} />}
+      {(item) => (
+        <Contribution
+          fallback={props.fallback}
+          fallbackOnly={props.fallbackOnly}
+          inline={props.variant === 'inline'}
+          item={item()}
+          props={{}}
+          variant={props.variant}
+        />
+      )}
     </For>
   )
 }
@@ -218,20 +281,59 @@ export function Slot(props: {
 export function RenderedPoint<Input extends object>(props: {
   point: Point<Input & { core: ReactNode }, ReactNode>
   input: Input
-  staticCore: () => JSX.Element
+  core: () => JSX.Element
+  fallback: (extension: string, error: unknown, inner: () => JSX.Element) => JSX.Element
 }) {
-  const core = solidPart(props.staticCore)
-  return <MountReact render={() => renderedPoint(props.point, { ...props.input }, core)} />
+  const extensions = useExtensions()
+  const renderers = createMemo(() =>
+    provisionsOf(extensions(), props.point.point).map((provision) => ({
+      extension: provision.extension,
+      version: provision.version,
+      component: hookAsComponent(provision.use),
+    })),
+  )
+  return (
+    <Contributed
+      core={props.core}
+      fallback={props.fallback}
+      props={props.input as Props}
+      renderers={renderers()}
+    />
+  )
+}
+
+const hookComponents = new WeakMap<object, (props: object) => ReactNode>()
+const hookAsComponent = (use: unknown) => {
+  if (islandSolid(use)) return use
+  const hook = use as (input: object) => ReactNode
+  let component = hookComponents.get(hook)
+  if (!component) {
+    component = (input: object) => hook(input)
+    hookComponents.set(hook, component)
+  }
+  return component
+}
+
+export function ContributedIcon(props: { icon: unknown; class: string }) {
+  return (
+    <Show
+      when={islandSolid(props.icon) as Component<{ class?: string }> | undefined}
+      fallback={<MountReactInline render={() => icon(props.icon, props.class)} />}
+    >
+      {(Solid) => <Dynamic class={props.class} component={Solid()} />}
+    </Show>
+  )
 }
 
 function useReactReport<Input, Found>(
   input: Accessor<Input>,
   initial: Found,
   element: (input: Input, report: (found: Found) => void) => ReactNode,
+  host: HTMLElement = document.createElement('div'),
 ): Accessor<Found> {
   const value = createMemo(input, { equals: (a, b) => JSON.stringify(a) === JSON.stringify(b) })
   const [found, setFound] = createSignal<Found>(() => initial)
-  const root = reactRoot(document.createElement('div'), {
+  const root = reactRoot(host, {
     conversation: useContext(ConversationScope) ?? undefined,
     transcript: useContext(Transcript) ?? undefined,
   })
@@ -240,12 +342,26 @@ function useReactReport<Input, Found>(
   return found
 }
 
-export const useProvided = <Input, Value>(point: Point<Input, Value>, input: Accessor<Input>) =>
-  useReactReport<Input, Value | undefined>(input, undefined, (next, report) =>
-    provided(point, next, report),
+export const useProvided = <Input, Value>(
+  point: Point<Input, Value>,
+  input: Accessor<Input>,
+  failures?: HTMLElement,
+) =>
+  useReactReport<Input, Value | undefined>(
+    input,
+    undefined,
+    (next, report) => provided(point, next, report),
+    failures,
   )
 
-export const useAllProvided = <Input, Value>(point: Point<Input, Value>, input: Accessor<Input>) =>
-  useReactReport<Input, readonly Value[]>(input, [], (next, report) =>
-    allProvided(point, next, report),
+export const useAllProvided = <Input, Value>(
+  point: Point<Input, Value>,
+  input: Accessor<Input>,
+  failures?: HTMLElement,
+) =>
+  useReactReport<Input, readonly Value[]>(
+    input,
+    [],
+    (next, report) => allProvided(point, next, report),
+    failures,
   )

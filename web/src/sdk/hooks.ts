@@ -22,7 +22,7 @@ import type { JsonValue } from '@earendil-works/chord/json'
 import { deadline, every } from '../../../lib/timers.ts'
 import type { Cancel } from '../../../lib/timers.ts'
 import type { ToolCall } from '@earendil-works/pi-ai'
-import { actions, allCommands, ownDefault, regionKeys, shellKeys, shownSurface } from './actions.ts'
+import { actions, allCommands, regionKeys, regionOpenOn, shellKeys } from './actions.ts'
 import type { Region } from './actions.ts'
 import { ROOT } from './api.ts'
 import { EVENT_FEED } from '../../../shared/events.ts'
@@ -236,13 +236,6 @@ export function useUltimate(): UltimateContext {
   return useMemo(() => ({ ...actions, conversationId, surface }), [conversationId, surface])
 }
 
-export function useShownSurface() {
-  const records = useExtensions()
-  const [chosen] = useUiState<JsonValue>(shellKeys.surface, null)
-  const preferred = useStore((state) => state.system?.project.settings.defaultSurface)
-  return shownSurface(records, chosen, preferred)
-}
-
 /**
  * Durable UI state under `key`, stored with the main conversation (`ultimate.ui`): it survives reloads and restarts
  * and is shared by every tab, so the UI resumes where it was. Values are JSON; keys use `[A-Za-z0-9_.:-]`. The setter
@@ -264,12 +257,10 @@ export function useUiState<T extends JsonValue>(
 
 export function useRegionOpen(region: Region) {
   const [key, fallback] = regionKeys[region]
-  const [shared] = useUiState<boolean>(key, fallback)
+  const [desktop] = useUiState<boolean>(key, fallback)
   const on = useViewport()
-  const own = useStore((state) =>
-    on === 'desktop' ? false : (state.ui.open?.[on]?.[region] ?? ownDefault(region, on)),
-  )
-  return on === 'desktop' ? shared : own
+  const open = useStore((state) => state.ui.open)
+  return regionOpenOn(region, on, desktop, open)
 }
 /**
  * The right panel's state: whether it is open, the panel it shows (the chosen one, else the first with a tab) and the
