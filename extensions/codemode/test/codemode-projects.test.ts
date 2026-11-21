@@ -169,7 +169,7 @@ it('caps an answer at 1 MiB of encoded JSON, counting multibyte characters as by
   await expect(actions.read({ op: 'trace', args: [] }, ctx)).rejects.toThrow('larger than 1 MiB')
 })
 
-// "ask for a smaller limit" alone left a forma.cam read of one `full: true` entry failing again (#78126/78394).
+// "ask for a smaller limit" alone left another project's read of one `full: true` entry failing again.
 it('says how to narrow a read that is too large', async () => {
   const host = {
     trace: { query: () => ['x'.repeat(1024 * 1024)], tree: () => [] },

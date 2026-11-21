@@ -197,7 +197,7 @@ it('names the failure before the console errors', async () => {
 })
 
 // Playwright's strict-mode error printed each match's whole HTML, class lists included, so agents retried the same
-// bare selector instead of a scoped one (#71942/74346).
+// bare selector instead of a scoped one.
 it('names each match of an ambiguous selector by role and name, and suggests scoping it', async () => {
   const directory = await temp('ultimate-browser-strict-')
   const closers: (() => Promise<void>)[] = []
