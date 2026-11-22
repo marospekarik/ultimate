@@ -84,7 +84,7 @@ automations' own open hook; each enabled user script becomes an @ultimate-owned 
 
 ### Fall asleep and switch
 
-User-only `asleep { name? }` refuses without a prepared chapter, while any top-level conversation is busy (@ultimate
+User-only `asleep { name? }` refuses without a prepared chapter, while any conversation is busy (@ultimate and branches
 included: a switch parks whatever is live, and parked work keeps the chapter left behind from being switched back to),
 or when the name (default: the prepared one) already exists; an existing chapter is reached with `switch`. Chapter
 changes are serialized. Each step commits as `sleep` in `dream.next`: `seeding`, `backing up`, `switching`, or
@@ -116,4 +116,4 @@ restart never returns: the new host opens the requested chapter.
 `refs.ts` holds the document and actions: `start`, `ready`, `dismiss`, `asleep`, `switch` (user-only), `prepare`,
 `chapters`, and `stats`,
 which reads tool calls from `<home>/trace.sqlite` read-only: calls, failures and mean duration per tool, the 20 most
-frequent errors (each with its two newest calls as `#<conversation>/<entry>` and the start of its args), and enabled tools never called in the trace's window (7 days or 200k rows).
+frequent errors (each with its two newest calls as `#<conversation>/<entry>`), and enabled tools never called in the trace's window (7 days or 200k rows).

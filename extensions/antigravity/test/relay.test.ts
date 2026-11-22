@@ -2,10 +2,11 @@ import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { afterEach, expect, it, vi } from 'vitest'
 import type { Model } from '@earendil-works/pi-ai'
+import { googleGenerativeAIApi } from '@earendil-works/pi-ai/api/google-generative-ai.lazy'
 import { streamSimple } from '@earendil-works/pi-ai/api/google-generative-ai'
 import { normalizeContext } from '@earendil-works/pi-ai/utils/transcript'
 import { startRelay } from '../relay.ts'
-import { noProxyWithLoopback } from '../server.ts'
+import { noProxyWithLoopback, officialCost, withPromptUpdatesInPlace } from '../server.ts'
 import type { RunAgy } from '../relay.ts'
 
 const closers: (() => Promise<void>)[] = []
@@ -378,4 +379,75 @@ it('stops agy and the upstream stream when Pi goes away mid-turn', async () => {
   await upstreamClosed.promise
   await relay.close()
   expect(aborted).toHaveLength(1)
+})
+
+it('keeps the system instruction fixed when a prompt section changes mid-conversation', async () => {
+  const call = { type: 'toolCall', id: 'c1', name: 'plan', arguments: {} }
+  const context = withPromptUpdatesInPlace(
+    normalizeContext({
+      messages: [
+        {
+          role: 'system',
+          content: 'You are Ultimate.',
+          sections: { plan: '<plan>E1 todo</plan>' },
+          timestamp: 0,
+        },
+        { role: 'user', content: 'plan it', timestamp: 0 },
+        {
+          role: 'assistant',
+          content: [call],
+          api: 'google-generative-ai',
+          provider: 'antigravity',
+          model: 'gemini-x',
+          stopReason: 'toolUse',
+          usage: {},
+          timestamp: 0,
+        },
+        {
+          role: 'system',
+          content: '',
+          sections: { plan: '<plan>E1 in_progress</plan>' },
+          timestamp: 0,
+        },
+        {
+          role: 'toolResult',
+          toolCallId: 'c1',
+          toolName: 'plan',
+          content: [{ type: 'text', text: 'ok' }],
+          isError: false,
+          timestamp: 0,
+        },
+      ],
+    } as never),
+  )
+  let payload: { config: { systemInstruction: string }; contents: unknown[] } | undefined
+  await googleGenerativeAIApi()
+    .stream(model('http://127.0.0.1:9'), context, {
+      apiKey: 'k',
+      onPayload: (params) => {
+        payload = params as typeof payload
+        throw new Error('captured')
+      },
+    })
+    .result()
+
+  expect(payload!.config.systemInstruction).toBe('You are Ultimate.\n\n<plan>E1 todo</plan>')
+  expect(JSON.stringify(payload!.contents.at(-1))).toContain(
+    'Updated system prompt section \\"plan\\":\\n\\n<plan>E1 in_progress</plan>',
+  )
+  expect(JSON.stringify(payload!.contents.at(-2))).toContain('functionResponse')
+})
+
+it('prices each Antigravity model at its own provider’s official catalog price', () => {
+  const price = (input: number) => ({
+    cost: { input, output: input * 5, cacheRead: 0, cacheWrite: 0 },
+  })
+  const catalog: Record<string, { cost: Model<'google-generative-ai'>['cost'] }> = {
+    'google/gemini-4-neon': price(3),
+    'anthropic/claude-opus-5-5': price(4),
+  }
+  const lookup = (provider: string, id: string) => catalog[`${provider}/${id}`]
+  expect(officialCost('gemini-4-neon-xhigh', lookup)).toEqual(price(3).cost)
+  expect(officialCost('claude-opus-5-5-low', lookup)).toEqual(price(4).cost)
+  expect(officialCost('gemini-pro-orchestrator-neon', lookup)).toEqual(price(0).cost)
 })

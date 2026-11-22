@@ -34,6 +34,7 @@ import { Concluded, ConversationsApi } from '../conversations/api.ts'
 import { defineEffect } from '../../lib/effect.ts'
 import {
   BackgroundGroups,
+  dropHostNodeEnv,
   recordStarted,
   startBackground,
   type Started,
@@ -377,6 +378,7 @@ export default function codingTools(
       )
       let repository: string | undefined
       const call = createBashTool({
+        commandPrefix: dropHostNodeEnv,
         prepare: async (execution) => {
           repository = await prepareBash(execution, api, invocationLog)
         },

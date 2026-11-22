@@ -1,5 +1,5 @@
-import { createProvider } from '@earendil-works/pi-ai'
-import type { Model } from '@earendil-works/pi-ai'
+import { createProvider, renderSystemMessageUpdate } from '@earendil-works/pi-ai'
+import type { Message, Model, ProviderStreams, TranscriptContext } from '@earendil-works/pi-ai'
 import { googleGenerativeAIApi } from '@earendil-works/pi-ai/api/google-generative-ai.lazy'
 import { defineExtension } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
@@ -48,7 +48,25 @@ function keepLoopbackOffProxies() {
   process.env.NO_PROXY = value
 }
 
-function modelOf(found: Discovery['models'][number]): Model<'google-generative-ai'> {
+type Cost = Model<'google-generative-ai'>['cost']
+
+const FREE: Cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+const SOURCE_PROVIDERS = ['google', 'anthropic', 'openai']
+const EFFORT_SUFFIX = /-(?:minimal|low|medium|high|xhigh)$/
+
+export function officialCost(
+  id: string,
+  getModel: (provider: string, id: string) => { cost: Cost } | undefined,
+): Cost {
+  const base = id.replace(EFFORT_SUFFIX, '')
+  for (const provider of SOURCE_PROVIDERS) {
+    const official = getModel(provider, base)
+    if (official) return official.cost
+  }
+  return FREE
+}
+
+function modelOf(found: Discovery['models'][number], cost: Cost): Model<'google-generative-ai'> {
   const info = found.info
   return {
     id: found.id,
@@ -58,9 +76,51 @@ function modelOf(found: Discovery['models'][number]): Model<'google-generative-a
     baseUrl: RELAY_ON_DISPATCH,
     reasoning: info?.supportsThinking ?? true,
     input: info?.supportsImages === false ? ['text'] : ['text', 'image'],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    cost,
     contextWindow: info?.maxTokens ?? 1_048_576,
     maxTokens: info?.maxOutputTokens ?? 65_536,
+  }
+}
+
+export function withPromptUpdatesInPlace(context: TranscriptContext): TranscriptContext {
+  const messages: Message[] = []
+  let held: Message[] = []
+  const awaited = new Set<string>()
+  const release = () => {
+    if (awaited.size === 0) messages.push(...held.splice(0))
+  }
+  for (const [index, message] of context.messages.entries()) {
+    if (message.role === 'system' && index > 0) {
+      const { toolsAdded, toolsRemoved, timestamp } = message
+      if (toolsAdded?.length || toolsRemoved?.length)
+        messages.push({ role: 'system', content: '', toolsAdded, toolsRemoved, timestamp })
+      const update = renderSystemMessageUpdate(message)
+      if (update) held.push({ role: 'user', content: update, timestamp })
+      release()
+      continue
+    }
+    if (message.role === 'assistant' || message.role === 'user') {
+      awaited.clear()
+      messages.push(...held.splice(0))
+    }
+    messages.push(message)
+    if (message.role === 'assistant')
+      for (const part of message.content) if (part.type === 'toolCall') awaited.add(part.id)
+    if (message.role === 'toolResult') {
+      awaited.delete(message.toolCallId)
+      release()
+    }
+  }
+  messages.push(...held)
+  return { ...context, messages }
+}
+
+function keepingPromptPrefix(api: ProviderStreams): ProviderStreams {
+  return {
+    stream: (model, context, options) =>
+      api.stream(model, withPromptUpdatesInPlace(context), options),
+    streamSimple: (model, context, options) =>
+      api.streamSimple(model, withPromptUpdatesInPlace(context), options),
   }
 }
 
@@ -151,9 +211,16 @@ export default function antigravity(host: ExtensionHost) {
     models: [],
     async fetchModels({ signal, force }) {
       const found = (!force && state.last) || (await state.discover(signal))
-      return found.loggedIn ? found.models.map(modelOf) : []
+      if (!found.loggedIn) return []
+      const catalog = host.modelRuntime
+      return found.models.map((model) =>
+        modelOf(
+          model,
+          officialCost(model.id, (source, id) => catalog.getModel(source, id)),
+        ),
+      )
     },
-    api: googleGenerativeAIApi(),
+    api: keepingPromptPrefix(googleGenerativeAIApi()),
   })
 
   host.onClose(async () => {

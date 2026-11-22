@@ -20,7 +20,14 @@ import { ConversationsApi } from '../conversations/api.ts'
 import { SubagentsApi } from '../subagents/api.ts'
 import { SubmissionLanded, WorkspacesApi } from '../workspaces/api.ts'
 import { PauseApi } from '../pause/api.ts'
-import { cloneState, fetchIfDue, layersOf, SUMMARY_SYSTEM, summaryFor } from './clone.ts'
+import {
+  cloneState,
+  updateMessages,
+  fetchIfDue,
+  layersOf,
+  SUMMARY_SYSTEM,
+  summaryFor,
+} from './clone.ts'
 import { conflictsPredicted, mergeUpstream } from '../../lib/merge.ts'
 import type { Merged } from '../../lib/merge.ts'
 import { needsRestart } from '../../lib/layers.ts'
@@ -280,7 +287,7 @@ async function refresh(host: ExtensionHost, fetchAndSummarizeUnderLock: boolean,
     return summaryFor(
       summaryFile,
       `${head}..${remoteHead}`,
-      () => git('log', '--format=%s%n%n%b', `${head}..${remoteHead}`),
+      () => updateMessages(git, `${head}..${remoteHead}`),
       allowModelRequest ? (input) => ask(host, input) : undefined,
     )
   }

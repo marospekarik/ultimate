@@ -27,7 +27,7 @@ import {
   ROOT_CONVERSATION_ID,
 } from '@earendil-works/pi-durable'
 import { afterEach, expect, it } from 'vitest'
-import watchdog, { diagnose } from '../server.ts'
+import watchdog, { diagnose, RETRY_DELAYS_MS } from '../server.ts'
 import type { WatchdogService } from '../api.ts'
 import { Messages } from '../../messages/api.ts'
 import { Standing, Subagents } from '../../subagents/api.ts'
@@ -296,10 +296,16 @@ async function fixture(
       harness = await Harness.open(storage, options, context)
       await open()
     },
+    crash: async () => {
+      for (const callback of onClose) await callback()
+      harness = await Harness.open(storage, options, context)
+      await open()
+    },
     advance: (ms: number) => {
       now += ms
       harness.resume()
     },
+    now: () => now,
     sleeping: async () => {
       await until(async () => (await tasks()).some((task) => task.state.status === 'sleeping'))
       return (await tasks()).find((task) => task.state.status === 'sleeping')!
@@ -400,6 +406,31 @@ it('routes a failure owned by a tally, such as a scheduled run, to @ultimate', a
   expect((await f.tasks()).map((task) => task.state.status)).not.toContain('faulted')
 })
 
+it('reports a run that a crash interrupted at once, without a retry', async () => {
+  let answering = false
+  const f = await fixture((transcript) => {
+    if (inputText(transcript) !== 'answer slowly') return fauxAssistantMessage('ok')
+    answering = true
+    return new Promise(() => {})
+  })
+  const branch = await f.conversation('Long task')
+  await f.submit(branch, 'answer slowly')
+  await until(() => answering)
+  await f.crash()
+  await until(async () => (await f.entries()).length === 1)
+  expect((await f.entries())[0].data).toEqual({
+    conversation: branch,
+    title: 'Long task',
+    error: 'The host stopped while the model was answering, on attempt 1',
+    step: 'model request',
+    retried: false,
+  })
+  await f.harness.waitForIdle(context)
+  const [task] = await f.tasks()
+  expect(task.state.status).toBe('terminal')
+  expect(task.input).toMatchObject({ temporary: false })
+})
+
 it('ignores user Stop', async () => {
   const f = await fixture((transcript) =>
     inputText(transcript) === 'hold'
@@ -496,13 +527,13 @@ it.each(['queued', 'running'] as const)(
   },
 )
 
-it.each([false, true])('waits 60 s, retries once; retry failure: %s', async (retryFails) => {
+it('waits 60 s, then continues once, and a reopen repeats nothing', async () => {
   const seen: string[] = []
   const f = await fixture((transcript) => {
     const text = inputText(transcript)
     if (text === 'fail' || text.startsWith('Your previous run')) {
       seen.push(text)
-      return text === 'fail' || retryFails
+      return text === 'fail'
         ? error(
             'Incomplete Claude Code upstream response (status unknown, capture incomplete, relay failure Error)',
           )
@@ -520,17 +551,69 @@ it.each([false, true])('waits 60 s, retries once; retry failure: %s', async (ret
   await f.reopen()
   f.advance(1)
   await until(async () => seen.length === 2)
-  if (retryFails) await until(async () => (await f.entries()).length === 1)
   await f.harness.waitForIdle(context)
-  await f.detach()
-  expect(await f.entries()).toHaveLength(retryFails ? 1 : 0)
-  const retryCard = expect.objectContaining({ retried: true })
-  expect((await f.entries()).map((entry) => entry.data)).toEqual(retryFails ? [retryCard] : [])
-  await f.open()
+  expect(await f.entries()).toHaveLength(0)
   await f.reopen()
   await f.harness.waitForIdle(context)
   expect(seen).toHaveLength(2)
-  expect(await f.entries()).toHaveLength(retryFails ? 1 : 0)
+})
+
+it('backs off over four continuations, then reports once after all of them', async () => {
+  const seen: string[] = []
+  const f = await fixture((transcript) => {
+    const text = inputText(transcript)
+    if (text !== 'fail' && !text.startsWith('Your previous run')) return fauxAssistantMessage('ok')
+    seen.push(text)
+    return error('Claude Code stream timed out')
+  })
+  const branch = await f.conversation('Outage')
+  await (await f.submit(branch, 'fail')).wait(context)
+  for (const [attempt, delay] of RETRY_DELAYS_MS.entries()) {
+    const sleeping = await f.sleeping()
+    const { until: wakeAt } = sleeping.state as { until: number }
+    f.advance(delay - 1)
+    await f.harness.waitForIdle(context)
+    expect(seen).toHaveLength(attempt + 1)
+    expect(wakeAt).toBe(f.now() + 1)
+    f.advance(1)
+    await until(async () => seen.length === attempt + 2)
+    await f.harness.waitForIdle(context)
+    if (attempt === 1) await f.reopen()
+  }
+  await until(async () => (await f.entries()).length === 1)
+  await until(async () => (await f.tasks()).every((task) => task.state.status === 'terminal'))
+  expect((await f.entries())[0].data).toMatchObject({ retried: true, retries: 4 })
+  expect(seen).toHaveLength(5)
+  const requests = (
+    await f.host.scanSubmissions({ conversationId: branch }, 100, undefined, context)
+  ).items.flatMap((input) =>
+    input.requestId?.startsWith('watchdog-retry:') ? [input.requestId] : [],
+  )
+  expect(new Set(requests).size).toBe(4)
+})
+
+it('drops a pending continuation once the conversation ran again, even if that run failed too', async () => {
+  const seen: string[] = []
+  const f = await fixture((transcript) => {
+    const text = inputText(transcript)
+    seen.push(text)
+    return text === 'fail' || text === 'again' ? error(overloaded) : fauxAssistantMessage('ok')
+  })
+  const branch = await f.conversation('Moved on')
+  await (await f.submit(branch, 'fail')).wait(context)
+  await f.sleeping()
+  await (await f.submit(branch, 'again')).wait(context)
+  // Both failures sleep until the same minute: only the newer one continues.
+  await until(async () => (await f.tasks()).length === 2)
+  f.advance(60_000)
+  await until(async () => seen.length === 3)
+  await f.harness.waitForIdle(context)
+  expect(seen.slice(0, 2)).toEqual(['fail', 'again'])
+  expect(seen[2]).toContain('Your previous run stopped with a provider error')
+  const continuations = (
+    await f.host.scanSubmissions({ conversationId: branch }, 100, undefined, context)
+  ).items.filter((input) => input.requestId?.startsWith('watchdog-retry:'))
+  expect(continuations).toHaveLength(1)
 })
 
 it.each(['retry', 'report'] as const)(
@@ -541,9 +624,9 @@ it.each(['retry', 'report'] as const)(
     const f = await fixture(
       (transcript) => {
         const text = inputText(transcript)
-        return text === 'fail' || text.startsWith('Your previous run')
-          ? error(phase === 'retry' ? overloaded : 'invalid model configuration')
-          : fauxAssistantMessage('ok')
+        if (phase === 'retry')
+          return text === 'fail' ? error(overloaded) : fauxAssistantMessage('recovered')
+        return text === 'fail' ? error('invalid model configuration') : fauxAssistantMessage('ok')
       },
       true,
       held,
@@ -557,11 +640,11 @@ it.each(['retry', 'report'] as const)(
     await until(async () => held.entered)
     await f.reopen()
     barrier.resolve()
-    await until(async () => (await f.entries()).length === 1)
+    if (phase === 'report') await until(async () => (await f.entries()).length === 1)
     await until(async () => (await f.tasks()).every((task) => task.state.status === 'terminal'))
     await f.reopen()
     await f.harness.waitForIdle(context)
-    expect(await f.entries()).toHaveLength(1)
+    expect(await f.entries()).toHaveLength(phase === 'report' ? 1 : 0)
     const requests = (
       await f.host.scanSubmissions({ conversationId: branch }, 100, undefined, context)
     ).items
@@ -830,14 +913,44 @@ it('recovers no-model failures separately from earlier reply-expecting inputs an
   expect(await f.tasks()).toHaveLength(2)
 })
 
-it('uses a notice, not a card, when @ultimate fails after one retry', async () => {
-  const f = await fixture(() => error(overloaded))
+it('writes a display-only card into @ultimate’s own transcript when it fails after every retry, once across a replay', async () => {
+  let modelCalls = 0
+  const barrier = Promise.withResolvers<void>()
+  const held = { phase: 'report' as const, entered: false, promise: barrier.promise }
+  const f = await fixture(
+    () => {
+      modelCalls++
+      return error(overloaded)
+    },
+    true,
+    held,
+  )
   await (await f.submit(f.ultimate, 'fail')).wait(context)
-  await f.sleeping()
-  f.advance(60_000)
-  await until(async () => f.notices.length === 1)
-  expect(f.notices[0]).toContain('After one automatic retry')
+  for (const delay of RETRY_DELAYS_MS) {
+    await f.sleeping()
+    f.advance(delay)
+    await until(
+      async () =>
+        held.entered || (await f.tasks()).every((task) => task.state.status !== 'running'),
+    )
+  }
+  await until(async () => held.entered)
+  await f.reopen()
+  barrier.resolve()
+  const own = () => f.entries(f.ultimate, 'watchdog.standing-failure')
+  await until(async () => (await own()).length === 1)
+  await until(async () => (await f.tasks()).every((task) => task.state.status === 'terminal'))
+  await f.reopen()
+  await f.harness.waitForIdle(context)
+  expect(await own()).toHaveLength(1)
   expect(await f.entries()).toHaveLength(0)
+  expect((await own())[0].data).toMatchObject({
+    conversation: f.ultimate,
+    retried: true,
+    retries: RETRY_DELAYS_MS.length,
+  })
+  expect(f.notices).toEqual([])
+  expect(modelCalls).toBe(RETRY_DELAYS_MS.length + 1)
 })
 
 it('reports a broken login at once, with a hint to log in again and no retry', async () => {
@@ -897,6 +1010,8 @@ it.each([
     undefined,
   ],
   [overloaded, true, undefined],
+  // A provider that went silent: no silent retries from Pi, one visible retry here.
+  ['Model stream stalled: proxy/shopify/dev sent nothing for 300 s', true, undefined],
   [
     "Incomplete Claude Code upstream response (status 429, capture incomplete, upstream said: This request would exceed your account's rate limit. Please try again later.)",
     false,
