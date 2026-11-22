@@ -22,7 +22,6 @@ import { realpath } from 'node:fs/promises'
 import { extensionModules } from './vite-extensions.ts'
 import { createWeb } from './web.ts'
 import { admit, createAccess } from './request-security.ts'
-import { writeProject } from './project.ts'
 import { reportCore } from './supervisor-protocol.ts'
 import { compress } from './compress.ts'
 import { viteLogger } from './vite-logger.ts'
@@ -257,7 +256,6 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
     go: (activationError?: string) =>
       serial(async () => {
         processInfo.activationError = activationError
-        await writeProject(host.home, host.projectRoot)
         const served = await openExtensionsThenServeApi(await host.open(false))
         reportCore({ type: 'web', state: 'ready' })
         return served
