@@ -27,8 +27,9 @@ some.
    - Before keeping any local edit in a file upstream changes, apply memory `shrink-local-diff`: drop the edit when
      upstream already covers the need, otherwise name it in the report as a candidate for an upstream PR.
 4. Keep this checkout's local intent:
-   - `.ultimate/settings.json`: model families hold colours only (models are per person), the lander checks run one
-     after the other with 2 test workers, `lander.push` is `fork`. Take new upstream keys.
+   - `.ultimate/settings.json`: model families hold colours only (models are per person); take upstream's lander
+     checks and new keys. This machine's real lander checks, worker counts, time limits and `push: fork` live in
+     `~/.ultimate/settings.json` `landers` (memory `landing-policy-load`): carry upstream's check commands over there.
    - `.ultimate/agents/coordinator.md` and the other files under `.ultimate/`.
 5. Upstream's `ultimate/no-comments` lint rejects comments in product code. Where our side carried a comment, say it in
    code (a name, a small function) instead of keeping or merely deleting the comment.
