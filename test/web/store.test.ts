@@ -750,6 +750,7 @@ describe('web replica store', () => {
       await vi.advanceTimersByTimeAsync(10)
       expect(microtasks).toHaveLength(1)
       expect(() => microtasks[0]()).toThrow('refusal boom')
+      spy.mockRestore()
       await tick()
       expect(server.reads.some((item) => !item.closed && item.read.action === 'valid')).toBe(true)
       expect(secondRefusal).toEqual([{ error: 'The server refused this read', status: 413 }])
