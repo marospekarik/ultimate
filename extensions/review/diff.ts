@@ -1,6 +1,7 @@
 import { lstat, readlink } from 'node:fs/promises'
 import { join } from 'node:path'
-import { git, runGit } from '../../lib/git.ts'
+import { exec } from '../../lib/exec.ts'
+import { git } from '../../lib/git.ts'
 import { errnoCode, meansNone } from '../../lib/errors.ts'
 import type { ReviewDiff, ReviewFile, ReviewKind } from './refs.ts'
 
@@ -16,7 +17,6 @@ const GIT_OUTPUT_BUFFER_BYTES = 16 * 1024 * 1024
 const DIFF_WITH_FIXED_PARSER_PREFIXES = [
   '--no-color',
   '--no-ext-diff',
-  '--no-textconv',
   '-M',
   '--src-prefix=a/',
   '--dst-prefix=b/',
@@ -169,7 +169,8 @@ const exceededGitOutputBuffer = (error: unknown) =>
 async function tracked(cwd: string, base: string, head: string | undefined, signal?: AbortSignal) {
   const range = head ? [base, head] : [base]
   const run = (...args: string[]) =>
-    runGit(cwd, ['diff', ...DIFF_WITH_FIXED_PARSER_PREFIXES, ...args, ...range, '--'], {
+    exec('git', ['diff', ...DIFF_WITH_FIXED_PARSER_PREFIXES, ...args, ...range, '--'], {
+      cwd,
       signal,
       timeout: 30000,
       maxBuffer: GIT_OUTPUT_BUFFER_BYTES,
@@ -189,10 +190,10 @@ async function tracked(cwd: string, base: string, head: string | undefined, sign
 }
 
 async function untrackedDiff(top: string, path: string, args: string[], signal?: AbortSignal) {
-  const result = await runGit(
-    top,
+  const result = await exec(
+    'git',
     ['diff', '--no-index', ...DIFF_WITH_FIXED_PARSER_PREFIXES, ...args, '--', '/dev/null', path],
-    { signal, timeout: 30000, maxBuffer: GIT_OUTPUT_BUFFER_BYTES },
+    { cwd: top, signal, timeout: 30000, maxBuffer: GIT_OUTPUT_BUFFER_BYTES },
   ).catch((error: { code?: unknown; stdout?: string }) => {
     if (error.code === 1 && typeof error.stdout === 'string') return { stdout: error.stdout }
     throw error
@@ -206,7 +207,8 @@ const symlinkTargetPatch = (path: string, target: string) =>
     : `diff --git a/${path} b/${path}\nnew file mode 120000\n--- /dev/null\n+++ b/${path}\n@@ -0,0 +1 @@\n+${target}\n\\ No newline at end of file\n`
 
 async function untracked(top: string, signal?: AbortSignal) {
-  const list = await runGit(top, ['ls-files', '--others', '--exclude-standard', '-z'], {
+  const list = await exec('git', ['ls-files', '--others', '--exclude-standard', '-z'], {
+    cwd: top,
     signal,
     timeout: 30000,
     maxBuffer: GIT_OUTPUT_BUFFER_BYTES,

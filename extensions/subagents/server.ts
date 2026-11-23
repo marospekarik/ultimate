@@ -57,7 +57,7 @@ import {
 import type { AgentDefinition, DefinitionFields } from '../../lib/agents.ts'
 import { createChild, reconfigure, started } from './children.ts'
 import { implementAction } from '../../lib/actions.ts'
-import { runGit } from '../../lib/git.ts'
+import { exec } from '../../lib/exec.ts'
 import { meansNone } from '../../lib/errors.ts'
 import { shortTitle } from '../../lib/title.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
@@ -1400,7 +1400,8 @@ export default function subagents(
             }
             const workspace = await workspaces.get(id, context)
             const untrimmedNulSeparatedPaths = (...command: string[]) =>
-              runGit(workspace!.path, [...command, '-z'], {
+              exec('git', [...command, '-z'], {
+                cwd: workspace!.path,
                 maxBuffer: 1024 * 1024,
               }).then(({ stdout }) => stdout.split('\0').filter(Boolean))
             const uncommitted =

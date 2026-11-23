@@ -1,6 +1,6 @@
 import { stat } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
-import { runGit } from './git.ts'
+import { exec } from './exec.ts'
 import type { Git } from './fast-forward.ts'
 import { acquireLock } from './lock.ts'
 import { meansNone } from './errors.ts'
@@ -11,7 +11,7 @@ export const gitIn =
     try {
       const nonInteractiveGitEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0' }
       return (
-        await runGit(root, args, { env: nonInteractiveGitEnv, timeout: 120_000 })
+        await exec('git', args, { cwd: root, env: nonInteractiveGitEnv, timeout: 120_000 })
       ).stdout.trim()
     } catch (error) {
       const { stderr = '' } = error as { stderr?: string }
