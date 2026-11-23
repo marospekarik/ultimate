@@ -1575,7 +1575,7 @@ it.concurrent('lands a check that passed past 80 % of its limit with a slow note
   await f.service.submit(id, 'None', context)
   const [report] = await submitted(f, id)
   expect(report).toContain('landed as')
-  expect(report).toMatch(/Slow: sleep 2\.5 · \d s of 3 s \(\d+ %\)/)
+  expect(report).toMatch(/Slow: sleep 2\.5 · \d\.\ds of 3\.0s \(\d+ %\)/)
   expect((await landerLog(f)).log.at(-1)).toMatchObject({
     outcome: 'landed',
     slow: [expect.stringMatching(/^sleep 2\.5 · /)],
