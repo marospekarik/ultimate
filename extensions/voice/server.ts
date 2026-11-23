@@ -6,6 +6,7 @@ import {
   OPENAI_SECRET as SECRET,
   openaiSecretOrNonOAuthKey,
   openaiError,
+  openaiTranscribe,
 } from '../../lib/openai.ts'
 import { StatusAction, TranscribeAction } from './refs.ts'
 
@@ -17,7 +18,6 @@ const TIMEOUT_MS = 65_000
 const action12MbAudioLimit = 8 * 1024 * 1024
 export { action12MbAudioLimit as MAX_AUDIO_BYTES }
 
-const DOCUMENTED_API_KEY_ENDPOINT = 'https://api.openai.com/v1/audio/transcriptions'
 const CHATGPT_LOGIN_ONLY_ENDPOINT = 'https://chatgpt.com/backend-api/transcribe'
 
 export const secrets = [
@@ -53,15 +53,14 @@ async function transcribe(
   audio: Blob,
   signal: AbortSignal,
 ): Promise<Attempt> {
-  const login = credential.kind === 'login'
+  if (credential.kind === 'key') return openaiTranscribe(credential.key, audio, signal)
   const form = new FormData()
   const extension = audio.type.split('/')[1]?.split(';')[0] || 'webm'
   form.set('file', audio, `recording.${extension}`)
-  form.set('model', login ? 'gpt-transcribe' : 'gpt-4o-mini-transcribe')
-  if (!login) form.set('response_format', 'json')
-  const response = await fetch(login ? CHATGPT_LOGIN_ONLY_ENDPOINT : DOCUMENTED_API_KEY_ENDPOINT, {
+  form.set('model', 'gpt-transcribe')
+  const response = await fetch(CHATGPT_LOGIN_ONLY_ENDPOINT, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${login ? credential.token : credential.key}` },
+    headers: { Authorization: `Bearer ${credential.token}` },
     body: form,
     signal,
   })
