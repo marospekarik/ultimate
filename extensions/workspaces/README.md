@@ -172,9 +172,8 @@ lander's sidebar row shows the feature it lands or landed last.
    failures name the limit that fired, the failed test lines seen so far (vitest's `FAIL`/`×` lines, kept even when
    they scrolled out of the tail) and the output tail, and rerun like other check failures.
    An entry is a check or an array of checks, a group that runs concurrently; a check is a command string or
-   `{ "command": "pnpm test", "timeout": 180, "stall": 90 }`. A check with `skipWhenOnly` (path globs, such as
-   `["**/*.md", "agents/**"]`) is skipped when every path the submission changes matches one of them; the landing
-   reports it as `skipped`. A passing check that took more than 80 % of its total limit is reported as `slow`.
+   `{ "command": "pnpm test", "timeout": 180, "stall": 90 }`.
+   A passing check that took more than 80 % of its total limit is reported as `slow`.
    A failing check
    reruns once: passing then is reported as flaky, failing again reports the output tail to the submitter once every
    command of its group settled, with the machine's load when the rerun failed: one line on the card (`load 21.7 on

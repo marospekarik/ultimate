@@ -1581,27 +1581,6 @@ it.concurrent('lands a check that passed past 80 % of its limit with a slow note
     slow: [expect.stringMatching(/^sleep 2\.5 · /)],
   })
 })
-it.concurrent('skips a check when the submission changes only paths it lists, and runs it otherwise', async () => {
-  const f = await lander({
-    checks: ['true', { command: 'false', skipWhenOnly: ['**/*.md', 'agents/**'] }],
-  })
-  const id = await f.create()
-  await f.service.ready(id, context)
-  const path = (await f.service.get(id, context))!.path
-  await commit(path, 'notes.md')
-  await mkdir(join(path, 'agents'), { recursive: true })
-  await commit(path, 'agents/a.ts')
-  await f.service.submit(id, 'None', context)
-  const [docsOnly] = await submitted(f, id)
-  expect(docsOnly).toContain('landed as')
-  expect(docsOnly).toContain('Skipped: false')
-  expect((await landerLog(f)).log.at(-1)).toMatchObject({ outcome: 'landed', skipped: ['false'] })
-
-  await commit(path, 'code.ts')
-  await f.service.submit(id, 'None', context)
-  const [, withCode] = await submitted(f, id)
-  expect(withCode).toContain('check failed twice: false')
-})
 it.concurrent('fast-forwards the worktree that has the target checked out, past unrelated dirty files but not over overlapping ones', async () => {
   const f = await lander({})
   const id = await f.create()
