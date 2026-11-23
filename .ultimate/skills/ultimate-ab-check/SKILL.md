@@ -24,6 +24,9 @@ of several slices gets one A/B on its final head, not one per slice.
   `~/Projects/ultimate` (`git cat-file -t <sha>` there): worktree commits are.
 - **Baseline:** its parent on main. Earlier runs of the same baseline count only when they ran on the same
   scenario sha (the run's `scenario@<sha>` in `pnpm eval report`); otherwise run both sides fresh. Name the run ids.
+- **Scenario:** one that reaches the changed path. `recipe-v2` covers turn flow and landing; `recipe-tell` runs a
+  cross-project tell between two instances, for tell and routing changes; `recipe-reminder` covers automations.
+  Neither commit can run a codemode-only setup: overlays refuse `tools` (#922972).
 - A head that moves after the A/B (review fixes) keeps the A/B when the new commits do not touch what it exercised;
   say so in the report.
 
@@ -40,7 +43,7 @@ const text = `Request from Ultimate's @ultimate (A/B before a core change lands)
   --scenario recipe-reminder: it creates a reminder automation, checks it fires and reaches the user, and scores
   unanswered and duplicate board messages (about 3 min and $0.50 a run).
 Reply with the run ids and their results when they are done.`
-await ultimate.tell({ project: 'ultimate-eval', text })
+await tools.tell({ project: 'ultimate-eval', text })
 ```
 
 Then end the turn. The reply is the wait: ultimate-eval's "started" answer arrives as a note, the sidebar shows
@@ -67,5 +70,7 @@ Per side: passes/N, minutes, cost, stuck, watchdog failures and retries, real to
 seconds, and the run ids. Then the limits, always:
 
 - At N=2 it rules out crashes and obvious breakage, not small differences.
+- Compare time medians only between runs of one eval commit (eval changed how it measures at 877baca); passes,
+  routing and cost compare across eval commits.
 - Name the paths the change touches that the scenario never reaches (an error branch, compaction, an automation
   fire, a chapter change). Those stay covered only by the regression test for the change.

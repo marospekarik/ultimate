@@ -35,6 +35,7 @@ afterEach(async () => {
 async function bash(command: string, dir = cwd, env = new NodeExecutionEnv({ cwd: dir })) {
   const extension = codingTools({
     home: cwd,
+    images: undefined as never,
     need: (() => ({})) as never,
     notice: () => {},
     onOpen: () => {},

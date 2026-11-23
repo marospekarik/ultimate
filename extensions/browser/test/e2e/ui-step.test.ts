@@ -16,8 +16,7 @@ afterAll(async () => {
   for (const close of cleanup.splice(0).toReversed()) await close()
 })
 
-const panel = `/** @jsxImportSource @solidjs/web */
-import { createSignal } from 'solid-js'
+const panel = `import { createSignal } from 'solid-js'
 import { Button } from '@/components/ui/button.solid.tsx'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover.solid.tsx'
 import { Switch } from '@/components/ui/switch.solid.tsx'
@@ -93,8 +92,8 @@ async function boot() {
       context,
     )
     if (result.isError) throw new Error(JSON.stringify(result.output))
-    const { outcomes } = (result as unknown as { structuredContent: { outcomes: string[] } })
-      .structuredContent
+    const { outcomes } = (result as unknown as { structuredOutput: { outcomes: string[] } })
+      .structuredOutput
     return (n: number) => {
       const prefix = `Step ${n}: OK `
       const line = outcomes.find((outcome) => outcome.startsWith(prefix))
@@ -306,16 +305,22 @@ it('until a control’s state wakes on its change, by label or by ref, and a mis
   const value = await drive([
     { eval: waitThenToggle("'Weekly digest'") },
     { eval: waitThenToggle('ref') },
-    { ui: 'act', steps: [{ ref: 'c9999', action: 'press' }] },
-    { eval: "document.querySelector('[data-pressed]').dataset.pressed" },
   ])
   expect(value(1)).toEqual({ early: false, same: true, checked: true })
   expect(value(2)).toEqual({ early: false, same: true, checked: false })
-  expect(value(3)).toMatchObject({
-    ok: false,
-    error: { step: 0, message: 'No component c9999 on the page.' },
-  })
-  expect(value(4)).toBe('none')
+})
+
+// A failed act reported OK and the script ran on into timeouts that hid its error (#919059).
+it('stops the script at a failed act and reports its error', async () => {
+  const { drive } = await serve()
+  await expect(
+    drive([
+      { ui: 'act', steps: [{ ref: 'c9999', action: 'press' }] },
+      { eval: "document.querySelector('[data-pressed]').dataset.pressed" },
+    ]),
+  ).rejects.toThrow(
+    'Step 1: Error: act step 1 (c9999 press) failed: No component c9999 on the page.',
+  )
 })
 
 // An until on an event that never came held a browser call for 3 minutes; without timeoutMs it fails after 10 s.

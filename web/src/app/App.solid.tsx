@@ -1,4 +1,3 @@
-/** @jsxImportSource @solidjs/web */
 import { createEffect, createMemo, createSignal, For, onSettled, Show } from 'solid-js'
 import {
   errorMessage,
@@ -87,7 +86,6 @@ function SurfaceLevel(props: { surface: SurfaceItem; rest: readonly SurfaceItem[
           <Surfaces surfaces={props.rest} />
         </>
       )}
-      fallbackOnly
       item={props.surface}
       props={{}}
     />
@@ -191,7 +189,7 @@ export function App() {
     <>
       <div class="safe-area flex">
         <Show when={ready() && !embedded}>
-          <Slot fallback={outOfFlow} fallbackOnly name="shell.rail" />
+          <Slot fallback={outOfFlow} name="shell.rail" />
         </Show>
         <div class="flex min-w-0 flex-1 flex-col">
           <Show when={ready() && !embedded}>
@@ -204,7 +202,7 @@ export function App() {
       </div>
       <CommandPalette />
       <ExtensionErrors stack={stack} />
-      <Slot fallback={outOfFlow} fallbackOnly name="overlay" />
+      <Slot fallback={outOfFlow} name="overlay" />
     </>
   )
 }

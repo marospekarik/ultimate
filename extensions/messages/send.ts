@@ -3,7 +3,7 @@ import type { Context } from '@earendil-works/chord/context'
 import { defineDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { Standing } from '../subagents/api.ts'
-import { Messages, MessageSent } from './api.ts'
+import { AskedCalls, Messages, MessageSent } from './api.ts'
 import type { Message, Question } from './api.ts'
 import type { Via } from './refs.ts'
 import { checkQuestions, gist, openQuestion } from './questions.ts'
@@ -16,7 +16,6 @@ import { append } from './log.ts'
 import { isFront, parentOf, resolveRecipient, senderName, serve, starterOf } from './addresses.ts'
 import { actingAs } from '../../lib/acting-as.ts'
 import { delivery } from './delivery.ts'
-import { notice } from './notice.ts'
 
 const AtomicallyCommittedCallReceipts = defineDoc<{ ids: Record<string, number> }>({
   kind: 'board.sent-calls',
@@ -132,6 +131,8 @@ export async function send(
     const by = await starterOf(host, asker, ctx)
     pointerTo = by !== undefined && (await isFront(host, standing, by, ctx)) ? by : primaryId
   }
+  const pointer =
+    pointerTo === undefined ? undefined : await host.harness().conversation(pointerTo, ctx)
   return host.harness().commit(async (tx) => {
     const receipt =
       taskId === undefined ? undefined : await tx.doc(AtomicallyCommittedCallReceipts, taskId)
@@ -220,14 +221,9 @@ export async function send(
       ...(options.echo ? { echo: true as const } : {}),
       ...(via ? { via } : {}),
     })
-    await host.emit(tx, MessageSent, {
-      message: message.id,
-      from,
-      to,
-      reply: message.reply,
-      steer,
-    })
-    if (pointerTo !== undefined) {
+    if (to === 'user' && message.reply && typeof from === 'number' && callId !== undefined)
+      (await tx.doc(AskedCalls, from)).calls.push(callId)
+    if (pointer) {
       const asked = to === 'user' && typeof from === 'number' && asker === from
       const answered =
         from === 'user' && answerId !== undefined && typeof to === 'number' && asker === to
@@ -264,17 +260,22 @@ export async function send(
                   : `The user answered #${to}'s questions (message ${answerId}):\n${input.text}`,
             }
           : undefined
-      if (notification)
-        await tx.createTask(
-          notice(host),
-          { to: pointerTo, ...notification },
-          {
-            conversationId: pointerTo,
-            ownership: { kind: 'conversation' },
-            background: true,
-          },
-        )
+      if (notification) {
+        const { kind, data, content } = notification
+        await pointer.submit(tx, {
+          type: 'write',
+          requestId: `${kind}:${data.message}`,
+          entry: { kind, data, model: [{ role: 'user', content, timestamp: Date.now() }] },
+        })
+      }
     }
+    await host.emit(tx, MessageSent, {
+      message: message.id,
+      from,
+      to,
+      reply: message.reply,
+      steer,
+    })
 
     const userAnswerNotAlreadyCountedInChat =
       from === 'user' && answerId !== undefined && typeof to === 'number' && !via

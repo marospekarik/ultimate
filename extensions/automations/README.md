@@ -17,7 +17,8 @@ Exactly one per automation:
 - **Context.** `condition: {metric: 'context', of: '@name' | '#id', above: 80, cooldownMs?: 3600000, idleFor?}` fires
   when the conversation's context crosses `above`, then re-arms only after it drops below `above - 10`. The cooldown
   counts from the condition's own last crossing, not manual runs. With `idleFor` (ms) it also waits until the user gave
-  `of` no input for that long (`idleFor: 0` on update removes it). Dream ships two of these on `@ultimate`
+  `of` no input for that long (`idleFor: 0` on update removes it): above the threshold it sleeps in an
+  `ultimate.automation-idle` task until then, and user input in the meantime makes it sleep again from that input. Dream ships two of these on `@ultimate`
   (`extensions/dream/README.md`).
 - **Script.** `ask` instead of a schedule: a `watcher` agent writes an executable `run`, tests it by hand until one
   check succeeds and calls `automation resume {id}`. Stdout `FIRE [text]` fires; stderr and other stdout are progress. `once` (default true)
@@ -98,7 +99,7 @@ edits apply after landing.
 
 `AutomationsApi` (`api.ts`, token `automations`, core tier: consumers `need` it) offers `create(args)` (`subscribers` stand in for a
 caller; `key` makes it safe to retry), `delete`, `resume`, `pause`, `run` and `status`, each returning the record with
-`alive`. Mutating methods commit: call them outside transactions, and from a reactor do not await them.
+`alive`; `read(tx, id)` and `readByKey(tx, key)` return the record as a transaction sees it. Mutating methods commit: call them outside transactions, and from a reactor do not await them.
 
 `POST /api/extensions/automations/actions/<operation>` with `{args}` returns `{result}` for every tool operation, plus
 `describe {schedule}` → `{schedule, description, next}` (up to three fire times) and `script {id}` → `{path, text}`

@@ -47,7 +47,6 @@ export const defaultOff: readonly string[] = [
   'push',
   'sandbox',
   'wire',
-  'redraws',
 ]
 
 type SortedCycleNames = string[]

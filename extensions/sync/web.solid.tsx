@@ -1,4 +1,3 @@
-/** @jsxImportSource @solidjs/web */
 import { ArrowDown, ArrowUp, Check, LoaderCircle, RefreshCw, TriangleAlert } from '@lucide/solid'
 import { createMemo, createSignal, For, Match, Show, Switch } from 'solid-js'
 import { Button } from '@/components/ui/button.solid.tsx'

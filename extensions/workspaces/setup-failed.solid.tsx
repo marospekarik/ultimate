@@ -1,4 +1,3 @@
-/** @jsxImportSource @solidjs/web */
 import { CircleAlert } from '@lucide/solid'
 import { renderEntry } from '@/sdk/parts.solid.tsx'
 import { OutputTail } from './log-parts.solid.tsx'

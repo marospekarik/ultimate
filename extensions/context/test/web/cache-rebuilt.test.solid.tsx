@@ -1,4 +1,3 @@
-/** @jsxImportSource @solidjs/web */
 import type { EntryRecord } from '@earendil-works/pi-durable'
 import { expect, it, vi } from 'vitest'
 import { renderSolid } from '../../../../test/web/solid-dom-setup.ts'
@@ -41,7 +40,7 @@ it('renders the cache rebuild above the reply and only on the first part of a sp
   expect(lines).toHaveLength(1)
   expect(lines[0].getAttribute('data-cache-rebuilt')).toBe('2')
   expect(lines[0].textContent).toBe(
-    'cache rebuilt · 181k written · 0 of 180k read · expired after 2h 00m idle',
+    'cache rebuilt · 181k written · 0 of 180k read · expired after 2h idle',
   )
   expect(lines[0].nextElementSibling?.textContent).toBe('reply')
   expect(view.firstElementChild?.textContent).toBe('first reply')

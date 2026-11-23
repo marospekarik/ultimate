@@ -1,4 +1,3 @@
-/** @jsxImportSource @solidjs/web */
 import { NetworkIcon } from '@lucide/solid'
 import { defineWebExtension, ErrorReport, provide } from '@/sdk/solid'
 import { agentsPanel } from '../models/ui.solid.tsx'
@@ -22,7 +21,11 @@ export default defineWebExtension({
       order: 3,
     },
   ],
-  entries: { 'subagents.instruction': AgentInput, 'subagents.report': AgentInput },
+  entries: {
+    'subagents.instruction': AgentInput,
+    'subagents.report': AgentInput,
+    'subagents.note': () => null,
+  },
   inbox: AgentInbox,
   provides: [provide(ErrorReport, () => () => errorReport)],
   slots: {

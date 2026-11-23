@@ -28,20 +28,20 @@ tools and new context until another answer. Model changes update the window. Unk
 milliseconds (the answer/head message timestamp, or when the estimate was made if absent); `entry` identifies the
 source assistant or head entry. A fork starts at `{ at: 0 }`, without inheriting its parent's measurement.
 A watcher follows Pi's commits and writes the document in its own commit, serially per conversation, only when it
-changes. On open, background reconciliation scans bounded pages and recovers missing or stale source entries without
-blocking startup. The status line reads this same document, independent of which browser is open.
+changes. On open it reconciles in the background, without blocking startup (see [Open](#open)). The status line reads this same document, independent of which browser is open.
 
 `compactions.ts` emits `conversations.compacted` `{ conversation, entry, reason? }` (`Compacted` in `refs.ts`) for
 each compaction summary Pi places. Pi appends it in its compaction task with no hook in that commit, so a commit
-watcher emits it in a commit of its own: a crash between the two loses the event, nothing repeats it. The same
+watcher emits it in a commit of its own. A root document keeps the newest entry announced; each open catches up, in the
+background, on compactions committed past it while nothing watched, so a stop between the two commits delays the event
+rather than losing it. The first open marks existing history as announced. The same
 watcher raises a notice when a compaction its conversation owns (background or manual) fails; a blocking one's failure
 ends the run waiting on it, which reports itself.
 
 `activity.ts` maintains `ultimate.metadata`'s `inputTitle`, `inputAt`, and `answerAt` from committed
 history; core only serves those fields, preferring an explicit `title` over the input title. Reset and
-compaction cut the active title source but preserve activity times from earlier history. On open, the
-projection reconciles every conversation, including inherited fork history, and only commits metadata
-when the derived fields change.
+compaction cut the active title source but preserve activity times from earlier history. It reads inherited fork
+history, and only commits metadata when the derived fields change.
 
 All input detection uses `isInput` in `lib/entries.ts`: Pi Durable marks entries placed from input
 submissions with `input: true` (a small upstream patch). Pi's own `pi.user` input kind also counts,
@@ -56,7 +56,7 @@ prompt cache (on the Claude Code path a full rewrite of the context), and a list
 conclude and retitle. Concluded ids live in UI state `ext.conversations.concluded`.
 
 Actions are callable from the browser with `api.action` or by agents with
-`await ultimate.action('conversations', 'conclude', {ids: [N]})` in codemode. The browser never rewrites the concluded
+`await tools.action({extension: 'conversations', action: 'conclude', args: {ids: [N]}})` in codemode. The browser never rewrites the concluded
 list. No state-key migration runs automatically.
 
 - `conclude {ids:number[]}`: validates top-level conversations (unknown ids, subagents, listed roots and standing agents
@@ -194,7 +194,10 @@ It provides the `conversations` service: `subject(id)` returns a conversation's 
 which workspaces snapshots for each submission. `concluded(caller)` returns a `Promise<Set<ConversationId>>`
 from the server-owned concluded list, used by workspaces to release checkouts on open.
 `generatedTitle(tx, id, title)` marks a new branch's or root's intent title as generated, so its summary may replace
-it; lineage calls it from its `named` reactor. This extension declares two extension points in `api.ts`:
+it; lineage calls it from its `named` reactor. `submitAfter(tx, to, draft)` has the `conversations.submit` task submit
+`draft` to `to` right after the commit, for commits that cannot admit it with `submit(tx, draft)` themselves: one that
+creates `to` (a branch's prompt, a side chat's first input), or a reactor's commit that holds no handle of `to` (a
+landing note, a dream request on a fire). An input keeps `to` busy until it is admitted. This extension declares two extension points in `api.ts`:
 `conversations.trees` (`rootOf`, `branchOf`, `abstract`; lineage provides it) and `conversations.release`
 (workspaces provides it), so it depends on neither.
 
@@ -244,5 +247,14 @@ One root-document stream serves all rows. Titles, timestamps, child links and ag
 conversation list.
 A commit only selects which rows to derive again: any committed submission, `pi.user`, `pi.reset` or `pi.compaction`
 entry, `pi.live.run` or `pi.inbox` change, or `Summaries` change. Derivation reads the records themselves, so a row
-built live equals the row a fresh open builds. On open, every conversation is derived anew without requesting old
-summaries.
+built live equals the row a fresh open builds. Open derives rows anew without requesting old summaries.
+
+### Open
+
+Overview, activity and context are projections (`projection.ts`): a commit watcher names the conversations a change
+touches and reconciles them in batches. A clean close stores the newest entry each one had seen in
+`conversations.projected` on the root. The first open of a process reconciles only what can have changed since: every
+conversation outside a concluded tree, every one with entries past the mark, and what each projection finds stale
+without a new entry (a missing, working, queued or pending overview row; a context window the model catalog no
+longer gives). Without a mark (a crash, a failed reconcile, or a store that predates it) and on a reload in the same
+process, whose watchers paused for a moment, open reconciles every conversation.

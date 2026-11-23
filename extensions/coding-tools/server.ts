@@ -24,7 +24,7 @@ import {
   createWriteTool,
 } from '@earendil-works/pi-durable/tools'
 import { getOrThrow } from '@earendil-works/pi-durable/env'
-import { createNodePhotonImages } from '@earendil-works/pi-durable/images/node'
+import { formatDuration } from '../../lib/format.ts'
 import { git } from '../../lib/git.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { implementAction } from '../../lib/actions.ts'
@@ -42,8 +42,6 @@ import {
   sweepEarlierProcesses,
   takeStarted,
 } from './background.ts'
-
-const modelSizedImages = await createNodePhotonImages()
 
 function defaultBashTimeout() {
   const seconds = Number(process.env.ULTIMATE_BASH_TIMEOUT ?? 600)
@@ -118,14 +116,6 @@ const DurableCancellations = defineDoc<{ calls: Record<string, number> }>({
 })
 export const docs = [DurableCancellations, BackgroundGroups]
 
-function took(ms: number) {
-  const seconds = Math.round(ms / 1000)
-  if (seconds < 60) return `${seconds}s`
-  if (seconds < 3600)
-    return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s`
-  return `${Math.floor(seconds / 3600)}h ${String(Math.floor(seconds / 60) % 60).padStart(2, '0')}m`
-}
-
 async function untilStopped(
   run: (context: Context) => Promise<ToolExecutionResult | ToolPark>,
   api: ToolExecutionApi,
@@ -159,7 +149,7 @@ async function untilStopped(
   } catch (error) {
     if (!reason || context.abortSignal?.aborted) throw error
     const retained = api.retainedOutput()
-    const outputWithTrailingNotice = `${retained.text || '(no output)'}\n[${reason} after ${took(performance.now() - started)}; the output above is the last the command printed.]`
+    const outputWithTrailingNotice = `${retained.text || '(no output)'}\n[${reason} after ${formatDuration(performance.now() - started)}; the output above is the last the command printed.]`
     return {
       output: [
         {
@@ -272,7 +262,7 @@ async function madeCommits(
 }
 
 export default function codingTools(
-  host: Pick<ExtensionHost, 'emit' | 'home' | 'need' | 'notice' | 'onOpen' | 'react'>,
+  host: Pick<ExtensionHost, 'emit' | 'home' | 'images' | 'need' | 'notice' | 'onOpen' | 'react'>,
 ) {
   host.onOpen(() =>
     sweepEarlierProcesses(host.home).catch((error: unknown) =>
@@ -403,7 +393,7 @@ export default function codingTools(
     name: 'coding-tools',
     tasks: [StopBackground],
     tools: [
-      createReadTool({ images: modelSizedImages }),
+      createReadTool({ images: host.images }),
       createWriteTool(),
       createEditTool(),
       tracedBashTool,

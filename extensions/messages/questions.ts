@@ -2,7 +2,7 @@ import { arr, bool, int, obj, opt, str } from '@earendil-works/pi-schema'
 import { strEnum } from '../../lib/schema.ts'
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import type { ConversationId, Tx } from '@earendil-works/pi-durable'
-import { formatAgo } from '../../lib/ago.ts'
+import { formatAgo } from '../../lib/format.ts'
 import { openQuestion } from '../../lib/message-state.ts'
 import { Messages } from './api.ts'
 import { Standing } from '../subagents/api.ts'
@@ -146,7 +146,7 @@ export async function openQuestionsNote(
     )
     .join(
       '\n',
-    )}${canSettleEveryOpenQuestion || settlesStartedBranchesQuestions ? `\nWhen the user decides one in your chat, settle it with ultimate.action('messages', 'settle', { messageId, text }).` : ''}`
+    )}${canSettleEveryOpenQuestion || settlesStartedBranchesQuestions ? `\nWhen the user decides one in your chat, settle it with tools.action({extension: 'messages', action: 'settle', args: { messageId, text }}).` : ''}`
   const perInputCacheReminder = {
     kind: 'board.open',
     data: { ids: open.map((m) => m.id) },

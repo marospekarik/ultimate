@@ -1,12 +1,9 @@
-/** @jsxImportSource @solidjs/web */
-import { ReactCompatLink } from '../../app/error-card.solid.tsx'
 import { Check, Copy, ExternalLink } from '@lucide/solid'
 import { dynamic } from '@solidjs/web'
 import type { JSX } from '@solidjs/web'
 import { cn } from 'cn'
 import { find, html } from 'property-information'
 import {
-  children as resolveChildren,
   createMemo,
   createProjection,
   createSignal,
@@ -64,25 +61,12 @@ function Contributed<P extends { core: JSX.Element }>(props: {
         )}
       >
         <ExtensionName value={extension}>
-          <OnlyNodes>
-            <Renderer {...(props.props as P)} core={wrap(index - 1)} />
-          </OnlyNodes>
+          <Renderer {...(props.props as P)} core={wrap(index - 1)} />
         </ExtensionName>
       </Errored>
     )
   }
   return <>{wrap(props.renderers.length - 1)}</>
-}
-
-function OnlyNodes(props: { children: JSX.Element }) {
-  const resolved = resolveChildren(() => props.children)
-  const nodes = createMemo(() => {
-    const items = resolved.toArray()
-    if (items.some((item) => typeof item === 'object' && item !== null && !('nodeType' in item)))
-      throw new Error('renders something that is not a DOM node; is it a React component?')
-    return items
-  })
-  return <>{nodes()}</>
 }
 
 function ContributionError(props: { extension: string; error: unknown; inner: JSX.Element }) {
@@ -96,7 +80,6 @@ function ContributionError(props: { extension: string; error: unknown; inner: JS
         <span class="truncate">
           {props.extension}: {errorMessage(props.error)}
         </span>
-        <ReactCompatLink extension={props.extension} />
       </span>
       {props.inner}
     </>

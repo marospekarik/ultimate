@@ -1,4 +1,5 @@
 /** Keep warm in the browser: whether @ultimate's prompt cache is kept warm, and the last ping. Browser-safe. */
+import type { TaskId } from '@earendil-works/pi-durable'
 import { actionRef, docRef } from '../../shared/extension-api.ts'
 
 /**
@@ -7,6 +8,8 @@ import { actionRef, docRef } from '../../shared/extension-api.ts'
  */
 export type Ping = {
   at: number
+  /** @ultimate's conversation whose cache it renewed; absent on pings recorded before it was, which count for @ultimate's current one. */
+  conversation?: number
   provider: string
   model: string
   read?: number
@@ -16,14 +19,18 @@ export type Ping = {
 
 /**
  * On conversation 1. `off` when the user turned it off (it is on by default); the user's latest input to @ultimate
- * (ms, from `user.input` events); the last ping and how many ran; `precold`, the last request a pre-cold compaction was
- * started for (it is tried once per request, success or not).
+ * (ms, from `user.input` events); when @ultimate last got an answer that read or wrote its cache, per
+ * `conversation:provider/model` (ms); the last ping and how many ran; the task that sleeps until the next ping or
+ * pre-cold compaction, while one is planned; `precold`, the last request a pre-cold compaction was considered for (once
+ * per request, whether it ran or not).
  */
 export type WarmDocState = {
   off?: true
   inputAt?: number
+  answers?: Record<string, number>
   last?: Ping
   pings?: number
+  waker?: TaskId
   precold?: number
 }
 
@@ -35,7 +42,7 @@ export type WarmState = {
   inputAt?: number
   /** When the next ping is due (ms), while one will run. */
   nextAt?: number
-  /** When @ultimate's context is compacted before the cache goes cold (ms): it is large and no ping will renew the cache. */
+  /** When a pre-cold compaction runs (ms), while one is planned: no ping will renew a context over 150k. */
   precoldAt?: number
   last?: Ping
   pings: number

@@ -1,4 +1,3 @@
-/** @jsxImportSource @solidjs/web */
 import { createSignal, flush } from 'solid-js'
 import { expect, it, vi } from 'vitest'
 
@@ -28,7 +27,7 @@ vi.mock('../../web/src/sdk/client.ts', async () => {
   }
 })
 
-import type { CodeBlockRenderer, LinkRenderer } from '../../web/src/sdk/types.ts'
+import type { CodeBlockRenderer } from '../../web/src/sdk/types.ts'
 import { Markdown } from '../../web/src/components/markdown/markdown.solid.tsx'
 import { createAgent } from '@ui-sdk/solid/agent'
 import { settle } from '@ui-sdk/core/testing'
@@ -140,35 +139,12 @@ it('falls back to the core rendering when an extension renderer throws', () => {
   const Broken: CodeBlockRenderer = () => {
     throw new Error('broken')
   }
-  installed.set([
-    { name: 'broken', version: 1, framework: 'react', extension: { codeBlocks: { ts: Broken } } },
-  ])
+  installed.set([{ name: 'broken', version: 1, extension: { codeBlocks: { ts: Broken } } }])
   try {
     const view = renderSolid(() => <Markdown text={'Before.\n\n```ts\nlet x\n```\n\nAfter.'} />)
     flush()
-    expect(
-      view
-        .querySelector('[data-extension-error="broken"] [data-react-compat]')
-        ?.getAttribute('href'),
-    ).toMatch(/docs\/extensions\/react-compat\.md$/)
+    expect(view.querySelector('[data-extension-error="broken"]')?.textContent).toContain('broken')
     expect(view.querySelector('.code-block pre')?.textContent).toBe('let x')
-    expect(view.textContent).toContain('After.')
-  } finally {
-    installed.set([])
-  }
-})
-
-it('falls back to the core link when a link renderer returns something that is not a node', () => {
-  const React: LinkRenderer = () =>
-    ({ $$typeof: Symbol.for('react.transitional.element'), props: {} }) as never
-  installed.set([{ name: 'docs', version: 1, extension: { link: React } }])
-  try {
-    const view = renderSolid(() => (
-      <Markdown text={'See [the report](/.reports/a.md).\n\nAfter.'} />
-    ))
-    flush()
-    expect(view.querySelector('[data-extension-error="docs"]')).not.toBeNull()
-    expect(view.querySelector('button.link')?.textContent).toBe('the report')
     expect(view.textContent).toContain('After.')
   } finally {
     installed.set([])

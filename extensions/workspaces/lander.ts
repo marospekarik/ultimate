@@ -22,6 +22,7 @@ import { overshadowed, retriedLater, settled } from '../../lib/errors.ts'
 import { needsRestart as restartNeeded } from '../../lib/layers.ts'
 import { readSettings, userSettingsPath } from '../../lib/settings.ts'
 import { quoteMentions } from '../../lib/mentions.ts'
+import { formatDuration } from '../../lib/format.ts'
 import { runGroup, sweepPidFiles } from '../../lib/process-group.ts'
 import { landingWeight } from '../../lib/token-weight.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
@@ -153,11 +154,10 @@ export const limitsFor = (check: Check, limits: CheckLimits): CheckLimits => {
   return { stall, total }
 }
 const vitestFailureLine = /^\s*(FAIL|×|✗)\s/
-const seconds = (value: number) => (value < 60 ? `${value} s` : `${+(value / 60).toFixed(1)} min`)
 const slowShareOfLimit = 0.8
 export const slowNote = (command: string, ms: number, limits: CheckLimits) =>
   ms > limits.total * 1000 * slowShareOfLimit
-    ? `${command} · ${seconds(Math.round(ms / 1000))} of ${seconds(limits.total)} (${Math.round(ms / limits.total / 10)} %)`
+    ? `${command} · ${formatDuration(ms)} of ${formatDuration(limits.total * 1000)} (${Math.round(ms / limits.total / 10)} %)`
     : undefined
 
 export const checkPids = (home: string) => join(home, 'lander-checks')
@@ -198,11 +198,12 @@ export async function runLanderCheck(
     stopped = reason
     watchdog.abort()
   }
-  const stalled = () => stop(`Stalled: no output for ${seconds(limits.stall)}, stopped`)
+  const stalled = () =>
+    stop(`Stalled: no output for ${formatDuration(limits.stall * 1000)}, stopped`)
   const stallDeadline = debounce(limits.stall * 1000, stalled)
   stallDeadline()
   const cancelTotal = deadline(limits.total * 1000, () =>
-    stop(`Timed out after ${seconds(limits.total)}`),
+    stop(`Timed out after ${formatDuration(limits.total * 1000)}`),
   )
   const report = (reason: string, heading: string) => {
     const tests = [...failed].slice(-20)

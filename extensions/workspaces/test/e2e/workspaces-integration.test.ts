@@ -33,13 +33,14 @@ import { LineageApi, Roots } from '../../../lineage/api.ts'
 import {
   actions as conversationActions,
   concludeIn,
-  concludedIn,
   subject,
 } from '../../../conversations/server.ts'
+import { concludedIn } from '../../../conversations/projection.ts'
 import { ConversationsApi } from '../../../conversations/api.ts'
 import type { ConversationsService } from '../../../conversations/api.ts'
 import { setAutomaticSummaries, Summaries } from '../../../conversations/summary.ts'
 import { setStanding } from '../../../conversations/server.ts'
+import { SubmitAfter, submitAfter } from '../../../conversations/submit.ts'
 import self from '../../../self/server.ts'
 import messagesExtension from '../../../messages/server.ts'
 import { Messages, MessagesApi } from '../../../messages/api.ts'
@@ -47,11 +48,11 @@ import { Serving, Started } from '../../../messages/addresses.ts'
 import promptExtension, { order as promptOrder } from '../../../prompt/server.ts'
 import subagents from '../../../subagents/server.ts'
 import { Standing, Subagents } from '../../../subagents/api.ts'
-import { seedTally, temp, until } from '../../../../test/helpers.ts'
+import { openers, seedTally, temp, until } from '../../../../test/helpers.ts'
 
 /** The part of the conversations service a test stands in for; standing a lander turns its summaries off and marks it standing. */
 const conversations = (service: Partial<ConversationsService>) =>
-  ({ setAutomaticSummaries, setStanding, ...service }) as ConversationsService
+  ({ setAutomaticSummaries, setStanding, submitAfter, ...service }) as ConversationsService
 
 // Every test has its own repository and harness, so they all run concurrently; fixtures close when the file ends.
 vi.setConfig({ maxConcurrency: 16 })
@@ -135,8 +136,14 @@ async function fixture(
   const restart = vi.fn<ExtensionHost['restart']>(async () => 'RESTART_CALLED')
   const notice = vi.fn<ExtensionHost['notice']>()
   // As the server: openers run each time the harness opens, cleanups each time it closes.
-  const openers: (() => Promise<void>)[] = []
+  const lifecycle = openers()
   const closers: (() => Promise<void>)[] = []
+  const lateStops: (() => Promise<void>)[] = []
+  const closeAll = async () => {
+    for (const stop of lateStops.splice(0)) await stop()
+    await lifecycle.close()
+    for (const close of closers) await close()
+  }
   const lookup = ({ name }: { name: string }) => services.get(name)
   // As the server: the real event log, and reactors that run while the harness is open.
   const events = eventLog(
@@ -152,10 +159,15 @@ async function fixture(
     eventLog: events.eventLog,
     react: (...[name, tokens, handler]: Parameters<typeof events.reactor>) => {
       const reactor = events.reactor(name, tokens, handler)
-      openers.push(reactor.start)
-      closers.push(reactor.stop)
-      // oxlint-disable-next-line typescript/no-floating-promises -- reactor start waits for its drain chain, which records handler failures rather than rejecting.
-      if (started) void reactor.start()
+      lifecycle.onOpen(async (thisOpen) => {
+        thisOpen.defer(reactor.stop)
+        await reactor.start()
+      })
+      if (started) {
+        lateStops.push(reactor.stop)
+        // oxlint-disable-next-line typescript/no-floating-promises -- reactor start waits for its drain chain, which records handler failures rather than rejecting.
+        void reactor.start()
+      }
     },
     implement: (api: { name: string }, value: unknown) => {
       services.set(api.name, value)
@@ -171,7 +183,7 @@ async function fixture(
     },
     restart,
     notice,
-    onOpen: (callback: () => Promise<void>) => openers.push(callback),
+    onOpen: lifecycle.onOpen,
     onClose: (close: () => Promise<void>) => closers.push(close),
     doc: () => undefined,
     conversations: () => [],
@@ -191,6 +203,7 @@ async function fixture(
   const service = workspaces(host)
   if (messagesEnabled) prepared.registry.install(messagesExtension(host))
   prepared.registry.install(workspaceExtension(host))
+  prepared.registry.install(defineExtension({ name: 'conversations', tasks: [SubmitAfter] }))
   prepared.registry.install(self(host))
   prepared.registry.install(subagents(host))
   prepared.registry.install(CodingTools)
@@ -246,10 +259,10 @@ async function fixture(
   }
   prepared.faux!.setResponses([route])
   opened = await prepared.open()
-  for (const open of openers) await open()
+  await lifecycle.open()
   started = true
   cleanup.push(async () => {
-    for (const close of closers) await close()
+    await closeAll()
     await opened.close()
   })
   const create = async () => {
@@ -289,10 +302,10 @@ async function fixture(
     },
     asked,
     reopen: async () => {
-      for (const close of closers) await close()
+      await closeAll()
       await opened.close()
       opened = await prepared.open()
-      for (const open of openers) await open()
+      await lifecycle.open()
     },
   }
 }

@@ -21,7 +21,7 @@ import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { Branches, WorkspacesApi } from '../workspaces/api.ts'
 import { Standing, SubagentsApi } from '../subagents/api.ts'
-import { LineageApi } from '../lineage/api.ts'
+import { LineageApi, Replies } from '../lineage/api.ts'
 import { Messages, MessagesApi } from './api.ts'
 import { gist, openQuestion, openQuestionsNote, questionsParameter } from './questions.ts'
 import { callerOf } from './caller.ts'
@@ -35,7 +35,6 @@ import { isFront, owed, parentOf, Serving, Started, starterOf } from './addresse
 import { Concluded } from '../conversations/api.ts'
 import { dropped } from './outcomes.ts'
 import { delivery, reconcileOutputs, retireOutput, settle, submitOutput } from './delivery.ts'
-import { notice } from './notice.ts'
 import { receiptOf, send } from './send.ts'
 import type { Device } from '../../shared/events.ts'
 import type { Context } from '@earendil-works/chord/context'
@@ -267,6 +266,14 @@ export default function messages(host: ExtensionHost) {
       await submitOutput(host, tx, to, input, { kind: 'branch', id }, `#${id}`, `landing:${result}`)
     },
   })
+  host.implement(Replies, {
+    replied: async (from, to, entry, ctx) =>
+      Boolean(
+        (await host.harness().snapshot(Messages, ROOT_CONVERSATION_ID, ctx))?.messages.some(
+          (m) => m.from === from && m.to === to && m.answer === entry,
+        ),
+      ),
+  })
   host.implement(MessagesApi, {
     answer: (messageId, text, ctx, device, call) =>
       answer(host, messageId, text, ctx, { device, call }),
@@ -288,7 +295,7 @@ export default function messages(host: ExtensionHost) {
   })
   return defineExtension({
     name: 'messages',
-    tasks: [delivery(host), route(host), settle(host), notice(host), tellTask(host)],
+    tasks: [delivery(host), route(host), settle(host), tellTask(host)],
     hooks: [
       hook(GenerationTask, {
         // Pi upstream: @earendil-works/pi-durable@1.6.0 — patched transactional beforeInput hook.
@@ -340,7 +347,7 @@ export default function messages(host: ExtensionHost) {
         const upward =
           starter === undefined
             ? ''
-            : ` #${starter} started you: when you stop with nothing under way (no subagent, landing or reply pending), your final answer goes to it and wakes it; while work is under way it arrives as a note, and so do your one-way messages to it.`
+            : ` #${starter} started you: when you stop with nothing under way (no subagent, landing or reply pending), your final answer goes to it and wakes it; while work is under way, or when the run answered only the user's own input, it arrives as a note, and so do your one-way messages to it.`
         return `Use message to contact #id or @name. Any conversation except a subagent may message user. Messages wake their recipient; its answer returns as a reply and wakes you. End your turn instead of waiting. A one-way message (reply: false) gets no answer; use reply: true when you need one. Inputs identify their sender; answer here and your answer is sent to the sender automatically; do not use message to reply. A message to an agent whose message you still owe an answer becomes that answer and ends your run; use it only to attach images.${upward}\n${agents.map((a) => `@${a.name} — ${a.description}`).join('\n')}`
       }),
 

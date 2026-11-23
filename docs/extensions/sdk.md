@@ -9,7 +9,6 @@ An extension's `web.solid.tsx` contributes plain Solid components. Import SDK fe
 `Card` and `Fold`. See [Surfaces](surfaces.md#primitives) for layout and [Contracts](contracts.md#web-points) for points.
 
 ```tsx
-/** @jsxImportSource @solidjs/web */
 import { defineWebExtension } from '@/sdk/solid'
 import { Status } from './status.solid.tsx'
 
@@ -17,8 +16,7 @@ export default defineWebExtension({ slots: { 'statusline.left': Status } })
 ```
 
 Use `@/components/ui/<name>.solid.tsx` for controls, `@/components/markdown/markdown.solid.tsx` for Markdown,
-`@/components/json-tree.solid.tsx` for JSON and `@lucide/solid` for icons. Other SDK paths are internal. For React
-facets outside the repository, see [React compatibility](react-compat.md).
+`@/components/json-tree.solid.tsx` for JSON and `@lucide/solid` for icons. Other SDK paths are internal.
 
 Never call `fetch` or open an `EventSource` to reach Ultimate (`ultimate/no-raw-stream`). The SDK keeps one live stream
 per tab, carrying subscriptions for the shown conversation and any others watched with `useDocOf`. Call server code

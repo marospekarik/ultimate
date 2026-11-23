@@ -49,5 +49,5 @@ paused (out of credits, a refused key), marks already judged stay and no new PR 
 
 `pull-requests` (a personal extension in `~/.ultimate/extensions`) declares the point `pull-requests.mark` in its
 `ui.tsx`. A project extension cannot import a user extension's file (they live in different folders and the import
-rules only allow contract imports within one tree), so `web.tsx` declares the same point by name; points match by
+rules only allow contract imports within one tree), so `web.solid.tsx` declares the same point by name; points match by
 their string. Server-side it reads the PRs with `gh` directly and wants `ClassifyApi`.

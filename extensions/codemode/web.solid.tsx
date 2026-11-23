@@ -1,4 +1,3 @@
-/** @jsxImportSource @solidjs/web */
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { DatabaseIcon } from '@lucide/solid'
 import { defineWebExtension, MessageReference, provide } from '@/sdk/solid'
@@ -14,7 +13,7 @@ export default defineWebExtension({
   toolLines: { codemode: CodemodeLine },
   documents: [
     {
-      kind: 'codemode.store',
+      kind: 'pi.codemode.store',
       title: 'Store',
       icon: DatabaseIcon,
       component: StoreDocument,

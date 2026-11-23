@@ -317,7 +317,7 @@ const Task = defineTask({ name: 'teardown.task', version: 1, initial: () => ({ p
   abort: (_task, runtime, ctx) => runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx) })
 const Released = defineDoc({ kind: 'teardown.released', checkpointWhen: () => false, version: 1, scope: 'conversation', history: 'latest', fork: 'initial', initial: () => ({ at: 0 }) })
 export const docs = [Released]
-export default h => { host = h; h.implement(Probe, { ping: () => true }); h.onRelease(() => h.harness().commit(async tx => { (await tx.doc(Released, ROOT_CONVERSATION_ID)).at = 1 }, BACKGROUND_CONTEXT)); h.onClose(async () => { writeFileSync(h.userHome + '/closed', ''); gate.resolve(); await new Promise(r => setImmediate(r)) }); return defineExtension({ name: 'teardown', tasks: [Task] }) }
+export default h => { host = h; h.implement(Probe, { ping: () => true }); h.onOpen(async (opened) => { opened.defer(() => h.harness().commit(async tx => { (await tx.doc(Released, ROOT_CONVERSATION_ID)).at = 1 }, BACKGROUND_CONTEXT)) }); h.onClose(async () => { writeFileSync(h.userHome + '/closed', ''); gate.resolve(); await new Promise(r => setImmediate(r)) }); return defineExtension({ name: 'teardown', tasks: [Task] }) }
 export const actions = {
   start: async () => { await host.harness().commit(tx => tx.createTask(Task, null, { conversationId: ROOT_CONVERSATION_ID, ownership: { kind: 'conversation' }, background: true }), BACKGROUND_CONTEXT); return true },
   started: async () => started,
@@ -1292,13 +1292,13 @@ export const actions = { list: async (_args, ctx) => ctx.host.conversations() }`
     const stream = await attach(server, { docs: ['models.login'] })
     const action = (name: string, args: unknown, conversationId = 1) =>
       post(server, `/api/extensions/models/actions/${name}`, { args, conversationId })
-    const flows = async (id = 1) =>
-      (await server.harness.snapshot(Logins, id as ConversationId, context))?.flows ?? {}
+    const flows = async () =>
+      (await server.harness.snapshot(Logins, 1 as ConversationId, context))?.flows ?? {}
     const login = async (conversationId = 1) => {
       const response = await action('login', { provider: 'stub', type: 'api_key' }, conversationId)
       expect(response.status).toBe(200)
       const flowId = String(response.data.result.flowId)
-      await until(async () => (await flows(conversationId))[flowId]?.prompt?.type === 'secret')
+      await until(async () => (await flows())[flowId]?.prompt?.type === 'secret')
       return flowId
     }
     const first = await login()
@@ -1317,12 +1317,12 @@ export const actions = { list: async (_args, ctx) => ctx.host.conversations() }`
     expect((await action('answer', { flowId: blank, value: '' })).status).toBe(200)
     await until(async () => (await flows())[blank].status === 'complete')
     expect(answered).toBe('')
-    // A flow lives in the document of the conversation that started it.
+    // Logins are machine-wide: a flow started from any conversation lives on the root.
     const other = Number((await post(server, '/api/conversations', {})).data.id)
     const second = await login(other)
     expect((await action('cancel', { flowId: second })).status).toBe(200)
-    await until(async () => (await flows(other))[second].status === 'cancel')
-    expect((await flows(other))[second].prompt).toBeUndefined()
+    await until(async () => (await flows())[second].status === 'cancel')
+    expect((await flows())[second].prompt).toBeUndefined()
     expect((await action('answer', { flowId: second, value: 'late-credential' })).data).toEqual({
       error: 'Unknown login flow',
     })

@@ -37,7 +37,10 @@ report.**
 - **Reports.** After each run of a branch, its final answer goes to its starter, unless it already returned as a reply.
   When nothing of the branch is under way (no run, queued input, busy subagent, pending submission or open
   reply-enabled message), it goes as a one-way message with `report: true`, which wakes the starter; otherwise as a
-  note, since the branch will run again. A landing concludes the branch and wakes the starter itself, asking through
+  note, since the branch will run again. A run that answered only the user's own input (typed or spoken in the
+  branch, or a review of its diff) is a note too: the user read it where they asked, and a report would wake the
+  starter for nothing. Their answer to one of the branch's questions is a decision the starter acts on, so the
+  answer to it reports. A landing concludes the branch and wakes the starter itself, asking through
   the `workspaces.branches` point this extension provides (`starter`, `underway`).
 - **Answers back down.** The primary agent's or a front's final answer goes to each branch whose reply or report was an input of
   that run (not concluded, not messaged in the run) with `routed: true`, so a weigh-in reaches the branch. The run's
@@ -111,7 +114,7 @@ open question, and `tell`, `remember`, side chats and hands-off goals stay @ulti
 One @ultimate can message another project's @ultimate, on this machine or over the tailnet; nothing else crosses, and the
 message is never the user's.
 
-- **Sender:** codemode `ultimate.tell({ project, text, reply? })` (@ultimate only) posts the target's `messages.remote`
+- **Sender:** codemode `tools.tell({ project, text, reply? })` (@ultimate only) posts the target's `messages.remote`
   action, located as codemode's `{ project }` reads are (`lib/remote.ts`). A failed post throws a sentence naming the
   project and machine. Telling an Ultimate whose question to you is still open is refused: answer it instead.
 - **Target:** `messages.remote { key, text, reply, from: { project, machine } }` delivers to its own primary agent only,

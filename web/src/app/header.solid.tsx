@@ -1,4 +1,3 @@
-/** @jsxImportSource @solidjs/web */
 import { PanelLeft, PanelRight } from '@lucide/solid'
 import type { JSX } from '@solidjs/web'
 import { cn } from 'cn'
@@ -159,7 +158,7 @@ export function Header(props: { children?: JSX.Element }) {
         </Show>
       </div>
       <div class="ml-auto flex items-center gap-1">
-        <Slot fallback={inlineFailure} name="header.right" variant="inline" />
+        <Slot fallback={inlineFailure} name="header.right" />
         <Show when={panels()}>
           <IconButton
             active={panelOpen()}
