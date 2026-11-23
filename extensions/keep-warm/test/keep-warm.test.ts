@@ -56,11 +56,13 @@ it('counts only answers that read or wrote an hour-long cache', () => {
       usage: { cacheRead: 500_000, cacheWrite: 2_000 },
       ...change,
     }) as unknown as Parameters<typeof keepWarm.cached>[0]
+  vi.stubEnv('PI_CACHE_RETENTION', '')
   expect(keepWarm.cached(answer({}))).toBe(true)
   expect(keepWarm.cached(answer({ stopReason: 'error' }))).toBe(false)
   expect(keepWarm.cached(answer({ provider: 'openai-codex' }))).toBe(false)
   expect(keepWarm.cached(answer({ provider: 'anthropic' }))).toBe(false)
   expect(keepWarm.cached(answer({ usage: { cacheRead: 0, cacheWrite: 0 } }))).toBe(false)
+  vi.unstubAllEnvs()
 })
 
 it('counts a ping only on the provider and model it warmed', () => {

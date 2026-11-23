@@ -14,7 +14,8 @@ import type { ExtensionHost } from '../../../server/extensions.ts'
 import { UserInputEvent } from '../../../shared/events.ts'
 import { Standing } from '../../subagents/api.ts'
 import { apis, eventHost, openers, until } from '../../../test/helpers.ts'
-import { LEAD } from '../due.ts'
+import { ContextUsageDoc } from '../../conversations/api.ts'
+import { LEAD, PRECOLD } from '../due.ts'
 import keepWarm, { docs } from '../server.ts'
 
 const cleanups: (() => Promise<void>)[] = []
@@ -113,6 +114,17 @@ async function fixture() {
         .submit({ type: 'input', content: 'hi' }, context)
         .then((submission) => submission.wait(context))
     },
+    turnOff: () =>
+      harness.commit(async (tx) => {
+        ;(await tx.doc(docs[0], ROOT_CONVERSATION_ID)).off = true
+      }, context),
+    setTokens: (tokens: number) =>
+      harness.commit(async (tx) => {
+        ;(await tx.doc(ContextUsageDoc, ultimate)).tokens = tokens
+      }, context),
+    compactions: async () =>
+      (await harness.commit((tx) => tx.scanTasks({ kind: 'pi.compaction' }, 100), context)).items
+        .length,
     reopen: async () => {
       await events.stop()
       await lifecycle.close()
@@ -185,4 +197,21 @@ it('plans from the model selected while a ping was in flight', async () => {
   const [waker] = await f.sleeping()
   expect(waker.state).toMatchObject({ until: second + LEAD })
   expect((await f.doc()).last).toMatchObject({ at: first + LEAD, model: 'faux-1' })
+})
+
+it('compacts a large context once before the cache goes cold when no ping will renew it', async () => {
+  const f = await fixture()
+  await f.turnOff()
+  await f.input(f.ultimate)
+  const answeredAt = f.now()
+  await f.setTokens(200_000)
+  const [waker] = await f.sleeping()
+  expect(waker.state).toMatchObject({ until: answeredAt + PRECOLD })
+
+  await f.advance(PRECOLD)
+  await until(async () => (await f.compactions()) === 1)
+  expect((await f.doc()).precold).toBe(answeredAt)
+  expect((await f.doc()).pings).toBeUndefined()
+  await f.advance(LEAD)
+  expect(await f.compactions()).toBe(1)
 })
