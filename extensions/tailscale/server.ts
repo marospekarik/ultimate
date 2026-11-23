@@ -3,7 +3,6 @@ import { acquireLock, alive } from '../../lib/lock.ts'
 import { projectHome } from '../../lib/project-paths.ts'
 import { access, mkdir } from 'node:fs/promises'
 import { constants, existsSync } from 'node:fs'
-import { BlockList, isIP } from 'node:net'
 import { join } from 'node:path'
 import { defineExtension } from '@earendil-works/pi-durable'
 import { exec } from '../../lib/exec.ts'
@@ -16,17 +15,6 @@ import { TailscaleApi } from './api.ts'
 import type { Status } from './api.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { RetryAction, StatusAction } from './refs.ts'
-const tailnet = new BlockList()
-tailnet.addSubnet('100.64.0.0', 10, 'ipv4')
-tailnet.addSubnet('fd7a:115c:a1e0::', 48, 'ipv6')
-
-function tailnetAddress(header: string | string[] | undefined) {
-  const address = [header ?? []].flat().join(',').split(',').at(-1)?.trim() ?? ''
-  const family = isIP(address)
-  if (!family) return undefined
-  return tailnet.check(address, family === 4 ? 'ipv4' : 'ipv6') ? address : undefined
-}
-
 interface Serve {
   TCP?: Record<string, unknown>
   Web?: Record<string, { Handlers?: Record<string, { Proxy?: string }> }>
@@ -296,9 +284,7 @@ export default function tailscale(host: ExtensionHost) {
               if (allow) ready = { state: 'ready', url, allow }
               if (allow && status.state === 'ready') set(ready!)
             }
-            if (!allow?.includes(login)) return undefined
-            const address = tailnetAddress(headers['x-forwarded-for'])
-            return { login, ...(address && { address }) }
+            return allow?.includes(login) ? { login } : undefined
           },
         })
         ready = allow

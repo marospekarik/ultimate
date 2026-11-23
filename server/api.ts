@@ -43,7 +43,6 @@ import { clampThinkingLevel, getSupportedThinkingLevels } from '@earendil-works/
 import { Metadata } from './metadata.ts'
 import { EVENT_LOG_LABEL, emit, uiChange } from './events.ts'
 import { ChangedEvent, UserInputEvent } from '../shared/events.ts'
-import type { Device } from '../shared/events.ts'
 import { admit, deviceOf, sourceOf } from './request-security.ts'
 import type { Access } from './request-security.ts'
 import { conversationIndex } from './project.ts'
@@ -197,7 +196,6 @@ async function runAction(
   reads: Reads,
   [, name, key]: RegExpExecArray,
   data: Record<string, unknown>,
-  device: Device,
 ) {
   if (!browserRequest(request)) {
     const { error, rev } = reads.refused(403, 'Extension actions require a browser request')
@@ -239,7 +237,7 @@ async function runAction(
       controller.signal,
       id === undefined ? undefined : parseConversationId(id),
       'ui',
-      device,
+      deviceOf(request.headers),
       sourceOf(request.headers),
     )
     const current = publish({ result: result ?? null })
@@ -562,12 +560,10 @@ export async function createApi(
       if (!url.pathname.startsWith('/api/')) return false
       const json = (status: number, data: unknown) => reply(response, status, data)
       try {
-        const identity = await admit(
-          request,
-          new URL(system.current().process.url).port || '80',
-          access.rules,
+        if (
+          !(await admit(request, new URL(system.current().process.url).port || '80', access.rules))
         )
-        if (!identity) throw new HttpError(403, 'Forbidden')
+          throw new HttpError(403, 'Forbidden')
         if (request.method === 'GET' && url.pathname === '/api/events') {
           await stream(request, response)
           return true
@@ -696,15 +692,7 @@ export async function createApi(
         const mediaBodyLimitBytes = 12 * 1024 * 1024
         const data = await body(request, mayCarryMedia ? mediaBodyLimitBytes : undefined)
         if (action) {
-          await runAction(
-            request,
-            response,
-            extensions,
-            reads,
-            action,
-            data,
-            deviceOf(request.headers['user-agent'], identity),
-          )
+          await runAction(request, response, extensions, reads, action, data)
           return true
         }
         if (url.pathname === '/api/ui') {
@@ -714,10 +702,7 @@ export async function createApi(
             throw new HttpError(413, 'Too many UI keys in one write')
           if (tab !== undefined && (typeof tab !== 'string' || tab.length > 64))
             throw new HttpError(400, 'Invalid UI tab')
-          const by = {
-            ...sourceOf(request.headers),
-            ...deviceOf(request.headers['user-agent'], identity),
-          }
+          const by = { ...sourceOf(request.headers), ...deviceOf(request.headers) }
           const rev = await root.commit(async (tx) => {
             const writers = await tx.doc(UiWriters, root.id)
             const ops = requested.filter(({ key, seq }) => {
@@ -886,7 +871,7 @@ export async function createApi(
                       ? { submission: submission.id }
                       : { entry: inputAlreadyCommitted.entry }),
                     length,
-                    ...deviceOf(request.headers['user-agent'], identity),
+                    ...deviceOf(request.headers),
                   }),
                 context,
               )
