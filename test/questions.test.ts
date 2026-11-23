@@ -528,7 +528,9 @@ describe('a front', () => {
     // Its turn starts with its branch's question, not @ultimate's branch's, and the action that settles it.
     const note = (await f.entries(front)).find((e) => e.kind === 'board.open')!
     expect(note.data).toEqual({ ids: [message!.id] })
-    expect(note.model?.[0]?.content).toContain("ultimate.action('messages', 'settle'")
+    expect(note.model?.[0]?.content).toContain(
+      "tools.action({extension: 'messages', action: 'settle'",
+    )
     expect((await f.log()).messages.find((m) => m.re === message!.id)).toMatchObject({
       to: asker,
       via: { conversation: front },
