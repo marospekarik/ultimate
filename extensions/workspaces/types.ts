@@ -43,7 +43,6 @@ export type Landed = {
   commits: string[]
   paths: string[]
   flaky: string[]
-  slow?: string[]
   weight?: Weight
 }
 export type Weight = { added: number; removed: number; tokens: number }
@@ -66,7 +65,6 @@ export type LanderOutcome = {
   commits?: string[]
   paths?: string[]
   flaky?: string[]
-  slow?: string[]
   weight?: Weight
   pr?: PullRequest
   pushed?: PushedRemoteBranch

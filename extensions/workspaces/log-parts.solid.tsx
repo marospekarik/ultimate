@@ -87,9 +87,6 @@ export function OutcomeBody(props: { outcome: LanderOutcome; context: string }) 
       <For each={props.outcome.flaky}>
         {(command) => <p class="text-warning">flaky: {command}</p>}
       </For>
-      <For each={props.outcome.slow}>
-        {(command) => <p class="text-warning">slow: {command}</p>}
-      </For>
       <Show when={props.outcome.needsRestart}>
         <p class="text-warning">Needs restart.</p>
       </Show>
