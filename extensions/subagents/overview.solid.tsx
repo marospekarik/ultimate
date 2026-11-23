@@ -11,7 +11,16 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu.solid.tsx'
-import { cn, errorMessage, notify, shortenPath, useAction, useDialog, useSystem } from '@/sdk/solid'
+import {
+  ROOT,
+  cn,
+  errorMessage,
+  notify,
+  shortenPath,
+  useAction,
+  useDialog,
+  useSystem,
+} from '@/sdk/solid'
 import { Provided } from '@/sdk/parts.solid.tsx'
 import { DEFAULT_FAMILY, familyColor, familyTitle } from '../../lib/families.ts'
 import {
@@ -40,6 +49,7 @@ export function AgentsPanel() {
   const [editing] = useDialog(definitionDialog)
   const system = useSystem()
   const { data, refetch } = useAction(DefinitionsAction, null, {
+    conversation: ROOT,
     on: () => [editing(), system()?.code.sha, system()?.project.settings],
     focus: true,
   })
