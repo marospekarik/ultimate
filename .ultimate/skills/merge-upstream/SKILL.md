@@ -9,6 +9,20 @@ This checkout keeps commits of its own on `main` and has no push access to `orig
 **Update now** already merges by itself when `git merge-tree` predicts no conflict. You are here because it predicted
 some.
 
+## Keep your context small
+
+Every model call rereads your whole context, so on a big merge the context you build, not the merge itself, is the
+cost (#85440: 95 calls growing to 157k tokens took 17% of a Claude 5 h window).
+
+- Get the overview from `git diff --stat` and `git log --oneline HEAD..origin/main`, then read only the conflict hunks
+  (`git diff <file>` while it is unmerged). Never print whole diffs, whole files you don't edit, or whole logs.
+- Cut command output to what decides your next step: `| tail -40` on installs and checks, failures only from tests
+  (`pnpm test <path> 2>&1 | rg -n 'FAIL|Error|✗' | head -40`).
+- A conflict that needs a port or a rewrite (a React facet to Solid, more than about 50 changed lines) goes to a
+  `worker` with a brief: the file, upstream's change, our intent and the check to run. Read its diff and test run, not
+  its whole transcript.
+- Personal-extension checks in step 7 go to one worker together, reporting a table of errors and screenshots.
+
 ## Steps
 
 1. In your worktree: `git fetch origin`, then `git merge origin/main`. Never rebase, reset, stash or force-push.
