@@ -8,6 +8,7 @@ import { afterEach, expect, it } from 'vitest'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { obj } from '@earendil-works/pi-schema'
 import {
+  AgentDoc,
   configure,
   defineExtension,
   defineTool,
@@ -87,7 +88,20 @@ async function fixture() {
     execute: async () => ({ output: [] }),
   })
   prepared.registry.install(CodingTools)
-  prepared.registry.install(defineExtension({ name: 'owned', tools: [tool] }))
+  const scriptOnly = defineTool({
+    name: 'act',
+    description: 'Script-only tool',
+    callers: ['tools'],
+    parameters: obj({}),
+    execute: async () => ({ output: [] }),
+  })
+  const codemode = defineTool({
+    name: 'codemode',
+    description: 'Runs scripts',
+    parameters: obj({}),
+    execute: async () => ({ output: [] }),
+  })
+  prepared.registry.install(defineExtension({ name: 'owned', tools: [tool, scriptOnly, codemode] }))
   let host!: OpenHost
   let service!: SubagentsService
   const lifecycle = openers()
@@ -325,6 +339,35 @@ it('keeps one ownerless standing conversation, refreshes its definition and recr
     },
     { id, agent: 'x', kind: 'standing', model: 'faux/faux-1', thinking: 'off' },
   ])
+})
+
+// #87757: after a restart @ultimate kept the exact tool list stored before codemode's script-only tools existed, so
+// `tools.action` did not exist in its scripts; open refreshed every standing agent but @ultimate.
+it("refreshes an existing @ultimate's tools on open, giving its scripts the script-only tools", async () => {
+  const { service, host, path, reopen } = await fixture()
+  await writeFile(
+    join(path, 'agents/ultimate.md'),
+    '---\nname: ultimate\ndescription: Ultimate\nresident: true\ntools: [read, codemode]\n---\nU\n',
+  )
+  await mkdir(join(path, '.ultimate/agents'), { recursive: true })
+  await writeFile(
+    join(path, '.ultimate/agents/ultimate.md'),
+    '---\nname: ultimate\naddTools: [t]\n---\n',
+  )
+  await reopen()
+  expect(await host.harness.snapshot(Standing, ROOT_CONVERSATION_ID, ctx)).not.toHaveProperty(
+    'ultimate',
+  )
+  const id = await service.standing('ultimate', ctx)
+  await host.harness.commit(async (tx) => {
+    ;(await tx.doc(AgentDoc, id)).tools = ['read', 'codemode']
+  }, ctx)
+  const conversation = (await host.harness.conversation(id, ctx))!
+  expect((await conversation.agent(ctx)).callable.map((tool) => tool.name)).not.toContain('act')
+  await reopen()
+  const agent = await conversation.agent(ctx)
+  expect(agent.tools.map((tool) => tool.name)).toEqual(['read', 'codemode', 't'])
+  expect(agent.callable.map((tool) => tool.name)).toContain('act')
 })
 
 // #568566: a new chapter opened with an empty Standing document, so resident agents vanished until addressed.

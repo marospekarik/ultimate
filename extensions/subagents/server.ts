@@ -893,8 +893,9 @@ export default function subagents(
   }
   host.onOpen(async (opened) => {
     await pruneRetired(BACKGROUND_CONTEXT)
+    const index = await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, BACKGROUND_CONTEXT)
     for (const { name } of await residentDefinitions()) {
-      const eagerResident = name !== 'ultimate'
+      const eagerResident = name !== 'ultimate' || index?.[name] !== undefined
       if (eagerResident)
         await service
           .standing(name, BACKGROUND_CONTEXT)
