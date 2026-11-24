@@ -51,8 +51,9 @@ export const dock = createRoot(() => {
   const [open, setOpen] = useUiState('ext.voice-live.open', false)
   const [holdKeys, setHoldKeys] = useUiState('ext.voice-live.hold', 'mod+shift+space')
   const [collect, setCollect] = useUiState('ext.voice-live.collect', false)
+  const [talkMode, setTalkMode] = useUiState<'hold' | 'tap'>('ext.voice-live.talk', 'hold')
   const [phase, setPhase] = createSignal<Phase>('idle')
-  const [status, setStatus] = createSignal('Hold to talk')
+  const [status, setStatus] = createSignal<string | undefined>()
   const [local, setLocal] = createSignal<Record<string, Local>>({})
   const [cuts, setCuts] = createSignal<Cut[]>([])
   const [error, setError] = createSignal<string | undefined>()
@@ -107,6 +108,8 @@ export const dock = createRoot(() => {
     setHoldKeys,
     collect,
     setCollect,
+    talkMode,
+    setTalkMode,
     open,
     setOpen,
     phase,
@@ -177,7 +180,10 @@ export function settleTranscripts(
 }
 
 export const voiceOpen = () => dock.open()
-export const setVoiceOpen = (open: boolean) => dock.setOpen(open)
+export const setVoiceOpen = (open: boolean) => {
+  if (!open && talking()) void discardRecording()
+  dock.setOpen(open)
+}
 export const playerState = createRoot(() => {
   const [state, setState] = createSignal(dock.player.state.get())
   dock.player.state.subscribe(() => setState(dock.player.state.get()))
@@ -228,6 +234,8 @@ function markCut() {
 let pressing = 0
 let released = 0
 
+export const talking = () => pressing > released || dock.mic.recording()
+
 export async function press() {
   if (dock.mic.recording() || pressing > released) return
   const mine = ++pressing
@@ -253,7 +261,7 @@ export async function press() {
     dock.hold(undefined)
     if (paused) dock.player.resume()
     dock.setPhase('idle')
-    dock.setStatus('Hold to talk')
+    dock.setStatus(undefined)
     return
   }
   dock.setPhase('recording')
@@ -261,6 +269,16 @@ export async function press() {
     dock.held()?.busy ? 'Recording · say something to interrupt' : 'Recording · I hear you',
   )
   dock.cues.press()
+}
+
+async function discardRecording() {
+  released = pressing
+  const held = dock.held()
+  dock.hold(undefined)
+  if (!(await dock.mic.stop())) return
+  if (playerState().paused) dock.player.resume()
+  dock.setPhase(held?.busy ? 'thinking' : 'idle')
+  dock.setStatus(undefined)
 }
 
 export async function release() {
@@ -277,7 +295,11 @@ export async function release() {
     } else {
       dock.setPhase(held?.busy ? 'thinking' : 'idle')
       dock.setStatus(
-        recorded.seconds < 0.6 ? 'Too short: hold while you talk' : 'Heard nothing: check the mic?',
+        recorded.seconds < 0.6
+          ? dock.talkMode() === 'tap'
+            ? 'Too short: tap again when you are done'
+            : 'Too short: hold while you talk'
+          : 'Heard nothing: check the mic?',
       )
     }
     return
@@ -662,11 +684,13 @@ export function useSpeaking(view: () => { turns: TurnView[]; busy: boolean }) {
 }
 
 export function endSession() {
+  released = pressing
+  dock.hold(undefined)
   dock.player.stop()
   void dock.mic.release()
   dock.setLocal({})
   dock.setCuts([])
   dock.setPhase('idle')
-  dock.setStatus('Hold to talk')
+  dock.setStatus(undefined)
   return api.action(EndAction, null)
 }
