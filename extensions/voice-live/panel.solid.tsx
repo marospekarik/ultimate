@@ -24,6 +24,7 @@ import { Button } from '@/components/ui/button.solid.tsx'
 import { Kbd } from '@/components/ui/kbd.solid.tsx'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover.solid.tsx'
 import { Slider } from '@/components/ui/slider.solid.tsx'
+import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control.solid.tsx'
 import { Switch as Toggle } from '@/components/ui/switch.solid.tsx'
 import {
   api,
@@ -36,6 +37,7 @@ import {
   ScopedConversation,
   switchConversation,
   useAction,
+  useEvent,
   useConversationId,
   useConversationSummary,
   useDocOf,
@@ -64,7 +66,9 @@ import {
   voiceOpen,
 } from './dock.solid.tsx'
 import { ModelAction, StatusAction, VoiceForkDoc, VoiceSessionDoc } from './refs.ts'
+import { VOICES } from './voices.ts'
 import { estimate } from './speech.ts'
+
 import { Session, Voicing, Waveform } from './turns.solid.tsx'
 
 const toolbarButton =
@@ -320,6 +324,7 @@ function Settings(props: { model?: boolean }) {
             Sound cues
             <Toggle aria-label="Voice sound cues" bind={[dock.cuesOn, dock.setCuesOn]} />
           </label>
+          <SpeechVoice />
           <label class="flex items-center justify-between gap-3">
             Speed
             <span class="flex items-center gap-2">
@@ -352,6 +357,46 @@ function Settings(props: { model?: boolean }) {
         </div>
       </PopoverContent>
     </Popover>
+  )
+}
+
+function SpeechVoice() {
+  const keyed = () => dock.keyed() === true
+  return (
+    <div class="flex flex-col gap-2">
+      <div class="flex items-center justify-between gap-3">
+        Voice
+        <SegmentedControl
+          aria-label="Speech voice"
+          bind={[() => (dock.openaiOn() ? 'openai' : 'system'), dock.setVoice]}
+        >
+          <SegmentedControlItem value="system">System</SegmentedControlItem>
+          <SegmentedControlItem disabled={!keyed()} value="openai">
+            OpenAI
+          </SegmentedControlItem>
+        </SegmentedControl>
+      </div>
+      <Show when={dock.keyed() === false}>
+        <span class="text-[10.5px] leading-snug text-muted-foreground/70">
+          OpenAI voice needs OPENAI_API_KEY in ⌘K → Secrets
+        </span>
+      </Show>
+      <Show when={dock.openaiOn()}>
+        <SegmentedControl
+          aria-label="OpenAI voice"
+          bind={[dock.openaiVoice, dock.setOpenaiVoice]}
+          class="grid grid-cols-5"
+        >
+          <For each={VOICES}>
+            {(name) => (
+              <SegmentedControlItem class="justify-center" value={name}>
+                {name}
+              </SegmentedControlItem>
+            )}
+          </For>
+        </SegmentedControl>
+      </Show>
+    </div>
   )
 }
 
@@ -605,6 +650,14 @@ export function VoicePanel() {
   const surface = useSurface()
   const shown = useConversationId()
   const summary = useConversationSummary(shown)
+  const status = useAction(StatusAction, null, { conversation: ROOT })
+  useEvent('secrets:changed', () => void status.refetch())
+  createEffect(
+    () => status.data()?.transcribes,
+    (known) => {
+      if (known !== undefined) dock.setKeyed(known)
+    },
+  )
   createEffect(
     () => [surface(), shown(), summary()?.title] as const,
     ([on, conversation, title]) => {
