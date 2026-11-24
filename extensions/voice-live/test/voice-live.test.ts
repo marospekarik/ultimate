@@ -315,6 +315,24 @@ it('a send keeps the draft unless it is admitted, and accepts a screenshot alone
   expect(picture).toBe(200)
 })
 
+it('a recording or turn sent for a session that ended is refused and opens no new one', async () => {
+  const f = await fixture()
+  const first = await f.turn({ key: 'one', text: 'start' })
+  await f.action('end', null)
+  const late = await f.action('record', {
+    audio,
+    mimeType: 'audio/webm',
+    collect: { seconds: 1 },
+    session: first.id,
+  })
+  expect(late.data.error).toContain('This voice session ended')
+  const turn = await f.action('turn', { key: 'late', text: 'after end', session: first.id })
+  expect(turn.data.error).toContain('This voice session ended')
+  expect(
+    (await f.server.harness.snapshot(Session, ROOT_CONVERSATION_ID, context))?.id,
+  ).toBeUndefined()
+})
+
 it('a model picked in the fork itself carries over to the next session', async () => {
   const f = await fixture()
   const first = await f.turn({ key: 'one', text: 'start' })
@@ -384,8 +402,58 @@ it('other tools are blocked, voice_handoff starts @ultimate with a card and the 
     ),
   )
 
-  const after = await f.turn({ key: 'after', text: 'next idea' })
+  const after = await f.turn({ key: 'after', text: 'next idea', session: blocked.id })
   expect(after.id).not.toBe(blocked.id)
+  const stale = await f.action('turn', { key: 'stale', text: 'late', session: blocked.id })
+  expect(stale.data.error).toContain('This voice session ended')
+})
+
+it('a request for a session that handed off and was then ended is refused and opens nothing', async () => {
+  const f = await fixture()
+  const first = await f.turn({ key: 'one', text: 'start' })
+  await f.server.harness.commit(async (tx) => {
+    ;(await tx.doc(Fork, first.id)).handedOff = true
+  }, context)
+  await f.action('end', null)
+  const late = await f.action('turn', { key: 'late', text: 'after end', session: first.id })
+  expect(late.data.error).toContain('This voice session ended')
+  const record = await f.action('record', { audio, mimeType: 'audio/webm', session: first.id })
+  expect(record.data.error).toContain('This voice session ended')
+  expect(
+    (await f.server.harness.snapshot(Session, ROOT_CONVERSATION_ID, context))?.id,
+  ).toBeUndefined()
+})
+
+it('End racing a rollover leaves voice cold, and a stale request never touches the current session', async () => {
+  const f = await fixture()
+  const first = await f.turn({ key: 'one', text: 'start' })
+  await f.server.harness.commit(async (tx) => {
+    ;(await tx.doc(Fork, first.id)).handedOff = true
+  }, context)
+  const [, ended] = await Promise.all([
+    f.action('turn', { key: 'roll', text: 'next', session: first.id }),
+    f.action('end', null),
+  ])
+  expect(ended.status).toBe(200)
+  const after = (await f.server.harness.snapshot(Session, ROOT_CONVERSATION_ID, context))?.id
+  expect(after).toBeUndefined()
+  const late = await f.action('turn', { key: 'late', text: 'late', session: first.id })
+  expect(late.data.error).toContain('This voice session ended')
+  expect(
+    (await f.server.harness.snapshot(Session, ROOT_CONVERSATION_ID, context))?.id,
+  ).toBeUndefined()
+
+  const current = await f.turn({ key: 'current', text: 'now' })
+  await f.server.harness.commit(async (tx) => {
+    ;(await tx.doc(Fork, current.id)).handedOff = true
+  }, context)
+  const stale = await f.action('turn', { key: 'stale', text: 'old', session: first.id })
+  expect(stale.data.error).toContain('This voice session ended')
+  expect(await f.forkOf(current.id)).toMatchObject({ handedOff: true })
+  expect((await f.forkOf(current.id))?.ended).toBeUndefined()
+  expect((await f.server.harness.snapshot(Session, ROOT_CONVERSATION_ID, context))?.id).toBe(
+    current.id,
+  )
 })
 
 it('voice_handoff with `to` reaches a real branch on screen and refuses one off screen or not a branch', async () => {

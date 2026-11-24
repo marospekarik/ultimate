@@ -13,6 +13,13 @@ vi.mock('@/sdk/solid', async () => {
             ? new Promise((resolve) => turns.push(resolve))
             : Promise.resolve({}),
     },
+    composerDraft: () => ({
+      text: '',
+      images: [],
+      files: 0,
+      reserve: () => () => {},
+      subscribe: () => () => {},
+    }),
     errorMessage: String,
     useConversation: () => () => ({ entries: [], live: {}, busy: false }),
     useUiState: (key: string, initial: unknown) =>

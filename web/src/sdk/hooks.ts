@@ -466,10 +466,12 @@ export const { switchConversation, showSurface, runCommand, openPanel, closePane
 export { uncoveredComposer } from './actions.ts'
 /**
  * `fillComposer(id, text)` replaces conversation `id`'s composer draft, `insertIntoComposer(id, text)` inserts at its
- * cursor. `composerImages(id)` reads the images pasted into its composer, and `clear()` removes them once sent unless
- * they changed meanwhile.
+ * cursor. `composerDraft(id)` reads the text, images and number of attached files in its composer (`id` may be a `ComposerTarget`'s `draft` key);
+ * `reserve()` marks the draft as being sent, which locks the box and Enter (undefined when a send already holds it),
+ * and returns `release(sent)`: `'all'` or `'images'` removes what was sent unless it changed meanwhile, nothing keeps
+ * it; `subscribe(listener)` hears every change to that draft.
  */
-export { composerImages, fillComposer, insertIntoComposer } from '../app/drafts.ts'
+export { composerDraft, fillComposer, insertIntoComposer } from '../app/drafts.ts'
 
 /** The conversation `ConversationScope` gives, or the shown one once known. */
 export function useConversationId(): Accessor<ConversationId | undefined> {

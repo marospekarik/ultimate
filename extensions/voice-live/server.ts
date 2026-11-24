@@ -241,19 +241,6 @@ async function checkBranch(
     throw new Error(`#${id} is concluded`)
 }
 
-async function concludeHandedOff(host: ExtensionHost) {
-  const id = (await host.harness().snapshot(Session, ROOT_CONVERSATION_ID, context))?.id
-  if (id === undefined || !(await host.harness().snapshot(Fork, id, context))?.handedOff) return
-  await host.harness().commit(async (tx) => {
-    const session = await tx.doc(Session, ROOT_CONVERSATION_ID)
-    if (session.id !== id) return
-    ;(await tx.doc(Fork, id)).ended = true
-    keepModel(session, await tx.doc(AgentDoc, id))
-    delete session.id
-    await host.need(ConversationsApi).concludeIn(tx, [id], 'user')
-  }, context)
-}
-
 function keepModel(
   session: VoiceSession,
   agent: { model?: { provider: string; modelId: string } },
@@ -261,16 +248,33 @@ function keepModel(
   if (agent.model) session.model = `${agent.model.provider}/${agent.model.modelId}`
 }
 
-async function openSession(host: ExtensionHost) {
+const sessionArg = (value: unknown) => {
+  if (value === undefined) return undefined
+  if (typeof value !== 'number') throw new Error('Expected session as a conversation id')
+  return value as ConversationId
+}
+
+async function openSession(host: ExtensionHost, expected?: ConversationId) {
   const main = (await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, context))?.ultimate
   if (main === undefined) throw new Error('@ultimate is not available')
   const answer = await lastSettledInputAnswer(host, main, context)
-  await concludeHandedOff(host)
-  const model = await voiceModel(host)
+  const configured = await voiceModel(host)
   return host.harness().commit(async (tx) => {
     const session = await tx.doc(Session, ROOT_CONVERSATION_ID)
-    if (session.id !== undefined && !(await tx.doc(Fork, session.id)).ended) return session.id
+    const current = session.id === undefined ? undefined : await tx.doc(Fork, session.id)
+    const open = current !== undefined && !current.ended
+    if (expected !== undefined && (!open || session.id !== expected))
+      throw new Error('This voice session ended; send again')
+    let model = configured
+    if (open && !current.handedOff) return session.id!
     const at = await answerIncludingClosingToolResults(tx, main, answer)
+    if (open) {
+      current.ended = true
+      const handedOff = await tx.doc(AgentDoc, session.id!)
+      keepModel(session, handedOff)
+      model = handedOff.model ?? configured
+      await host.need(ConversationsApi).concludeIn(tx, [session.id!], 'user')
+    }
     const fork = await tx.forkConversation(main, at, { ownership: { kind: 'ownerless' } })
     Object.assign(await tx.doc(Fork, fork.id), { of: main, at, seen: at })
     const agent = await tx.doc(AgentDoc, fork.id)
@@ -399,10 +403,16 @@ export const actions = {
     }
   }),
   record: implementAction(RecordAction, async (args, { host }) => {
-    const { audio, mimeType, collect } = unwrap<{
+    const {
+      audio,
+      mimeType,
+      collect,
+      session: expected,
+    } = unwrap<{
       audio: unknown
       mimeType: unknown
       collect: unknown
+      session: unknown
     }>(args)
     if (
       typeof audio !== 'string' ||
@@ -414,13 +424,15 @@ export const actions = {
     if (Buffer.byteLength(audio, 'base64') > MAX_AUDIO_BYTES)
       throw new Error('The recording is too large')
     const id = randomUUID()
-    const session = await openSession(host)
+    const session = await openSession(host, sessionArg(expected))
     await mkdir(recordings(host, session), { recursive: true })
     await writeFile(recordingPath(host, session, id), JSON.stringify({ data: audio, mimeType }), {
       mode: 0o600,
     })
     const clip = unwrap<{ seconds: unknown; envelope: unknown }>(collect)
     await host.harness().commit(async (tx) => {
+      if ((await tx.doc(Fork, session)).ended)
+        throw new Error('This voice session ended; record again')
       await tx.createTask(
         transcribe(host),
         { session, audio: id },
@@ -438,13 +450,26 @@ export const actions = {
       ]
     }, context)
     host.harness().resume()
-    return { audio: id }
+    return { audio: id, session }
   }),
   open: implementAction(OpenAction, async (_args, { host }) => ({
     conversation: await openSession(host),
   })),
   turn: implementAction(TurnAction, async (args, { host }) => {
-    const { key, text, audio, clips, delivery, seconds, envelope, hint, screen, images } = unwrap<{
+    const {
+      key,
+      text,
+      audio,
+      clips,
+      delivery,
+      seconds,
+      envelope,
+      hint,
+      screen,
+      images,
+      session: expected,
+    } = unwrap<{
+      session: unknown
       key: unknown
       text: unknown
       audio: unknown
@@ -478,7 +503,7 @@ export const actions = {
     if (pictures.length > maxImages) throw new Error(`At most ${maxImages} images`)
     if (!text.trim() && typeof audio !== 'string' && !pictures.length)
       throw new Error('Expected text, a recording or an image')
-    const id = await openSession(host)
+    const id = await openSession(host, sessionArg(expected))
     for (const clip of collected ?? (typeof audio === 'string' ? [audio] : []))
       await readRecording(host, id, clip).catch(() => {
         throw new Error('That recording belongs to an ended session; record again')
@@ -628,6 +653,7 @@ export const actions = {
     if (only)
       await host.harness().commit(async (tx) => {
         const draft = await tx.doc(Fork, id)
+        if (draft.ended) return
         draft.draft = (draft.draft ?? []).filter((clip) => clip.audio !== audio)
       }, context)
     const clips = (fork?.draft ?? [])
@@ -674,22 +700,24 @@ export const actions = {
     return {}
   }),
   end: implementAction(EndAction, async (_args, { host }) => {
-    const id = (await host.harness().snapshot(Session, ROOT_CONVERSATION_ID, context))?.id
-    if (id === undefined) return {}
-    await (await host.harness().conversation(id, context))?.abort(context, { background: true })
-    const ended = await host.harness().commit(async (tx) => {
+    const id = await host.harness().commit(async (tx) => {
       const session = await tx.doc(Session, ROOT_CONVERSATION_ID)
-      if (session.id !== id) return false
-      ;(await tx.doc(Fork, id)).ended = true
-      keepModel(session, await tx.doc(AgentDoc, id))
+      const ending = session.id
+      if (ending === undefined) return undefined
+      const fork = await tx.doc(Fork, ending)
+      fork.ended = true
+      delete fork.draft
+      keepModel(session, await tx.doc(AgentDoc, ending))
       delete session.id
       delete session.of
       delete session.at
       delete session.startedAt
-      await host.need(ConversationsApi).concludeIn(tx, [id], 'user')
-      return true
+      await host.need(ConversationsApi).concludeIn(tx, [ending], 'user')
+      return ending
     }, context)
-    if (ended) await rm(recordings(host, id), { recursive: true, force: true })
+    if (id === undefined) return {}
+    await (await host.harness().conversation(id, context))?.abort(context, { background: true })
+    await rm(recordings(host, id), { recursive: true, force: true })
     return {}
   }),
 }

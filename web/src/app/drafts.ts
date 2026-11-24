@@ -11,8 +11,8 @@ export type Draft = {
   revision: number
 }
 
-const draftsAndSubmissions = new Map<number | undefined, ReturnType<typeof createDraft>>()
-function createDraft(id: number | undefined) {
+const draftsAndSubmissions = new Map<number | string | undefined, ReturnType<typeof createDraft>>()
+function createDraft(id: number | string | undefined) {
   const key = id === undefined ? undefined : `ultimate.draft.${id}`
   let value: Draft = {
     text: key ? (localStorage.getItem(key) ?? '') : '',
@@ -43,7 +43,7 @@ function createDraft(id: number | undefined) {
 
 export type DraftStore = ReturnType<typeof createDraft>
 
-export function getDraft(id: number | undefined) {
+export function getDraft(id: number | string | undefined) {
   if (!draftsAndSubmissions.has(id)) draftsAndSubmissions.set(id, createDraft(id))
   return draftsAndSubmissions.get(id)!
 }
@@ -66,13 +66,26 @@ export function insertIntoComposer(id: number, text: string) {
   requestAnimationFrame(() => editor?.setSelectionRange(cursor, cursor))
 }
 
-export function composerImages(id: number) {
+export function composerDraft(id: number | string) {
   const draft = getDraft(id)
-  const { images } = draft.get()
+  const { text, images, files } = draft.get()
   return {
+    text,
     images: images.map(({ data, mimeType }) => ({ data, mimeType })),
-    clear: () => {
-      if (draft.get().images === images) draft.set({ images: [] })
+    files: files.length,
+    subscribe: draft.subscribe,
+    reserve: () => {
+      if (draft.get().sending) return undefined
+      draft.set({ sending: true })
+      return (sent?: 'all' | 'images') => {
+        if (sent === 'all' && draft.get().text === text) {
+          if (draft.key && localStorage.getItem(draft.key) === text)
+            localStorage.removeItem(draft.key)
+          draft.set({ text: '', revision: draft.get().revision + 1 })
+        }
+        if (sent && draft.get().images === images) draft.set({ images: [] })
+        draft.set({ sending: false })
+      }
     },
   }
 }
