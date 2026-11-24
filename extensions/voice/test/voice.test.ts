@@ -15,15 +15,20 @@ const API = 'https://api.openai.com/v1/audio/transcriptions'
 const reason =
   'Voice needs a ChatGPT login or an OpenAI API key: sign in with ChatGPT, or add OPENAI_API_KEY in ⌘K → Secrets'
 
+const OPENAI = 'https://api.openai.com/v1'
+const GATEWAY = 'https://llm.example.com/v1'
+type Endpoints = { provider?: string; models: { baseUrl: string; type?: 'classifier' }[] }
+
 /**
- * A host holding what the arguments name: an `OPENAI_API_KEY` secret, an API key Pi's `openai` provider holds, and the
- * ChatGPT login's access token in Pi's `openai-codex` provider.
+ * A host holding what the arguments name: an `OPENAI_API_KEY` secret, an API key Pi's `openai` provider holds (served
+ * from `endpoints`), and the ChatGPT login's access token in Pi's `openai-codex` provider.
  */
 async function context({
   secret,
   piKey,
   login,
-}: { secret?: string; piKey?: string; login?: string } = {}) {
+  endpoints = { provider: OPENAI, models: [{ baseUrl: OPENAI }, { baseUrl: '' }] },
+}: { secret?: string; piKey?: string; login?: string; endpoints?: Endpoints } = {}) {
   const userHome = await temp()
   cleanup.push(userHome)
   if (secret) await writeSecret(userHome, 'OPENAI_API_KEY', secret)
@@ -32,6 +37,8 @@ async function context({
       configured: provider === 'openai-codex' ? login !== undefined : piKey !== undefined,
     }),
     isUsingOAuth: () => false,
+    getProvider: () => ({ baseUrl: endpoints.provider }),
+    getAllModels: () => endpoints.models,
     getAuth: async (provider: string) => {
       const token = provider === 'openai-codex' ? login : piKey
       return token ? { auth: { apiKey: token } } : undefined
@@ -161,6 +168,27 @@ it('falls back to an API key Pi holds for openai', async () => {
   expect(await actions.status(null, ctx)).toEqual({ available: true })
   await actions.transcribe(audio, ctx)
   expect(fetch.mock.calls[0][1]?.headers).toEqual({ Authorization: 'Bearer sk-pi' })
+})
+
+it.each<[string, Endpoints]>([
+  ['a custom provider endpoint', { provider: GATEWAY, models: [{ baseUrl: GATEWAY }] }],
+  ['a custom provider with an empty catalog', { provider: GATEWAY, models: [] }],
+  [
+    'one model on a custom endpoint',
+    { provider: OPENAI, models: [{ baseUrl: OPENAI }, { baseUrl: GATEWAY }] },
+  ],
+  [
+    'a classifier on a custom endpoint',
+    { provider: OPENAI, models: [{ baseUrl: GATEWAY, type: 'classifier' }] },
+  ],
+  ['no provider endpoint', { models: [{ baseUrl: '' }] }],
+])('does not send the key Pi holds for openai to OpenAI with %s', async (_, endpoints) => {
+  const fetch = vi.fn<typeof globalThis.fetch>()
+  vi.stubGlobal('fetch', fetch)
+  const ctx = await context({ piKey: 'sk-pi', endpoints })
+  expect(await actions.status(null, ctx)).toMatchObject({ available: false })
+  await expect(actions.transcribe(audio, ctx)).rejects.toThrow('Voice needs a ChatGPT login or an OpenAI API key')
+  expect(fetch).not.toHaveBeenCalled()
 })
 
 it('without a credential: status disables voice and transcribe sends nothing', async () => {
