@@ -118,23 +118,13 @@ export async function send(
     ? `user (settled for them by ${settler}, from what they said in its chat)`
     : await senderName(host, from, ctx)
   const toLabel = await senderName(host, to, ctx)
-  const asker =
-    to === 'user' && input.reply !== false
-      ? from
-      : from === 'user' && answerId !== undefined
-        ? to
-        : undefined
-  let pointerTo: ConversationId | undefined
-  if (
-    typeof asker === 'number' &&
-    asker !== primaryId &&
-    !(asker === from ? front : await isFront(host, standing, asker, ctx))
-  ) {
-    const by = await starterOf(host, asker, ctx)
-    pointerTo = by !== undefined && (await isFront(host, standing, by, ctx)) ? by : primaryId
-  }
-  const pointer =
-    pointerTo === undefined ? undefined : await host.harness().conversation(pointerTo, ctx)
+  const branchStarter = from === 'user' ? await starterOf(host, to, ctx) : starter
+  const watcherId =
+    branchStarter !== undefined && Object.values(standing ?? {}).includes(branchStarter)
+      ? branchStarter
+      : primaryId
+  const watcher =
+    watcherId === undefined ? undefined : await host.harness().conversation(watcherId, ctx)
   return host.harness().commit(async (tx) => {
     const receipt =
       taskId === undefined ? undefined : await tx.doc(AtomicallyCommittedCallReceipts, taskId)
@@ -231,10 +221,10 @@ export async function send(
     })
     if (to === 'user' && message.reply && typeof from === 'number' && callId !== undefined)
       (await tx.doc(AskedCalls, from)).calls.push(callId)
-    if (pointer) {
-      const asked = to === 'user' && typeof from === 'number' && asker === from
+    if (watcherId !== undefined) {
+      const asked = to === 'user' && message.reply && from !== watcherId && typeof from === 'number'
       const answered =
-        from === 'user' && answerId !== undefined && typeof to === 'number' && asker === to
+        from === 'user' && answerId !== undefined && typeof to === 'number' && to !== watcherId
       const notification = asked
         ? {
             kind: 'board.asked' as const,
@@ -262,15 +252,15 @@ export async function send(
                     }),
               },
               content: via
-                ? `${settlerId === pointerTo ? 'You' : settler} settled #${to}'s questions (message ${answerId}) for the user${input.dismiss ? ', closed without an answer' : ''}.`
+                ? `${settlerId === watcherId ? 'You' : settler} settled #${to}'s questions (message ${answerId}) for the user${input.dismiss ? ', closed without an answer' : ''}.`
                 : input.dismiss
                   ? `The user dismissed #${to}'s questions (message ${answerId}).`
                   : `The user answered #${to}'s questions (message ${answerId}):\n${input.text}`,
             }
           : undefined
-      if (notification) {
+      if (notification && watcher) {
         const { kind, data, content } = notification
-        await pointer.submit(tx, {
+        await watcher.submit(tx, {
           type: 'write',
           requestId: `${kind}:${data.message}`,
           entry: { kind, data, model: [{ role: 'user', content, timestamp: Date.now() }] },
