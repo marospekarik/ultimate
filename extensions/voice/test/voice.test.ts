@@ -187,7 +187,9 @@ it.each<[string, Endpoints]>([
   vi.stubGlobal('fetch', fetch)
   const ctx = await context({ piKey: 'sk-pi', endpoints })
   expect(await actions.status(null, ctx)).toMatchObject({ available: false })
-  await expect(actions.transcribe(audio, ctx)).rejects.toThrow('Voice needs a ChatGPT login or an OpenAI API key')
+  await expect(actions.transcribe(audio, ctx)).rejects.toThrow(
+    'Voice needs a ChatGPT login or an OpenAI API key',
+  )
   expect(fetch).not.toHaveBeenCalled()
 })
 
