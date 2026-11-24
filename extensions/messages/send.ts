@@ -222,7 +222,8 @@ export async function send(
     if (to === 'user' && message.reply && typeof from === 'number' && callId !== undefined)
       (await tx.doc(AskedCalls, from)).calls.push(callId)
     if (watcherId !== undefined) {
-      const asked = to === 'user' && message.reply && from !== watcherId && typeof from === 'number'
+      const asked =
+        to === 'user' && message.reply && from !== watcherId && !front && typeof from === 'number'
       const answered =
         from === 'user' && answerId !== undefined && typeof to === 'number' && to !== watcherId
       const notification = asked
