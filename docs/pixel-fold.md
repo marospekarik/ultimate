@@ -9,7 +9,7 @@ surface's layout or anything sized for touch.
 | State              | CSS viewport                                             | Usable with Chrome's bars | `useViewport()` | Tailwind |
 | ------------------ | -------------------------------------------------------- | ------------------------- | --------------- | -------- |
 | Folded (cover)     | 412×901 (DPR ≈ 2.6)                                      | about 412×800             | `phone`         | below sm |
-| Unfolded portrait  | 755×783, crease down the middle                          | about 755×700             | `phone` (< 768) | sm       |
+| Unfolded portrait  | 755×783, crease down the middle                          | about 755×700             | `tablet`        | md       |
 | Unfolded landscape | 783×755                                                  | about 783×680             | `tablet`        | md       |
 | Keyboard open      | width unchanged, height ≈ 450 folded, ≈ 320–400 unfolded |                           | as above        |          |
 
@@ -57,14 +57,24 @@ the same on every surface (`Control+1` … `Control+7`) and at 412×800.
 ### 2. The keyboard leaves no room for the transcript
 
 **Seen:** unfolded with the keyboard open, the header, the context bar, the composer and the status line filled the
-whole visible height.
+whole visible height: 0 px of transcript at 783×320.
+
+**Fix:** on a touch screen at least 45rem wide and under 30rem tall, a focused field hides the title bar, the
+conversation header and the status line (`web/src/index.css`); the transcript gets about 170 px back.
 
 **Check:** `width: 783, height: 320, touch: true`, focus the composer, measure the transcript scroller's height.
 
-### 3. Unfolded portrait gets the phone layout
+### 3. Unfolded portrait got the phone layout
 
-At 755 px `useViewport()` is `phone` (tablet starts at 768): the list overlays instead of docking and lines run to about
-98 characters.
+At 755 px `useViewport()` was `phone` (tablet started at 768): the list overlaid instead of docking and lines ran to
+about 98 characters. **Fix:** `tablet` and Tailwind's `md` both start at 45rem (720 px), the docked list takes at most
+32 % of a tablet's width, and on touch the reading width is 38rem (about 70 characters a line).
+
+### 6. Folding loses the reading position
+
+A width change rewraps every paragraph, so the same `scrollTop` lands far from what the reader was looking at (2689 px
+off after 412 → 755 → 412). The transcript notes the element under its top edge on every scroll and puts it back at
+the same offset when the width changes. `test/e2e/phone-width.test.ts` guards it.
 
 ### 4. The status bar strip
 
@@ -74,7 +84,9 @@ bar's colour in each theme; that is the whole fix, not a shortfall.
 
 ### 5. Text cut off on the right
 
-The status line and the surface tabs are wider than the unfolded screen; they clip without an ellipsis ("Han", "revie").
+The status line and the surface tabs were wider than the unfolded screen and clipped without an ellipsis ("Han",
+"revie"). **Fix:** below `desktop` the status line keeps its phone items and moves the rest behind ⋯; the surface tabs
+scroll sideways.
 
 ## Before you land a layout change
 
