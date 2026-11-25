@@ -116,6 +116,27 @@ async function installPackages(
 const checkoutWriteWaitMs = 60_000
 const cloneInstallWaitMs = 10 * 60_000
 const cloneUpdateWaitMs = 30_000
+const pushAttempts = 3
+
+export async function pushMerged(
+  git: Git,
+  remote: string | undefined,
+  branch: string,
+  retryMs = 2000,
+) {
+  if (!remote || remote === 'origin') return {}
+  let failure = ''
+  for (let attempt = 0; attempt < pushAttempts; attempt++) {
+    if (attempt) await pace(retryMs)
+    try {
+      await git('push', '-q', remote, `HEAD:refs/heads/${branch}`)
+      return { pushed: `${remote} ${(await git('rev-parse', '--short', 'HEAD')).trim()}` }
+    } catch (error) {
+      failure = tail(error)
+    }
+  }
+  return { pushError: failure }
+}
 
 export function loadable(host: ExtensionHost): Promise<void> {
   const shared = reloadSharedState(host)
@@ -429,6 +450,13 @@ async function apply(
   const { install, installError } = await installPackages(host)
   const packagesMatchMergedLockfile = install !== 'failed'
   const checked = merged && packagesMatchMergedLockfile ? await checkAfterMerge(root) : undefined
+  const pushOutcome = merged
+    ? await pushMerged(
+        git,
+        await host.need(WorkspacesApi).pushRemote(),
+        await git('symbolic-ref', '--short', 'HEAD'),
+      )
+    : {}
   const result = {
     ok: true as const,
     from: moved.before.slice(0, 7),
@@ -444,6 +472,7 @@ async function apply(
       ? { fixable: true as const }
       : {}),
     ...(installError ? { installError } : {}),
+    ...pushOutcome,
   }
   if (moved.behind || install !== 'skipped') reloadSharedState(host).updated = result
   if (moved.behind) {
