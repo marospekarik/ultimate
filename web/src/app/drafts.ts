@@ -1,7 +1,13 @@
 import type { DraftFile, PastedImage } from './attachments.ts'
 import { storeFiles, storedFiles, storeImages, storedImages } from './draft-images.ts'
 import { spliced } from './queued.ts'
-import { attached, attachmentLine, splitAttachments } from './attachments.ts'
+import {
+  attached,
+  attachmentLine,
+  splitAttachments,
+  splitTrailingAttachments,
+  withAttachments,
+} from './attachments.ts'
 
 export type Draft = {
   text: string
@@ -32,17 +38,111 @@ function createDraft(id: number | string | undefined) {
         listeners.delete(listener)
       }
     },
-    set: (change: Partial<Draft>) => {
+    set: (change: Partial<Draft>): boolean => {
       const { images, files } = value
       value = { ...value, ...change }
       if (key && value.images !== images) storeImages(key, value.images)
       if (key && value.files !== files) storeFiles(key, value.files)
       for (const listener of listeners) listener()
+      return true
     },
   }
 }
 
 export type DraftStore = ReturnType<typeof createDraft>
+
+export function boundDraft(
+  read: () => string,
+  write: (value: string) => boolean | void,
+  dropUpload: (id: string) => void,
+  pending: (busy: boolean) => void,
+) {
+  let local: Omit<Draft, 'text' | 'files'> & { uploading: DraftFile[] } = {
+    images: [],
+    uploading: [],
+    sending: false,
+    revision: 0,
+  }
+  const listeners = new Set<() => void>()
+  let parsed: { from: string; text: string; files: DraftFile[] } | undefined
+  const ours = new Set<string>()
+  let latest: string | undefined
+  const dropped = new Set<string>()
+  let disposed = false
+  const setUploading = (uploading: DraftFile[]) => {
+    const was = local.uploading.length > 0
+    local = { ...local, uploading }
+    if (was !== uploading.length > 0) pending(uploading.length > 0)
+  }
+  const dropUploads = () => {
+    for (const file of local.uploading) {
+      dropped.add(file.id)
+      dropUpload(file.id)
+    }
+    setUploading([])
+  }
+  const kept = () => {
+    const from = read()
+    if (parsed?.from !== from) {
+      const external = !!parsed && !ours.has(from)
+      if (external || from === latest) ours.clear()
+      if (external) dropUploads()
+      const { text, files } = splitTrailingAttachments(from)
+      parsed = { from, text, files: files.map((file) => ({ ...file, id: file.line ?? file.path })) }
+    }
+    return parsed
+  }
+  const store: DraftStore = {
+    key: undefined,
+    get: (): Draft => {
+      const { text, files } = kept()
+      const { uploading, ...rest } = local
+      return { ...rest, text, files: [...files, ...uploading] }
+    },
+    subscribe: (listener: () => void) => {
+      listeners.add(listener)
+      return () => {
+        listeners.delete(listener)
+      }
+    },
+    set: ({ text, files, ...change }: Partial<Draft>): boolean => {
+      if (disposed) return false
+      let accepted = true
+      let { uploading } = local
+      if (text !== undefined || files !== undefined) {
+        const now = kept()
+        const all = (files ?? [...now.files, ...local.uploading]).filter(
+          (file) => !dropped.has(file.id),
+        )
+        const next = withAttachments(text ?? now.text, all.filter(attached))
+        if (next !== read()) {
+          ours.add(next)
+          latest = next
+          accepted = write(next) !== false
+          if (!accepted) ours.delete(next)
+        }
+        const finished = all.filter(
+          (file) => attached(file) && local.uploading.some((waiting) => waiting.id === file.id),
+        )
+        uploading = all.filter((file) => !attached(file))
+        if (!accepted && finished.length)
+          change = {
+            ...change,
+            error: `Not attached: ${finished.map((file) => file.name).join(', ')}`,
+          }
+      }
+      local = { ...local, ...change }
+      setUploading(uploading)
+      for (const listener of listeners) listener()
+      return accepted
+    },
+  }
+  const dispose = () => {
+    dropUploads()
+    disposed = true
+  }
+  return { ...store, dispose }
+}
 
 export const createLocalDraft = () => createDraft(undefined)
 
@@ -67,10 +167,11 @@ export function getDraft(id: number | string | undefined) {
 }
 
 export function setDraftText(draft: DraftStore, text: string) {
-  draft.set({ text, revision: draft.get().revision + 1 })
-  if (!draft.key) return
+  const accepted = draft.set({ text, revision: draft.get().revision + 1 })
+  if (!draft.key) return accepted
   if (text) localStorage.setItem(draft.key, text)
   else localStorage.removeItem(draft.key)
+  return accepted
 }
 
 export function fillComposer(id: number, text: string) {

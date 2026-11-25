@@ -76,3 +76,30 @@ it('restarts once when facets fail to load while the core is stale, never while 
   await current.settled()
   expect(current.restarts).toHaveLength(0)
 })
+
+it('pushes a merged branch to the lander remote, and nowhere without one', async () => {
+  const calls: string[][] = []
+  const git = async (...args: string[]) => {
+    calls.push(args)
+    return args[0] === 'rev-parse' ? 'abc1234\n' : ''
+  }
+  expect(await update.pushMerged(git, 'fork', 'main')).toEqual({ pushed: 'fork abc1234' })
+  expect(calls[0]).toEqual(['push', '-q', 'fork', 'HEAD:refs/heads/main'])
+  calls.length = 0
+  expect(await update.pushMerged(git, undefined, 'main')).toEqual({})
+  expect(await update.pushMerged(git, 'origin', 'main')).toEqual({})
+  expect(calls).toEqual([])
+})
+
+it('retries a failed push, then reports the error without throwing', async () => {
+  let pushes = 0
+  const flaky = async (...args: string[]) => {
+    if (args[0] === 'push' && ++pushes < 3) throw new Error('HTTP 500')
+    return 'abc1234'
+  }
+  expect(await update.pushMerged(flaky, 'fork', 'main', 0)).toEqual({ pushed: 'fork abc1234' })
+  pushes = -10
+  expect(await update.pushMerged(flaky, 'fork', 'main', 0)).toEqual({
+    pushError: 'Error: HTTP 500',
+  })
+})

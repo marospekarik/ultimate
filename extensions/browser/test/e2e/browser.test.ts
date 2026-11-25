@@ -215,7 +215,7 @@ it('names each match of an ambiguous selector by role and name, and suggests sco
   try {
     const result = await browser.execute(
       {
-        url: `data:text/html,<button class="${wide}">Save</button><button aria-label="Save draft" class="${wide}">Save</button>`,
+        url: `data:text/html,<button class="${wide}">Save</button><button aria-label="Save draft" data-testid="draft" class="${wide}">Save</button><button>Save all</button><button>Save more</button>`,
         steps: [{ click: 'button:has-text("Save")' }],
         screenshot: false,
       },
@@ -224,9 +224,12 @@ it('names each match of an ambiguous selector by role and name, and suggests sco
     )
     expect(result.isError).toBe(true)
     const text = (result.output as { text: string }[])[0].text
-    expect(text).toContain('matches 2 elements')
+    expect(text).toContain('matches 4 elements')
     expect(text).toContain('1) button "Save"')
-    expect(text).toContain('2) button "Save draft"')
+    expect(text).toContain('[test id draft]')
+    expect(text).toContain('3) button "Save all"')
+    expect(text).toContain('and 1 more')
+    expect(text).toContain('getByTestId')
     expect(text).toContain('Scope it')
     expect(text).not.toContain(wide)
   } finally {

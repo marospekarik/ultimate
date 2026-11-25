@@ -1,8 +1,7 @@
 import { ArrowRightIcon, CircleAlertIcon, MessageSquareIcon } from '@lucide/solid'
 import { createSignal } from 'solid-js'
 import { Button } from '@/components/ui/button.solid.tsx'
-import { Textarea } from '@/components/ui/input.solid.tsx'
-import { cn, writingAs } from '@/sdk/solid'
+import { cn, PromptBox, writerNow, writingAs } from '@/sdk/solid'
 import { commentCount, limits } from './comments.ts'
 import type { Drafts } from './drafts.ts'
 
@@ -15,35 +14,48 @@ export function Footer(props: {
 }) {
   const [noting, setNoting] = createSignal(false)
   const [rejected, setRejected] = createSignal(false)
+  const [uploading, setUploading] = createSignal(false)
   const count = () => props.drafts.comments.length
   const over = () => count() > limits.comments
+  const keepNote = (note: string) => {
+    const update = props.update
+    const kept = writingAs('app', () => update((all) => ({ ...all, note })))
+    setRejected(!kept)
+    return kept
+  }
   return (
     <div
       class="shrink-0 border-t border-border/70 bg-sidebar px-3 py-2 md:px-4"
       data-review-footer=""
     >
       {(noting() || props.drafts.note) && (
-        <Textarea
-          aria-label="Overall note"
-          class="mb-2 block max-h-40 min-h-12 w-full resize-y rounded-md border border-border/70 bg-background px-2.5 py-1.5 text-[13px] leading-relaxed outline-none placeholder:text-muted-foreground/50 focus:border-brand/50 focus-visible:ring-0"
-          onValueChange={(note, details) => {
-            const write = () => props.update((all) => ({ ...all, note }))
-            const kept = writingAs('app', write)
-            if (!kept) {
-              details.cancel()
-              const field = details.event?.target
-              if (field instanceof HTMLTextAreaElement) field.value = props.drafts.note
-            }
-            setRejected(!kept)
-          }}
-          placeholder="An overall note for the review (optional)"
-          value={props.drafts.note}
-        />
-      )}
-      {rejected() && (
-        <p class="mb-2 font-mono text-[11.5px] text-error" data-review-refused="" role="alert">
-          Too long to keep as a draft: shorten the note, or send the review first
-        </p>
+        <div class="mb-2">
+          <PromptBox
+            accepts={{ images: false }}
+            autofocus={!props.drafts.note}
+            disabled={props.sending}
+            draft={undefined}
+            label="Overall note"
+            minimal
+            name="the overall review note"
+            onSubmit={() => (over() || uploading() ? Promise.resolve() : props.onSend(writerNow()))}
+            onUploading={setUploading}
+            onValue={keepNote}
+            placeholder="An overall note for the review (optional)"
+            ready={() => count() > 0}
+            sendButton={false}
+            value={props.drafts.note}
+          />
+          {rejected() && (
+            <p
+              class="mt-1 px-1 font-mono text-[11px] text-error"
+              data-review-refused=""
+              role="alert"
+            >
+              Too long to keep as a draft: shorten the note, or send the review first
+            </p>
+          )}
+        </div>
       )}
       {props.error && (
         <p
@@ -89,7 +101,7 @@ export function Footer(props: {
             Discard
           </Button>
           <Button
-            disabled={props.sending || over()}
+            disabled={props.sending || over() || uploading()}
             onClick={(_, details) => props.onSend(details.source)}
             size="xs"
           >

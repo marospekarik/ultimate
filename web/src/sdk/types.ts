@@ -398,7 +398,7 @@ export const Dictation = definePoint<
 >('ultimate.dictation')
 /**
  * What a prompt box's record control gets, beside its attach button: `draft` is the box's draft key (boxes showing one
- * conversation share it), `attach` adds recorded files to that box like a drop (as `source`, `recording` by default; a
+ * conversation share it; a box without one is keyed by its `name`, so give such boxes distinct names), `attach` adds recorded files to that box like a drop (as `source`, `recording` by default; a
  * recording waits for a send in flight, then attaches even to a busy box) and resolves once their uploads settle, false
  * when the box refused them or moved to another draft meanwhile, and
  * `recording` turns the box's hairline red while true. Nothing shows while nothing provides it.
@@ -443,6 +443,8 @@ export interface PromptBoxProps {
   ready?: () => boolean
   /** Before the box's own keys; true when it handled the key. */
   onKeyDown?: (event: KeyboardEvent & { currentTarget: HTMLTextAreaElement }) => boolean
+  /** The send button's label; default `Send prompt to <name>`. */
+  sendLabel?: string
   /** The send button's tooltip; default `Send (Enter)`. */
   sendTitle?: string
   /** Controls at the start of the box's row (model, thinking). */
@@ -457,6 +459,30 @@ export interface PromptBoxProps {
   autofocus?: boolean
   /** `false` hides the dictation control. */
   dictation?: false
+  /**
+   * A light box in one line, text · attach · mic · send, inside its owner's own form, with the error under it.
+   */
+  minimal?: boolean
+  /**
+   * The text the owner keeps, attachment lines included, instead of a `draft`: the box shows it, splits the
+   * attachment lines off as chips and calls `onValue` with the next text; `false` refuses that change. The owner
+   * clears it after a send.
+   */
+  value?: string
+  onValue?: (value: string) => boolean | void
+  /** The textarea's label; default `Prompt for <name>`. */
+  label?: string
+  /** Greys the box out: no typing, attaching, dictating or sending. */
+  disabled?: boolean
+  /** `false` leaves sending to the owner's own button; Enter still calls `onSubmit`. */
+  sendButton?: false
+  /** The textarea element, for the owner to focus it. */
+  ref?: (element: HTMLTextAreaElement) => void
+  /**
+   * With `value`/`onValue`: whether a file is still uploading, for an owner whose own button sends; hold the send until
+   * it is false. A box that unmounts while uploading reports false.
+   */
+  onUploading?: (busy: boolean) => void
 }
 
 /** What a facet provides for a point. */

@@ -3,9 +3,9 @@ import { MessageCircleQuestion } from '@lucide/solid'
 import { createMemo, createSignal, For, onSettled, Show } from 'solid-js'
 import { Button } from '@/components/ui/button.solid.tsx'
 import { Form } from '@/components/ui/form.solid.tsx'
-import { Input, Textarea } from '@/components/ui/input.solid.tsx'
 import { Kbd } from '@/components/ui/kbd.solid.tsx'
 import {
+  PromptBox,
   Provided,
   api,
   cn,
@@ -15,6 +15,7 @@ import {
   useDocOf,
   useUiState,
   useViewport,
+  writerNow,
   writingAs,
   type Point,
 } from '@/sdk/solid'
@@ -42,6 +43,10 @@ import {
 import type { CardState, Draft } from './state.ts'
 
 const CHECK_LANDING_BEFORE_ADVANCE_MS = 320
+
+const caretAtEdge = (field: HTMLTextAreaElement, edge: 'start' | 'end') =>
+  field.selectionStart === field.selectionEnd &&
+  field.selectionStart === (edge === 'start' ? 0 : field.value.length)
 const KEEPALIVE_BYTES = 60 * 1024
 
 export const CardActions: Point<{ message: Message }, JSX.Element> = {
@@ -148,11 +153,15 @@ function AnswerCard(props: CardProps & { id: number }) {
   )
 
   let root!: HTMLDivElement
-  let noteField!: HTMLTextAreaElement
+  let noteField: HTMLTextAreaElement | undefined
   let advance: Cancel | undefined
   let waiting: { cancel: Cancel; fire: () => void } | undefined
   let committed = false
   const [phase, setPhase] = createSignal<Phase>('answering')
+  const [uploads, setUploads] = createSignal<Record<string, boolean>>({})
+  const uploading = () => Object.values(uploads()).some(Boolean)
+  const uploadingIn = (box: string) => (pending: boolean) =>
+    setUploads((all) => ({ ...all, [box]: pending }))
   const [heldDraft, setHeldDraft] = createSignal<Pick<CardState, 'drafts' | 'note'>>()
   const drafts = () => heldDraft()?.drafts ?? state().drafts
   const note = () => heldDraft()?.note ?? state().note
@@ -178,7 +187,7 @@ function AnswerCard(props: CardProps & { id: number }) {
     if (questions()[next]?.kind === 'text')
       requestAnimationFrame(() =>
         root
-          .querySelector<HTMLInputElement>(`[data-question="${next}"] input`)
+          .querySelector<HTMLTextAreaElement>(`[data-question="${next}"] textarea`)
           ?.focus({ preventScroll: true }),
       )
   }
@@ -232,7 +241,7 @@ function AnswerCard(props: CardProps & { id: number }) {
   const send = (immediately = false, source?: string) => {
     const extra = note().trim()
     const answers = ready()
-    if ((!answers.length && !extra) || committed || busy()) return
+    if ((!answers.length && !extra) || committed || busy() || uploading()) return
     const reply = answerRequest()
     committed = true
     advance?.()
@@ -262,23 +271,25 @@ function AnswerCard(props: CardProps & { id: number }) {
     if (phase() === 'undo') return flushAnswer()
     if (locked()) return
     if (beforeLast()) go(current() + 1)
-    else send()
+    else send(false, writerNow())
   }
-  const fieldKey = (event: KeyboardEvent & { currentTarget: HTMLInputElement }) => {
-    if (event.isComposing) return
-    if (event.key === 'Enter') {
+  const fieldKey = (event: KeyboardEvent & { currentTarget: HTMLTextAreaElement }) => {
+    const leavesField =
+      (event.key === 'ArrowUp' && caretAtEdge(event.currentTarget, 'start')) ||
+      (event.key === 'ArrowDown' && caretAtEdge(event.currentTarget, 'end'))
+    if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
       event.stopPropagation()
-      if (event.shiftKey) send(true)
-      else enter()
+      enter()
     } else if (event.key === 'Escape') {
       event.preventDefault()
       event.currentTarget.blur()
-    } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    } else if (leavesField) {
       event.preventDefault()
       event.currentTarget.blur()
       go(current() + (event.key === 'ArrowDown' ? 1 : -1))
-    }
+    } else return false
+    return true
   }
   const onKey = (event: KeyboardEvent) => {
     if (!hints() || !questions().length || (locked() && phase() !== 'undo')) return
@@ -322,7 +333,7 @@ function AnswerCard(props: CardProps & { id: number }) {
       draft(current(), () => ({ chosen: [] }))
     } else if (event.key === '/') {
       event.preventDefault()
-      noteField.focus()
+      noteField?.focus()
     }
   }
   onSettled(() => {
@@ -340,33 +351,40 @@ function AnswerCard(props: CardProps & { id: number }) {
     const shown = questions()[current()]
     return shown ? [0, 1].flatMap((i) => keyOf(shown, i) ?? []) : []
   }
+  const answerText = () => {
+    const reply = answerRequest()
+    const text = state().text.trim()
+    return text && !uploading() ? run(() => reply({ text })) : Promise.resolve()
+  }
   const textOnly = () => (
     <Form
       class={cn(frame(), 'flex flex-wrap items-center gap-2 px-3 py-2.5')}
       data-questions-card={card()}
     >
       <MessageCircleQuestion class="size-3.5 shrink-0 text-brand" />
-      <Input
-        aria-label={`Your answer to message ${props.id}`}
-        placeholder="Your answer…"
-        value={state().text}
-        disabled={busy()}
-        onValueChange={(text) => change((old) => ({ ...old, text }), true)}
-        autocomplete="on"
-        spellcheck
-        class="h-auto min-h-8 flex-1 basis-40 border-border px-2.5 py-1 font-sans text-[13px] placeholder:text-muted-foreground/70 focus-visible:border-brand/60 focus-visible:ring-0 max-md:min-h-11"
-      />
+      <div class="min-w-0 flex-1 basis-40">
+        <PromptBox
+          accepts={{ images: false }}
+          disabled={busy()}
+          draft={undefined}
+          label={`Your answer to message ${props.id}`}
+          minimal
+          name={`the answer to message ${props.id}`}
+          onSubmit={answerText}
+          onUploading={uploadingIn('answer')}
+          onValue={(text) => change((old) => ({ ...old, text }), true)}
+          placeholder="Your answer…"
+          sendButton={false}
+          value={state().text}
+        />
+      </div>
       <Actions disabled={busy()} />
       <Button
         aria-label={`${props.sendLabel ?? 'Send'}: answer to message ${props.id}`}
         size="sm"
         type="submit"
-        disabled={!state().text.trim() || busy()}
-        onClick={() => {
-          const reply = answerRequest()
-          const text = state().text.trim()
-          return run(() => reply({ text }))
-        }}
+        disabled={!state().text.trim() || busy() || uploading()}
+        onClick={answerText}
       >
         {busy() ? 'Sending…' : (props.sendLabel ?? 'Send')}
       </Button>
@@ -417,41 +435,43 @@ function AnswerCard(props: CardProps & { id: number }) {
                   onSelect={(option, pressed) => select(index, option, true, pressed)}
                   onText={(value) => draft(index, (old) => ({ ...old, text: value }), true)}
                   onFieldKey={fieldKey}
+                  onFieldSend={enter}
+                  onUploading={uploadingIn(`question ${index}`)}
                 />
               </div>
             )}
           </For>
         </div>
-        <div class="px-3 pt-2">
-          <div class="relative">
-            <Textarea
-              ref={noteField}
-              data-note
-              aria-label={`A note to send with your answer to message ${props.id}`}
-              placeholder="Anything else? Sent with your answers, or on its own…"
-              rows={1}
-              value={note()}
-              disabled={disabled()}
-              onValueChange={(value) => change((old) => ({ ...old, note: value }), true)}
-              onKeyDown={(event) => {
-                if (event.isComposing) return
-                if (event.key === 'Enter' && !event.shiftKey) {
-                  event.preventDefault()
-                  event.stopPropagation()
-                  send()
-                } else if (event.key === 'Escape') {
-                  event.preventDefault()
-                  event.currentTarget.blur()
-                }
-              }}
-              class="field-sizing-content max-h-40 min-h-9 resize-none border-border/70 bg-background/40 px-2.5 pr-8 leading-snug transition-colors hover:border-border focus:border-brand/60 focus:bg-background focus-visible:ring-0 max-md:min-h-11"
-            />
-            <Show when={hints() && !note()}>
-              <Key class="pointer-events-none absolute top-2.5 right-2.5 bg-transparent text-muted-foreground/60">
-                /
-              </Key>
-            </Show>
-          </div>
+        <div class="relative px-3 pt-2" data-note-box>
+          <PromptBox
+            accepts={{ images: false }}
+            disabled={disabled()}
+            draft={undefined}
+            label={`A note to send with your answer to message ${props.id}`}
+            minimal
+            name={`the note to message ${props.id}`}
+            onKeyDown={(event) => {
+              if (event.key !== 'Escape') return false
+              event.preventDefault()
+              event.currentTarget.blur()
+              return true
+            }}
+            onSubmit={() => Promise.resolve(send(false, writerNow()))}
+            onUploading={uploadingIn('note')}
+            onValue={(value) => change((old) => ({ ...old, note: value }), true)}
+            placeholder="Anything else? Sent with your answers, or on its own…"
+            ready={() => ready().length > 0}
+            ref={(element) => {
+              noteField = element
+            }}
+            sendButton={false}
+            value={note()}
+          />
+          <Show when={hints() && !note()}>
+            <Key class="pointer-events-none absolute top-4 right-14 bg-transparent text-muted-foreground/60">
+              /
+            </Key>
+          </Show>
         </div>
         <div class="flex flex-wrap items-center gap-2 px-3 pt-2 pb-2.5">
           <Show when={hints() && phase() === 'undo'}>
@@ -493,7 +513,7 @@ function AnswerCard(props: CardProps & { id: number }) {
             <SendButton
               messageId={props.id}
               phase={phase()}
-              disabled={(!locked() && !ready().length && !note().trim()) || busy()}
+              disabled={(!locked() && !ready().length && !note().trim()) || busy() || uploading()}
               label={sendLabel()}
               onSend={(source) => send(false, source)}
               onSendNow={() => send(true)}

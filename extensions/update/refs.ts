@@ -78,6 +78,10 @@ export type UpdateResult =
       check?: 'passed' | 'failed'
       /** The check's last output lines when it failed. */
       checkError?: string
+      /** The merged branch was pushed to the lander's push remote: `<remote> <sha>`. */
+      pushed?: string
+      /** The last error of the push, after its retries. */
+      pushError?: string
       /** The check failed and the clone is the project: @ultimate can fix it. */
       fixable?: true
     }

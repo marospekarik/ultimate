@@ -272,6 +272,16 @@ function Popup(
                 <Show when={install().check === 'failed'}>
                   <CheckFailed busy={props.busy} merge={props.merge} updated={install()} />
                 </Show>
+                <Show when={install().pushed}>
+                  {(pushed) => <div class="text-muted-foreground">pushed: {pushed()}</div>}
+                </Show>
+                <Show when={install().pushError}>
+                  {(message) => (
+                    <pre class="max-h-40 overflow-auto whitespace-pre-wrap text-error">
+                      push failed: {message()}
+                    </pre>
+                  )}
+                </Show>
                 <Show when={install().restore}>
                   {(restore) => (
                     <div class="break-all text-muted-foreground">

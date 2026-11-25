@@ -36,6 +36,8 @@ export type WorkspaceService = {
   landingPending(tx: Tx, id: ConversationId): Promise<boolean>
   /** In `tx`, list the result IDs whose live lander still has a concluding card to admit. */
   pendingLandingCards(tx: Tx): Promise<string[]>
+  /** The remote the lander pushes the target branch to, from the user's `landers` settings; undefined when none or in a preview. */
+  pushRemote(): Promise<string | undefined>
   /** Make the project folder a Git repository with a first commit, so worktrees and landing work. */
   setupGit(): Promise<void>
 }

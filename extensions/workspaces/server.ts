@@ -34,7 +34,7 @@ import {
 } from './refs.ts'
 import type { GithubRepo } from './refs.ts'
 import { githubRepo, readGithubRepo } from '../../lib/project-identity.ts'
-import { sweepChecks } from './lander.ts'
+import { landerSettings, sweepChecks } from './lander.ts'
 import { landingPending, pendingLandingCards, Workspaces, workspaces } from './workspaces.ts'
 import { rebuiltOnOpen } from '../../lib/errors.ts'
 export const order = -200
@@ -144,6 +144,7 @@ export default function workspaceExtension(host: ExtensionHost) {
     doc: Workspaces,
     landingPending,
     pendingLandingCards,
+    pushRemote: async () => (await landerSettings(host)).push,
     setupGit: () => setupGit(host),
   })
   host.implement(Release, { release: (ids, caller) => service.release(ids, caller) })
