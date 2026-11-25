@@ -455,10 +455,13 @@ function TranscriptView(props: {
     const noteReading = () => {
       if (scroll.clientWidth !== width) return
       const top = scroll.getBoundingClientRect()
-      const row = document.elementFromPoint(
-        top.left + top.width / 2,
-        top.top + pinned.offsetHeight + 1,
-      )
+      const line = top.top + pinned.offsetHeight + 1
+      let row = document.elementFromPoint(top.left + top.width / 2, line)
+      while (row) {
+        const below = [...row.children].find((child) => child.getBoundingClientRect().bottom > line)
+        if (!below) break
+        row = below
+      }
       if (row && content.contains(row))
         reading = { row, offset: row.getBoundingClientRect().top - top.top }
     }
