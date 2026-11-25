@@ -340,13 +340,7 @@
   }
 }
 
-/* Touch browsers zoom into a focused field set smaller than 16px. Unlayered, so it wins over text utilities. */
 @media (pointer: coarse) {
-  input,
-  textarea,
-  select {
-    font-size: 16px;
-  }
   /* The transcript keeps to about 70 characters a line, the width that reads at arm's length. */
   :root {
     --reading-width: 38rem;
@@ -371,6 +365,15 @@
   .text-\[13\.5px\] {
     font-size: 0.875rem;
   }
+  :is(.text-\[14px\], .text-\[14\.5px\], .text-\[15px\], .text-\[15\.5px\], .text-sm) {
+    font-size: 1rem;
+  }
+  /* Touch browsers zoom into a focused field set smaller than 16px: fields stay at 16px, after the map and more specific
+     than its classes. */
+  :is(input, textarea, select),
+  :is(input, textarea, select)[class] {
+    font-size: 1rem;
+  }
   /* A finger needs 44px: the bars grow to hold controls that size. */
   :is([data-ui='titlebar'], [data-ui='conversation-header']) {
     height: 2.75rem;
@@ -382,10 +385,6 @@
     :is(button, [role='button']) {
     min-width: 2.75rem;
     min-height: 2.75rem;
-  }
-
-  :is(.text-\[14px\], .text-\[14\.5px\], .text-\[15px\], .text-\[15\.5px\], .text-sm) {
-    font-size: 1rem;
   }
 }
 
