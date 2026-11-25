@@ -78,9 +78,14 @@ the same offset when the width changes. `test/e2e/phone-width.test.ts` guards it
 
 ### 4. The status bar strip
 
-An installed PWA with `display: standalone` cannot draw under Android's status bar: only `display: fullscreen` does,
-and that hides the clock and the status icons. The strip takes `theme-color`, so `theme-color` must equal the top
-bar's colour in each theme; that is the whole fix, not a shortfall. The top bar is `--sidebar`, which renders
+An installed PWA with `display: standalone` cannot draw under Android's status bar on stable Chrome (crbug 407420295),
+which left an empty band beside the status bar and camera. Only `display: fullscreen` draws there, so the manifest
+asks for it with `display_override: ["fullscreen"]` and keeps `display: standalone` as the fallback. Android then
+hides the clock and the status icons while the app is open (a swipe from the top shows them); the user accepted that.
+The top bar keeps clear of the camera cutout through `env(safe-area-inset-top)` on `.safe-area` and the drawers, and
+the CSS that keys on the installed app matches both `(display-mode: standalone)` and `(display-mode: fullscreen)`.
+Where the fallback applies, the strip takes `theme-color`, so `theme-color` must equal the top bar's colour in each
+theme. The top bar is `--sidebar`, which renders
 `#0e0e10` dark and `#f2f3f5` light: `web/index.html`, `web/src/sdk/client.ts` and the manifest's `theme_color` carry
 those values and must change with it.
 

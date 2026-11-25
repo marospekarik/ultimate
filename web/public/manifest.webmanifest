@@ -3,6 +3,7 @@
   "short_name": "Ultimate",
   "start_url": "./",
   "scope": "./",
+  "display_override": ["fullscreen"],
   "display": "standalone",
   "background_color": "#111112",
   "theme_color": "#0e0e10",
