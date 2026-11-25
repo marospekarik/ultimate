@@ -80,7 +80,21 @@ the same offset when the width changes. `test/e2e/phone-width.test.ts` guards it
 
 An installed PWA with `display: standalone` cannot draw under Android's status bar: only `display: fullscreen` does,
 and that hides the clock and the status icons. The strip takes `theme-color`, so `theme-color` must equal the top
-bar's colour in each theme; that is the whole fix, not a shortfall.
+bar's colour in each theme; that is the whole fix, not a shortfall. The top bar is `--sidebar`, which renders
+`#0e0e10` dark and `#f2f3f5` light: `web/index.html`, `web/src/sdk/client.ts` and the manifest's `theme_color` carry
+those values and must change with it.
+
+### 7. The Inbox squeezed its reading pane
+
+Unfolded, the docked list (about 250 px) and the Inbox's own 24rem item list left the question about 80 px, one word a
+line. **Fix:** below `desktop` the Inbox shows its list or the open item, as on a phone.
+
+### 8. Desktop density on a finger
+
+One `@media (pointer: coarse)` block in `web/src/index.css` maps the px type classes to rem: meta 13 px, body, prose
+and fields 16 px (a field under 16 px makes the browser zoom in on focus). The title bar and conversation header grow
+to 44 px, and their buttons and the prompt box's reach 44×44. Touch-only sizes in components use `pointer-coarse:`,
+not `max-md:`, since `md` now covers an unfolded fold.
 
 ### 5. Text cut off on the right
 
