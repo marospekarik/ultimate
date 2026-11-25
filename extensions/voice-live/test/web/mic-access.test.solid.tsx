@@ -1,26 +1,17 @@
-import { expect, it, vi } from 'vitest'
-import { dock, press, release, talking } from '../../dock.solid.tsx'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { capture } from '../../../dictation/ui.solid.tsx'
+import { dock, voiceSink } from '../../dock.solid.tsx'
 
-vi.mock('@/sdk/solid', async () => {
-  const { createSignal } = await import('solid-js')
-  return {
-    api: { action: () => Promise.resolve({}) },
-    composerDraft: () => ({
-      text: '',
-      images: [],
-      files: 0,
-      attachments: [],
-      reserve: () => () => {},
-      subscribe: () => () => {},
-    }),
-    errorMessage: String,
-    useConversation: () => () => ({ entries: [], live: {}, busy: false }),
-    useUiState: (key: string, initial: unknown) =>
-      createSignal<unknown>(key === 'ext.voice-live.cues' ? false : initial),
-  }
-})
-vi.stubGlobal('speechSynthesis', { cancel() {}, speak() {} })
-vi.stubGlobal('MediaRecorder', Object)
+let take: ReturnType<typeof capture.press>
+const press = () => {
+  take = capture.press(voiceSink)
+  return take?.started
+}
+const release = () => take!.release()
+const talking = () => capture.talking(voiceSink)
+
+beforeEach(() => vi.stubGlobal('MediaRecorder', Object))
+afterEach(() => vi.unstubAllGlobals())
 
 const denyingBrowser = (userAgent: string) => {
   const getUserMedia = vi.fn<() => Promise<MediaStream>>(() =>
@@ -31,7 +22,7 @@ const denyingBrowser = (userAgent: string) => {
   return getUserMedia
 }
 
-it('a press refused before the mic leaves the talk bar usable for the next press', async () => {
+it('a press refused before the mic leaves the Voice dock usable for the next press', async () => {
   vi.stubGlobal('isSecureContext', false)
   await press()
   expect(dock.error()).toBe('Voice needs HTTPS: open Ultimate over its tailnet URL')
@@ -40,17 +31,19 @@ it('a press refused before the mic leaves the talk bar usable for the next press
   const getUserMedia = denyingBrowser('Mozilla/5.0 (X11; Linux x86_64)')
   await press()
   expect(getUserMedia).toHaveBeenCalledOnce()
-  expect(dock.error()).toBe('Microphone denied: allow it in the browser’s site settings')
+  expect(dock.error()).toBe('Microphone access is blocked: allow it in the browser’s site settings')
   expect(talking()).toBe(false)
   await release()
   expect(dock.phase()).not.toBe('sending')
 })
 
-it('names the app’s web view when it denies the mic', async () => {
+it('the Voice dock names the app’s web view when it denies the mic', async () => {
   denyingBrowser('Mozilla/5.0 (Linux; Android 16; Pixel; wv) AppleWebKit/537.36')
   await press()
   expect(dock.error()).toBe(
     'Microphone denied: this app must declare and grant the microphone to its web view',
   )
   expect(talking()).toBe(false)
+  await release()
+  expect(dock.phase()).not.toBe('sending')
 })

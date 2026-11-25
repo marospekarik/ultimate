@@ -1,0 +1,33 @@
+Dictation: a mic button in every prompt box records speech and puts its transcript into that box at the cursor, unsent.
+
+## How it works
+
+- **Click the mic to start or stop.** On touch or pen, hold the mic or tap to toggle, depending on the Talk mode.
+  While recording the button becomes Cancel, an elapsed clock and Stop, and the box's bottom hairline shows the
+  live voice level. Stop transcribes and inserts at the cursor with spaces as needed, never sending on its own.
+  Escape cancels. Recordings stop themselves after 5 minutes.
+- **Talk shortcut** (Ctrl/⌘+Shift+Space by default) goes to the focused prompt box. With none focused, it talks to
+  Voice if enabled; otherwise it focuses the main composer and dictates there. The cog next to any mic changes
+  the page-wide shortcut and Hold/Tap mode.
+- **Recording** uses `MediaRecorder`: `audio/webm` (Opus) in Chrome and Firefox, `audio/mp4` in Safari, including the
+  installed iOS home-screen app. The page shares one microphone across prompt boxes and Voice mode. It releases the
+  microphone after each recording unless a Voice session is active. The microphone needs a secure page: the tailnet
+  URL or localhost.
+- **Transcription** is the `transcribe` action (`{ audio: base64, mimeType }` → `{ text }`). `server.ts` is the one
+  place that knows both endpoints: the ChatGPT login posts to `https://chatgpt.com/backend-api/transcribe` with
+  `gpt-transcribe`, an API key to OpenAI's documented `https://api.openai.com/v1/audio/transcriptions` with
+  `gpt-4o-mini-transcribe` (`openaiTranscribe` in `lib/openai.ts`). Recordings up to 8 MB are accepted.
+- **Credentials, best first:** the ChatGPT login Pi holds (`openai-codex`, Pi refreshes it), which spends no API
+  credits; then an OpenAI API key: the `OPENAI_API_KEY` secret (⌘K → Secrets), else an API key Pi's `openai` provider
+  holds. Both stay on the server and are never logged or returned. Only a 401, 403 or 429 from the login passes over to
+  the key. Without either, `status` answers `{ available: false, reason }`, the button is dimmed, and tapping it opens
+  the secret's row in the Secrets panel. A completed provider login emits `auth:changed`, which the button answers by
+  asking `status` again.
+
+`chatgpt.com/backend-api/transcribe` is ChatGPT's own endpoint, not a documented API, and the Cloudflare in front of it
+can answer a session it dislikes with a challenge; the API key stays the documented path. Live voice is different: the
+login is refused for OpenAI's live sessions (`HTTP 403 Voice session access denied.`), so `voice-live` needs the key.
+
+The button is the provider of the SDK's `Dictation` point, which every `PromptBox` renders: the box hands it its
+conversation, an `insert` that writes into that same box, a `level` for its hairline and an optional `sink` to receive
+microphone takes instead of transcribing and inserting them.

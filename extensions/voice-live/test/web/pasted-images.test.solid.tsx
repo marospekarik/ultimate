@@ -12,10 +12,10 @@ import {
   dock,
   draftOf,
   endSession,
-  release,
   sendDraft,
   sendTyped,
   settleTranscripts,
+  voiceSink,
 } from '../../dock.solid.tsx'
 
 const harness = vi.hoisted(() => ({
@@ -198,8 +198,7 @@ it('a turn after a recording that opened the session belongs to that session', a
     spoke: true,
     envelope: [],
   }
-  vi.spyOn(dock.mic, 'stop').mockResolvedValueOnce(recorded)
-  await release()
+  await voiceSink.finish(recorded, false)
   await settle()
   expect(harness.turns).toEqual([expect.objectContaining({ session: 41 })])
 })

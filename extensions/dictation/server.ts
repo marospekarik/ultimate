@@ -117,7 +117,7 @@ async function voiceText(host: VoiceHost, signal: AbortSignal, audio: Blob): Pro
   throw new Error(failure(best, first))
 }
 
-export default defineExtension({ name: 'voice' })
+export default defineExtension({ name: 'dictation' })
 
 export const actions = {
   status: implementAction(StatusAction, async (_args, { host, signal }) =>

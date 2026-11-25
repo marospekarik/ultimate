@@ -6,7 +6,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Maximize2,
-  Mic,
   Minimize2,
   Pause,
   Play,
@@ -27,11 +26,11 @@ import { Slider } from '@/components/ui/slider.solid.tsx'
 import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control.solid.tsx'
 import { Switch as Toggle } from '@/components/ui/switch.solid.tsx'
 import {
-  chordOf,
   cn,
   Composer,
   ComposerRedirect,
   composerDraft,
+  PromptBox,
   formatKeys,
   ROOT,
   ScopedConversation,
@@ -48,10 +47,9 @@ import {
 } from '@/sdk/solid'
 import type { ComposerTarget } from '@/sdk/solid'
 import { every } from '../../lib/timers.ts'
+import { shortcut, talkMode } from '../dictation/ui.solid.tsx'
 import {
   activity,
-  cancelRecording,
-  CANCEL_LABEL,
   COLD_DRAFT,
   coldHolds,
   composeIn,
@@ -61,16 +59,14 @@ import {
   draftOf,
   endSession,
   KEYS,
-  press,
-  release,
+  registerVoiceFallback,
   sendDraft,
   sendTyped,
   setScreen,
   setVoiceOpen,
-  talking,
   voiceOpen,
+  voiceSink,
 } from './dock.solid.tsx'
-import { createTalk } from './talk.ts'
 import { StatusAction, VoiceForkDoc, VoiceSessionDoc } from './refs.ts'
 import { VOICES } from './voices.ts'
 import { estimate } from './speech.ts'
@@ -82,19 +78,15 @@ const iconButton =
 const rowButton =
   'h-auto rounded p-0.5 font-normal text-muted-foreground transition-colors hover:text-foreground [&_svg]:size-3'
 const keys = () => formatKeys(KEYS)[0].join('+')
-const holdKeys = () => formatKeys(dock.holdKeys())[0].join('+')
-const tap = () => dock.talkMode() === 'tap'
+const holdKeys = () => formatKeys(shortcut())[0].join('+')
+const tap = () => talkMode() === 'tap'
 const talkVerb = () => (tap() ? 'tap' : 'hold')
-const talkLabel = () => (tap() ? 'Tap to talk' : 'Hold to talk')
-const parseHold = () => dock.holdKeys().trim().toLowerCase()
-const keyChord = (event: KeyboardEvent) =>
-  event.code === 'Space' ? chordOf(event).replace(/ $/, 'space') : chordOf(event)
 
 const recording = () => dock.capturing()
 const working = () => dock.phase() === 'sending' || dock.phase() === 'thinking'
 
 function Status(props: { class?: string }) {
-  const text = () => dock.error() ?? dock.status() ?? talkLabel()
+  const text = () => dock.error() ?? dock.status()
   return (
     <output
       class={cn(
@@ -110,70 +102,9 @@ function Status(props: { class?: string }) {
         <span class="size-1.5 shrink-0 animate-pulse-dot rounded-full bg-error" />
       </Show>
       <Show when={working() && !dock.error()} fallback={<span class="truncate">{text()}</span>}>
-        <Shimmer>{text()}</Shimmer>
+        <Shimmer>{text() ?? ''}</Shimmer>
       </Show>
     </output>
-  )
-}
-
-const talk = createTalk({
-  tap,
-  talking,
-  press,
-  release,
-  cancel: cancelRecording,
-  overCancel: (event) =>
-    [event.relatedTarget, document.elementFromPoint(event.clientX, event.clientY)].some(
-      (target) => target instanceof Element && !!target.closest(`[aria-label="${CANCEL_LABEL}"]`),
-    ),
-  matches: (event) => keyChord(event) === parseHold(),
-  wake: () => {
-    if (!voiceOpen()) setVoiceOpen(true)
-  },
-})
-
-let escapeCancelled = false
-window.addEventListener(
-  'keydown',
-  (event) => {
-    if (event.key !== 'Escape') return
-    if (!event.repeat) escapeCancelled = talk.cancel()
-    if (!escapeCancelled) return
-    event.preventDefault()
-    event.stopImmediatePropagation()
-  },
-  { capture: true },
-)
-window.addEventListener(
-  'keyup',
-  (event) => {
-    if (event.key === 'Escape') escapeCancelled = false
-  },
-  { capture: true },
-)
-
-const talkTitle = () =>
-  recording() && tap()
-    ? `Tap, or press ${holdKeys()}, to stop and send`
-    : `${talkLabel()}, or ${talkVerb()} ${holdKeys()} anywhere · ${keys()} hides Voice`
-
-function CancelRecording(props: { class?: string }) {
-  return (
-    <Show when={recording()}>
-      <Button
-        aria-label={CANCEL_LABEL}
-        class={cn(
-          'flex shrink-0 items-center justify-center rounded-md text-error/70 transition-colors hover:bg-error/10 hover:text-error',
-          props.class,
-        )}
-        onClick={() => void talk.cancel()}
-        size={null}
-        title="Cancel recording · Esc"
-        variant={null}
-      >
-        <X class="size-3.5" />
-      </Button>
-    </Show>
   )
 }
 
@@ -223,27 +154,26 @@ function Working() {
   )
 }
 
-function TalkBar(props: { words?: boolean }) {
+function VoiceLine(props: { words?: boolean }) {
+  const spoken = () => props.words && (playerState().playing || playerState().paused)
+  const shown = () =>
+    recording() ||
+    spoken() ||
+    !!activity().current ||
+    !!dock.error() ||
+    !!dock.status() ||
+    draftOf().length > 0
   return (
-    <div class="relative">
-      <Button
-        aria-label="Talk bar"
-        class={cn(
-          'relative flex h-auto min-h-9 w-full touch-none items-center gap-2.5 overflow-hidden rounded-lg border border-border/70 bg-muted/30 px-3 font-normal text-muted-foreground transition-colors select-none hover:border-ring/50 hover:bg-muted/50',
-          recording() && 'border-error/40 bg-error/5 pr-10 hover:border-error/40 hover:bg-error/5',
-          audible() && 'border-brand/40',
-        )}
-        size={null}
-        title={talkTitle()}
-        variant={null}
-        {...talk.pointer}
+    <Show when={shown()}>
+      <div
+        class="flex min-h-6 min-w-0 items-center gap-2 px-1 font-mono text-[11px] text-muted-foreground"
+        data-voice-line
       >
-        <Mic class={cn('size-3.5 shrink-0', recording() && 'text-error')} />
         <Show
           when={recording()}
           fallback={
             <Show
-              when={props.words && (playerState().playing || playerState().paused)}
+              when={spoken()}
               fallback={
                 <Show when={activity().current} fallback={<Status class="flex-1" />}>
                   <Working />
@@ -255,87 +185,25 @@ function TalkBar(props: { words?: boolean }) {
           }
         >
           <Status class="shrink-0" />
-          <Waveform class="h-5 min-w-0 flex-1 text-error" live />
-          <Show when={tap()}>
-            <span class="ml-auto flex shrink-0 items-center gap-1 font-mono text-[11px] whitespace-nowrap text-error/80">
-              tap to send
-            </span>
-          </Show>
+          <Waveform class="h-4 min-w-0 flex-1 text-error" live />
         </Show>
         <Show when={!recording() && draftOf().length}>
-          <span class="flex shrink-0 items-center gap-1 rounded-full bg-brand/15 px-1.5 font-mono text-[10.5px] text-brand">
+          <span class="flex shrink-0 items-center gap-1 rounded-full bg-brand/15 px-1.5 text-[10.5px] text-brand">
             <span class="size-1.5 rounded-full bg-brand motion-safe:animate-pulse" />
             {draftOf().length} collected
           </span>
         </Show>
-        <Show when={!recording()}>
-          <span class="ml-auto flex shrink-0 items-center gap-1 font-mono text-[11px] whitespace-nowrap text-muted-foreground/70 pointer-coarse:hidden">
-            {talkVerb()} <Kbd>{holdKeys()}</Kbd>
-          </span>
-        </Show>
-      </Button>
-      <CancelRecording class="absolute top-1/2 right-1.5 size-7 -translate-y-1/2" />
-    </div>
+      </div>
+    </Show>
   )
 }
 
-const breathe = `@keyframes voice-breathe {
-  0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--color-brand) 0%, transparent); }
-  50% { box-shadow: 0 0 0 6px color-mix(in oklab, var(--color-brand) 22%, transparent); }
-}
-@keyframes voice-glow {
+const glow = `@keyframes voice-glow {
   0%, 100% { box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.4), 0 0 18px 0 color-mix(in oklab, var(--color-brand) 14%, transparent); }
   50% { box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.4), 0 0 36px 4px color-mix(in oklab, var(--color-brand) 30%, transparent); }
 }`
 
 const audible = () => playerState().playing
-
-function TalkButton(props: { unfold: () => void }) {
-  return (
-    <div class="flex items-center justify-end gap-2.5" data-voice-talk-button>
-      <CancelRecording class="size-9 rounded-full border border-error/40 bg-background/95 shadow-lg shadow-black/30" />
-      <Button
-        aria-label="Unfold voice"
-        class="h-auto max-w-[60vw] min-w-0 truncate rounded-full border border-border/70 bg-background/95 px-3 py-1.5 text-left font-mono text-[11.5px] font-normal shadow-lg shadow-black/30"
-        onClick={() => props.unfold()}
-        size={null}
-        variant={null}
-      >
-        <Status class="text-[11.5px]" />
-      </Button>
-      <Button
-        aria-label="Talk button"
-        class={cn(
-          'relative flex size-16 shrink-0 touch-none items-center justify-center rounded-full border border-border bg-card text-foreground shadow-xl shadow-black/40 transition-colors select-none',
-          recording() && 'border-error/60 bg-error/15 text-error',
-          working() && 'border-ring/60 text-muted-foreground',
-          audible() &&
-            'border-brand/60 text-brand motion-safe:animate-[voice-breathe_2.4s_ease-in-out_infinite]',
-          (dock.error() || dock.phase() === 'error') && 'border-error/60 text-error',
-        )}
-        size={null}
-        title={talkTitle()}
-        variant={null}
-        {...talk.pointer}
-      >
-        <Show when={recording()}>
-          <span class="absolute inset-0 animate-ping rounded-full border-2 border-error/40" />
-        </Show>
-        <Show when={draftOf().length && !recording()}>
-          <span class="absolute -top-1 -right-1 flex size-6 items-center justify-center rounded-full border-2 border-background bg-brand font-mono text-[11px] text-brand-foreground">
-            {draftOf().length}
-          </span>
-        </Show>
-        <Show when={working()}>
-          <span class="absolute inset-1 animate-spin rounded-full border-2 border-transparent border-t-ring/70" />
-        </Show>
-        <Show when={dock.phase() === 'speaking'} fallback={<Mic class="size-6" />}>
-          <AudioLines class="size-6" />
-        </Show>
-      </Button>
-    </div>
-  )
-}
 
 function Settings() {
   return (
@@ -376,17 +244,6 @@ function Settings() {
               </span>
             </span>
           </label>
-          <div class="flex items-center justify-between gap-3">
-            Talk
-            <SegmentedControl aria-label="Talk mode" bind={[dock.talkMode, dock.setTalkMode]}>
-              <SegmentedControlItem value="hold">Hold</SegmentedControlItem>
-              <SegmentedControlItem value="tap">Tap</SegmentedControlItem>
-            </SegmentedControl>
-          </div>
-          <div class="flex items-center justify-between gap-3">
-            Talk anywhere
-            <ShortcutRecorder />
-          </div>
           <label class="flex items-start justify-between gap-3">
             <span class="flex flex-col gap-0.5">
               Collect until send
@@ -447,41 +304,6 @@ function SpeechVoice() {
         </SegmentedControl>
       </Show>
     </div>
-  )
-}
-
-function ShortcutRecorder() {
-  const [listening, setListening] = createSignal(false)
-  const record = (event: KeyboardEvent) => {
-    event.preventDefault()
-    event.stopPropagation()
-    if (event.key === 'Escape') {
-      setListening(false)
-      return
-    }
-    const chord = keyChord(event)
-    const hasKey = !['mod', 'ctrl', 'alt', 'shift'].includes(chord.split('+').at(-1)!)
-    const hasModifier = chord.includes('+')
-    if (!hasKey || !hasModifier) return
-    dock.setHoldKeys(chord)
-    setListening(false)
-  }
-  return (
-    <Button
-      aria-label="Talk anywhere shortcut"
-      class={cn(
-        'flex h-6 items-center gap-1 rounded-md border border-border/70 px-1.5 font-mono text-[11px] font-normal text-foreground/85 hover:bg-accent',
-        listening() && 'border-brand/60 text-brand',
-      )}
-      onBlur={() => setListening(false)}
-      onClick={() => setListening(true)}
-      onKeyDown={(event: KeyboardEvent) => listening() && record(event)}
-      size={null}
-      title="Click, then press a key with a modifier (Ctrl, Alt, Shift); Esc cancels"
-      variant={null}
-    >
-      {listening() ? 'press keys…' : holdKeys()}
-    </Button>
   )
 }
 
@@ -665,44 +487,66 @@ function SetupList() {
   )
 }
 
-function Bottom(props: { fork: ConversationId | undefined }) {
+function Bottom(props: { fork: ConversationId | undefined; fold: boolean }) {
   const coldHeld = useExternal(
     () => coldHolds(composerDraft(COLD_DRAFT)),
     (notify) => composerDraft(COLD_DRAFT).subscribe(notify),
   )
   const hot = () => (coldHeld() ? undefined : props.fork)
+  const placeholder = () => `Type, paste a screenshot, or ${talkVerb()} ${holdKeys()} to talk…`
   const target = (): ComposerTarget => ({
-    placeholder: `Type, paste a screenshot, or ${talkVerb()} ${holdKeys()} to talk…`,
+    name: 'Voice dock',
+    placeholder: placeholder(),
     images: true,
-    dictation: false,
+    dictation: voiceSink,
     ready: () => draftOf().length > 0,
     send: (text, images) => sendTyped(text, images),
     ...(hot() === undefined ? { draft: COLD_DRAFT } : {}),
   })
   return (
-    <footer class="flex shrink-0 flex-col gap-1.5 pt-1" data-voice-bottom>
-      <div class="flex flex-col gap-1.5 px-4">
-        <PlaybackStrip />
-        <Collected fork={props.fork} />
-        <TalkBar />
-      </div>
-      <Show
-        when={hot()}
-        fallback={
-          <ComposerRedirect value={target}>
-            <Composer dock />
-          </ComposerRedirect>
-        }
-      >
-        {(fork) => (
-          <ScopedConversation id={fork()}>
+    <Show
+      when={!props.fold}
+      fallback={
+        <footer class="flex shrink-0 flex-col gap-1 px-2 pb-2">
+          <VoiceLine words />
+          <PromptBox
+            accepts={{ images: true }}
+            conversation={hot()}
+            dictation={voiceSink}
+            draft={hot() ?? COLD_DRAFT}
+            minimal
+            name="Voice dock"
+            onSubmit={(input) => sendTyped(input.text, input.images)}
+            placeholder={`Talk (${holdKeys()}) or type…`}
+            ready={() => draftOf().length > 0}
+          />
+        </footer>
+      }
+    >
+      <footer class="flex shrink-0 flex-col gap-1.5 pt-1">
+        <div class="flex flex-col gap-1.5 px-4">
+          <PlaybackStrip />
+          <Collected fork={props.fork} />
+          <VoiceLine />
+        </div>
+        <Show
+          when={hot()}
+          fallback={
             <ComposerRedirect value={target}>
               <Composer dock />
             </ComposerRedirect>
-          </ScopedConversation>
-        )}
-      </Show>
-    </footer>
+          }
+        >
+          {(fork) => (
+            <ScopedConversation id={fork()}>
+              <ComposerRedirect value={target}>
+                <Composer dock />
+              </ComposerRedirect>
+            </ScopedConversation>
+          )}
+        </Show>
+      </footer>
+    </Show>
   )
 }
 
@@ -739,29 +583,12 @@ export function VoicePanel() {
       })
     },
   )
-  onSettled(() => {
-    const swallow = (event: KeyboardEvent) => {
-      event.preventDefault()
-      event.stopPropagation()
-    }
-    const down = (event: KeyboardEvent) => {
-      if (talk.keyDown(event)) swallow(event)
-    }
-    const up = (event: KeyboardEvent) => {
-      if (talk.keyUp(event)) swallow(event)
-    }
-    window.addEventListener('keydown', down, { capture: true })
-    window.addEventListener('keyup', up, { capture: true })
-    return () => {
-      window.removeEventListener('keydown', down, { capture: true })
-      window.removeEventListener('keyup', up, { capture: true })
-    }
-  })
+  onSettled(registerVoiceFallback)
   const phone = () => viewport() === 'phone'
-  const [place, setPlace] = useExtensionUiState<{ right: number; bottom: number } | null>(
-    'corner',
-    null,
-  )
+  const [place, setPlace] = useExtensionUiState<{
+    right: number
+    bottom: number
+  } | null>('corner', null)
   const [folded, setFolded] = useExtensionUiState('folded', false)
   const drag = (event: PointerEvent & { currentTarget: HTMLElement }) => {
     if (phone() || (event.target as HTMLElement).closest('button, [popover]')) return
@@ -801,25 +628,22 @@ export function VoicePanel() {
           'pointer-events-auto fixed z-40 flex flex-col overflow-hidden border border-border bg-background shadow-2xl shadow-black/40',
           phone()
             ? folded()
-              ? 'pointer-events-none right-3 bottom-[calc(9rem+env(safe-area-inset-bottom))] left-3 overflow-visible border-0 bg-transparent shadow-none [&_button]:pointer-events-auto'
+              ? 'right-3 bottom-[calc(9rem+env(safe-area-inset-bottom))] left-3 rounded-xl'
               : 'inset-x-0 top-11 bottom-0 rounded-t-2xl border-b-0'
             : folded()
               ? 'right-4 bottom-4 w-[min(26rem,46vw)] rounded-xl'
               : 'right-4 bottom-4 h-[min(44rem,calc(100vh-5rem))] w-[min(36rem,46vw)] rounded-xl',
-          audible() &&
-            !(phone() && folded()) &&
-            'border-brand/50 motion-safe:animate-[voice-glow_2.8s_ease-in-out_infinite]',
+          audible() && 'border-brand/50 motion-safe:animate-[voice-glow_2.8s_ease-in-out_infinite]',
         )}
         data-voice-folded={folded() || undefined}
         data-voice-panel
         data-voice-speaking={audible() || undefined}
         style={style()}
       >
-        <style>{breathe}</style>
+        <style>{glow}</style>
         <header
           class={cn(
             'flex h-10 shrink-0 touch-none items-center gap-2 border-b border-border/60 px-3 select-none',
-            phone() && folded() && 'hidden',
             !phone() && 'cursor-grab active:cursor-grabbing',
             folded() && 'border-b-0',
           )}
@@ -893,21 +717,7 @@ export function VoicePanel() {
             </ScopedConversation>
           )}
         </Show>
-        <Show
-          when={!folded()}
-          fallback={
-            <Show
-              when={phone()}
-              fallback={
-                <div class="px-2 pb-2">
-                  <TalkBar words />
-                </div>
-              }
-            >
-              <TalkButton unfold={() => setFolded(false)} />
-            </Show>
-          }
-        >
+        <Show when={!folded()}>
           <Show
             when={id()}
             fallback={
@@ -915,9 +725,10 @@ export function VoicePanel() {
                 <AudioLines class="mb-1 size-5 text-brand" />
                 <p class="text-[14px] text-foreground">Think out loud with @ultimate</p>
                 <p class="max-w-sm text-[13px] text-muted-foreground">
-                  {tap() ? 'Tap' : 'Hold'} <Kbd>{holdKeys()}</Kbd> anywhere, or the talk bar, and
-                  speak. Voice forks @ultimate with everything it knows, talks it through with you,
-                  and hands the result back when you agree; then the next talk starts fresh.
+                  Use the mic below, or {talkVerb()} <Kbd>{holdKeys()}</Kbd> when no other prompt
+                  box is focused. Voice forks @ultimate with everything it knows, talks it through
+                  with you, and hands the result back when you agree; then the next talk starts
+                  fresh.
                 </p>
                 <SetupList />
               </div>
@@ -929,8 +740,8 @@ export function VoicePanel() {
               </ScopedConversation>
             )}
           </Show>
-          <Bottom fork={id()} />
         </Show>
+        <Bottom fold={folded()} fork={id()} />
       </section>
     </Show>
   )

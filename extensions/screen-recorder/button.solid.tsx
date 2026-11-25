@@ -24,13 +24,24 @@ export function recordButton(recorder: ScreenRecorder, supported: () => boolean)
     recorder.subscribe(() => setCurrent(recorder.state()))
     return current
   })
+  let escapeHeld = false
   window.addEventListener(
     'keydown',
     (event) => {
-      if (event.key !== 'Escape' || recorder.state().phase !== 'recording') return
+      if (event.key !== 'Escape') return
+      const cancels = !event.repeat && recorder.state().phase === 'recording'
+      if (!event.repeat) escapeHeld = cancels
+      if (!escapeHeld) return
       event.preventDefault()
       event.stopImmediatePropagation()
-      recorder.cancel()
+      if (cancels) recorder.cancel()
+    },
+    { capture: true },
+  )
+  window.addEventListener(
+    'keyup',
+    (event) => {
+      if (event.key === 'Escape') escapeHeld = false
     },
     { capture: true },
   )
@@ -42,12 +53,8 @@ export function recordButton(recorder: ScreenRecorder, supported: () => boolean)
       },
       attach: (files) => props.attach(files),
     }
-    const [docked, setDocked] = createSignal(false)
     onSettled(() => recorder.mount(box))
-    const place = (element: HTMLElement) => {
-      queueMicrotask(() => setDocked(!!element.closest('[data-voice-bottom]')))
-    }
-    const name = () => `${props.name} (${docked() ? 'voice dock' : 'prompt box'})`
+    const name = () => props.name
     const recording = () => phase().phase === 'recording'
     const now = useNow(500, recording)
     createEffect(recording, (on) => {
@@ -68,7 +75,7 @@ export function recordButton(recorder: ScreenRecorder, supported: () => boolean)
               : undefined
           }
           fallback={
-            <div class="flex min-w-0 shrink items-center gap-1.5" ref={place}>
+            <div class="flex min-w-0 shrink items-center gap-1.5">
               <Show when={phase().phase === 'idle' && (phase() as { error?: string }).error}>
                 {(error) => (
                   <span
@@ -112,11 +119,7 @@ export function recordButton(recorder: ScreenRecorder, supported: () => boolean)
           }
         >
           {(active) => (
-            <div
-              class="flex shrink-0 items-center gap-1"
-              data-screen-recorder="recording"
-              ref={place}
-            >
+            <div class="flex shrink-0 items-center gap-1" data-screen-recorder="recording">
               <Button
                 aria-label={`Cancel the screen recording in ${name()}`}
                 class={`${buttonSize} text-muted-foreground`}
