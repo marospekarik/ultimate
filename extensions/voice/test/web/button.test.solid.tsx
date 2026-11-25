@@ -176,7 +176,7 @@ it('offers the mic once a ChatGPT login arrives', async () => {
   await settle()
   flush()
   expect(container.querySelector('button[data-voice="idle"]')?.getAttribute('aria-label')).toBe(
-    'Voice input',
+    'Dictate into conversation #13',
   )
 })
 
