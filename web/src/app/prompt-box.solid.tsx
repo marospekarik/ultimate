@@ -23,6 +23,7 @@ import { Attached, cancelUpload, createAttach } from './attach.solid.tsx'
 import { attached, withAttachments } from './attachments.ts'
 import type { DraftFile, PastedImage } from './attachments.ts'
 import {
+  boundDraft,
   clearDraft,
   createLocalDraft,
   getDraft,
@@ -40,37 +41,56 @@ const iconButton =
 const submitClass =
   'size-7 rounded-md pointer-coarse:relative pointer-coarse:size-9 pointer-coarse:after:absolute pointer-coarse:after:-inset-1'
 
-function createDraftState(id: () => number | string | undefined) {
+function createDraftState(props: PromptBoxProps) {
   const local = createLocalDraft()
-  const draft = createMemo(() => (id() === undefined ? local : getDraft(id())))
+  const bound = boundDraft(
+    readValue(props),
+    writeValue(props),
+    cancelUpload,
+    reportUploading(props),
+  )
+  onCleanup(bound.dispose)
+  const draft = createMemo<DraftStore>(() =>
+    props.onValue ? bound : props.draft === undefined ? local : getDraft(props.draft),
+  )
   const [changes, setChanges] = createSignal(0)
   const value = createMemo((): Draft => {
     changes()
+    void props.value
     return draft().get()
   })
   createEffect(draft, (current) => {
     const unsubscribe = current.subscribe(() => setChanges((n) => n + 1))
+    if (!current.key) return unsubscribe
     const stored = storedText(current)
     if (stored !== current.get().text)
       current.set({ text: stored, revision: current.get().revision + 1 })
     return unsubscribe
   })
-  return { draft, value }
+  return { draft, value, bound }
 }
 
-function sent(target: DraftStore) {
-  return new Promise<void>((resolve) => {
-    if (!target.get().sending) return resolve()
+const readValue = (props: PromptBoxProps) => () => props.value ?? ''
+const writeValue = (props: PromptBoxProps) => (next: string) => props.onValue?.(next)
+const reportUploading = (props: PromptBoxProps) => (busy: boolean) => props.onUploading?.(busy)
+function sent(target: DraftStore, gone: Promise<void>) {
+  return new Promise<boolean>((resolve) => {
+    if (!target.get().sending) return resolve(true)
     const stop = target.subscribe(() => {
       if (target.get().sending) return
       stop()
-      resolve()
+      resolve(true)
+    })
+    void gone.then(() => {
+      stop()
+      resolve(false)
     })
   })
 }
 
 export function PromptBox(props: PromptBoxProps) {
-  const { draft, value } = createDraftState(() => props.draft)
+  const { draft, value, bound } = createDraftState(props)
+  const minimal = () => !!props.minimal
   const text = () => value().text
   const images = () => value().images
   const files = () => value().files
@@ -90,8 +110,13 @@ export function PromptBox(props: PromptBoxProps) {
           ...uploads().map((upload) => `${upload.accepts}*`),
         ].join(',')
   let mounted = true
+  let unmount!: () => void
+  const gone = new Promise<void>((resolve) => {
+    unmount = resolve
+  })
   onCleanup(() => {
     mounted = false
+    unmount()
   })
   const [level, setLevel] = createSignal<number>()
   const [recording, setRecording] = createSignal(false)
@@ -109,7 +134,7 @@ export function PromptBox(props: PromptBoxProps) {
     setImages,
     setFiles,
     setError,
-    disabled: () => !!props.loading || draft().get().sending,
+    disabled: () => !!props.loading || !!props.disabled || draft().get().sending,
     uploads,
     inlineImages: allowsImages,
     conversation: () => props.conversation,
@@ -117,13 +142,14 @@ export function PromptBox(props: PromptBoxProps) {
   const uploading = () => files().some((file) => !attached(file))
   const empty = () =>
     !text().trim() && images().length === 0 && files().length === 0 && !props.ready?.()
-  const inert = () => !!props.loading || sending() || attach.reading()
+  const inert = () => !!props.loading || !!props.disabled || sending() || attach.reading()
   const canAttach = () => allowsImages() || uploads().length > 0
 
   async function send(how?: 'followUp') {
     const current = draft()
     if (
       props.loading ||
+      props.disabled ||
       empty() ||
       props.blocked ||
       uploading() ||
@@ -144,6 +170,7 @@ export function PromptBox(props: PromptBoxProps) {
     const submit = props.onSubmit
     try {
       await writingAs(who, () => submit(input, how))
+      if (current === bound) return
       clearDraft(current, submitted)
       if (current.get().images === submitted.images) current.set({ images: [] })
       if (current.get().files === submitted.files) current.set({ files: [] })
@@ -160,11 +187,16 @@ export function PromptBox(props: PromptBoxProps) {
     if (event.isComposing) return
     if (props.onKeyDown?.(event)) return
     if (event.key !== 'Enter' || event.shiftKey) return
-    const touchReturnInsertsNewline = touchKeyboard() && !event.metaKey && !event.ctrlKey
+    const touchReturnInsertsNewline =
+      !props.minimal && touchKeyboard() && !event.metaKey && !event.ctrlKey
     if (touchReturnInsertsNewline) return
     event.preventDefault()
     void send(event.altKey ? 'followUp' : undefined)
   }
+
+  const label = () => props.label ?? `Prompt for ${props.name}`
+  const attachName = () =>
+    `${uploads().length ? 'Attach files' : 'Attach images'}${props.minimal ? ` to ${props.name}` : ''}`
 
   let editor: HTMLTextAreaElement | undefined
   onSettled(() => {
@@ -208,156 +240,225 @@ export function PromptBox(props: PromptBoxProps) {
           ? 'running'
           : 'idle'
 
-  return (
-    <Form
-      class={cn(
-        'group/keel relative flex w-full flex-col overflow-hidden rounded-lg border border-border bg-card transition-colors focus-within:border-foreground/25',
-        dragging() && 'ring-2 ring-brand/60',
-      )}
-      data-signal={signal()}
-      data-ui="prompt-box"
-      onDrop={(event) => {
-        if (!event.dataTransfer?.types.includes('Files')) return
-        event.preventDefault()
-        void attach.drop(event)
-      }}
-    >
-      <Attached
-        disabled={inert()}
-        files={files()}
-        images={images()}
-        remove={(index) => setImages((current) => current.filter((_, at) => at !== index))}
-        removeFile={(fileId) => {
-          cancelUpload(fileId)
-          setFiles((current) => current.filter((file) => file.id !== fileId))
+  const attachButton = () => (
+    <Show when={canAttach()}>
+      <label
+        aria-label={attachName()}
+        class={cn(iconButton, inert() && 'pointer-events-none opacity-50 hover:bg-transparent')}
+        title={
+          general()
+            ? `Attach files: ${allowsImages() ? 'images inline, others' : 'files'} up to ${formatBytes(general()!.maxBytes).replace('.0 ', ' ')}`
+            : uploads().length
+              ? 'Attach files'
+              : 'Attach images'
+        }
+      >
+        <Paperclip class="size-3.5" />
+        <input
+          accept={pickable()}
+          class="sr-only"
+          disabled={inert()}
+          multiple
+          onChange={(event) => {
+            const picked = Array.from(event.currentTarget.files ?? [])
+            event.currentTarget.value = ''
+            void attach.attach(picked)
+          }}
+          type="file"
+        />
+      </label>
+    </Show>
+  )
+  const controls = () => (
+    <>
+      {attachButton()}
+      <Provided
+        input={{
+          name: props.name,
+          draft: props.draft ?? `box:${props.name}`,
+          attach: async (picked: readonly File[], source: UploadSource = 'recording') => {
+            const target = draft()
+            const settled = await sent(target, gone)
+            return settled && mounted && draft() === target && attach.attach(picked, source)
+          },
+          recording: setRecording,
         }}
+        last
+        point={PromptRecorder}
       />
-      <Textarea
-        aria-label={`Prompt for ${props.name}`}
-        autoResize
-        class="block max-h-80 min-h-0 w-full resize-none rounded-none border-0 bg-transparent px-3.5 pt-3 pb-1 font-sans text-[14px] leading-relaxed outline-none focus-visible:border-0 focus-visible:ring-0 disabled:cursor-not-allowed"
-        data-conversation={props.conversation}
-        id={props.id}
-        onKeyDown={onKeyDown}
-        onPaste={(event) => void attach.paste(event)}
-        onValueChange={(next) => setDraftText(draft(), next)}
-        placeholder={props.placeholder}
-        readonly={!!props.loading || sending()}
-        ref={(element) => {
-          editor = element
-        }}
-        rows={1}
-        style={touchKeyboard() ? androidImagePasteStyle : undefined}
-        value={text()}
-      />
-      <div class="@container flex items-center justify-between gap-2 px-2 pt-1 pb-2">
-        <div class="flex min-w-0 items-center gap-1 overflow-hidden">{props.toolbar}</div>
-        <div class="flex max-w-full min-w-0 shrink-0 items-center gap-0.5">
-          <span
-            class={cn(
-              'mr-1.5 truncate font-mono text-[11px]',
-              value().error || props.blocked ? 'text-error' : 'text-muted-foreground/70',
-            )}
+      <Show when={props.dictation !== false && !props.disabled}>
+        <Provided
+          input={{
+            get name() {
+              return props.name
+            },
+            get conversation() {
+              return props.conversation
+            },
+            get insert() {
+              const target = draft()
+              return (words: string) =>
+                insertIntoDraft(target, draft() === target ? editor : undefined, words)
+            },
+            level: setLevel,
+          }}
+          last
+          point={Dictation}
+        />
+      </Show>
+      {props.actions}
+      <Show when={props.sendButton !== false && (!props.running || !empty())}>
+        <Button
+          aria-label={
+            props.loading
+              ? `Loading ${props.name}`
+              : (props.sendLabel ?? `Send prompt to ${props.name}`)
+          }
+          class={cn(
+            'ml-1',
+            submitClass,
+            minimal() && 'size-6',
+            props.loading && 'bg-muted text-muted-foreground',
+          )}
+          disabled={
+            !!props.loading ||
+            !!props.disabled ||
+            empty() ||
+            !!props.blocked ||
+            sending() ||
+            attach.reading() ||
+            uploading()
+          }
+          onClick={() => send()}
+          size="icon"
+          title={
+            props.loading
+              ? `Loading ${props.name}`
+              : uploading()
+                ? 'Uploading files…'
+                : (props.sendTitle ?? 'Send (Enter)')
+          }
+          type={minimal() ? 'button' : 'submit'}
+        >
+          <Show
+            when={props.loading}
+            fallback={<ArrowUp class={minimal() ? 'size-3.5' : 'size-4'} />}
           >
-            {value().error ?? props.blocked ?? props.hint}
-          </span>
-          <Show when={canAttach()}>
-            <label
-              aria-label={uploads().length ? 'Attach files' : 'Attach images'}
-              class={cn(
-                iconButton,
-                inert() && 'pointer-events-none opacity-50 hover:bg-transparent',
-              )}
-              title={
-                general()
-                  ? `Attach files: ${allowsImages() ? 'images inline, others' : 'files'} up to ${formatBytes(general()!.maxBytes).replace('.0 ', ' ')}`
-                  : uploads().length
-                    ? 'Attach files'
-                    : 'Attach images'
-              }
-            >
-              <Paperclip class="size-3.5" />
-              <input
-                accept={pickable()}
-                class="sr-only"
-                disabled={inert()}
-                multiple
-                onChange={(event) => {
-                  const picked = Array.from(event.currentTarget.files ?? [])
-                  event.currentTarget.value = ''
-                  void attach.attach(picked)
-                }}
-                type="file"
-              />
-            </label>
+            <LoaderCircle class="size-4 motion-safe:animate-spin" />
           </Show>
-          <Provided
-            input={{
-              name: props.name,
-              draft: props.draft,
-              attach: async (picked: readonly File[], source: UploadSource = 'recording') => {
-                const target = draft()
-                await sent(target)
-                return mounted && draft() === target && attach.attach(picked, source)
-              },
-              recording: setRecording,
+        </Button>
+      </Show>
+    </>
+  )
+  const status = () => value().error ?? props.blocked ?? props.hint
+  const textarea = () => (
+    <Textarea
+      aria-label={label()}
+      autoResize
+      class={cn(
+        'block min-h-0 w-full resize-none rounded-none border-0 bg-transparent font-sans leading-relaxed outline-none focus-visible:border-0 focus-visible:ring-0 disabled:cursor-not-allowed disabled:opacity-60',
+        minimal()
+          ? 'max-h-60 min-w-48 flex-1 px-3 py-1.5 text-[13px]'
+          : 'max-h-80 px-3.5 pt-3 pb-1 text-[14px]',
+      )}
+      data-conversation={props.conversation}
+      disabled={!!props.disabled}
+      id={props.id}
+      onKeyDown={onKeyDown}
+      onPaste={(event) => void attach.paste(event)}
+      onValueChange={(next, details) => {
+        if (setDraftText(draft(), next)) return
+        details.cancel()
+        const field = details.event?.target
+        if (field instanceof HTMLTextAreaElement) field.value = text()
+      }}
+      placeholder={props.placeholder}
+      readonly={!!props.loading || sending()}
+      ref={(element) => {
+        editor = element
+        props.ref?.(element)
+      }}
+      rows={1}
+      style={touchKeyboard() ? androidImagePasteStyle : undefined}
+      value={text()}
+    />
+  )
+  const frameClass = () =>
+    cn(
+      'group/keel relative flex w-full flex-col overflow-hidden rounded-lg border border-border bg-card transition-colors focus-within:border-foreground/25',
+      minimal() && 'rounded-md bg-background/40',
+      dragging() && 'ring-2 ring-brand/60',
+    )
+  const dropped = (event: DragEvent) => {
+    if (!event.dataTransfer?.types.includes('Files')) return
+    event.preventDefault()
+    void attach.drop(event)
+  }
+  const chips = () => (
+    <Attached
+      disabled={inert()}
+      files={files()}
+      images={images()}
+      name={minimal() ? props.name : undefined}
+      remove={(index) => setImages((current) => current.filter((_, at) => at !== index))}
+      removeFile={(fileId) => {
+        cancelUpload(fileId)
+        setFiles((current) => current.filter((file) => file.id !== fileId))
+      }}
+    />
+  )
+
+  return (
+    <Show
+      when={!minimal()}
+      fallback={
+        <div class="flex flex-col gap-1">
+          <div
+            class={frameClass()}
+            data-signal={signal()}
+            data-ui="prompt-box"
+            onDragOver={(event) => {
+              if (event.dataTransfer?.types.includes('Files')) event.preventDefault()
             }}
-            last
-            point={PromptRecorder}
-          />
-          <Show when={props.dictation !== false}>
-            <Provided
-              input={{
-                get name() {
-                  return props.name
-                },
-                get conversation() {
-                  return props.conversation
-                },
-                get insert() {
-                  const target = draft()
-                  return (words: string) =>
-                    insertIntoDraft(target, draft() === target ? editor : undefined, words)
-                },
-                level: setLevel,
-              }}
-              last
-              point={Dictation}
-            />
-          </Show>
-          {props.actions}
-          <Show when={!props.running || !empty()}>
-            <Button
-              aria-label={props.loading ? `Loading ${props.name}` : `Send prompt to ${props.name}`}
-              class={cn('ml-1', submitClass, props.loading && 'bg-muted text-muted-foreground')}
-              disabled={
-                !!props.loading ||
-                empty() ||
-                !!props.blocked ||
-                sending() ||
-                attach.reading() ||
-                uploading()
-              }
-              onClick={() => send()}
-              size="icon"
-              title={
-                props.loading
-                  ? `Loading ${props.name}`
-                  : uploading()
-                    ? 'Uploading files…'
-                    : (props.sendTitle ?? 'Send (Enter)')
-              }
-              type="submit"
-            >
-              <Show when={props.loading} fallback={<ArrowUp class="size-4" />}>
-                <LoaderCircle class="size-4 motion-safe:animate-spin" />
-              </Show>
-            </Button>
+            onDrop={dropped}
+          >
+            {chips()}
+            <div class="flex flex-wrap items-end justify-end gap-1">
+              {textarea()}
+              <div class="flex min-w-0 shrink-0 items-center gap-0.5 pr-1 pb-1">{controls()}</div>
+            </div>
+            <Hairline level={level()} signal={signal()} />
+          </div>
+          <Show when={value().error ?? props.blocked}>
+            {(message) => (
+              <p class="px-1 font-mono text-[11px] break-words text-error" role="alert">
+                {message()}
+              </p>
+            )}
           </Show>
         </div>
-      </div>
-      <Hairline level={level()} signal={signal()} />
-    </Form>
+      }
+    >
+      <Form class={frameClass()} data-signal={signal()} data-ui="prompt-box" onDrop={dropped}>
+        {chips()}
+        {textarea()}
+        <div class="@container flex items-center justify-between gap-2 px-2 pt-1 pb-2">
+          <div class="flex min-w-0 items-center gap-1 overflow-hidden">{props.toolbar}</div>
+          <div class="flex max-w-full min-w-0 shrink-0 items-center gap-0.5">
+            <span
+              class={cn(
+                'mr-1.5 truncate font-mono text-[11px]',
+                value().error || props.blocked ? 'text-error' : 'text-muted-foreground/70',
+              )}
+            >
+              {status()}
+            </span>
+            {controls()}
+          </div>
+        </div>
+        <Hairline level={level()} signal={signal()} />
+      </Form>
+    </Show>
   )
 }
 

@@ -22,10 +22,12 @@ import {
   events,
   formatKeys,
   keepLast,
+  PromptBox,
   ROOT,
   useAction,
   useConversationId,
   useEvent,
+  writerNow,
   writingAs,
 } from '@/sdk/solid'
 import { contextCondition, draftOf, scheduleOf, triggerOf, zone } from './form-draft.ts'
@@ -136,6 +138,8 @@ function Editor(props: {
   const domain = () => draft.trigger === 'ultimate'
   const wakeable = () => script() || domain()
   const promptText = () => draft.prompt.trim()
+  const [saving, setSaving] = createSignal(false)
+  const [uploading, setUploading] = createSignal(false)
   const validTrigger = createMemo(() => triggerOf(draft))
   const automationName = () => draft.name.trim()
   const ready = () =>
@@ -146,7 +150,8 @@ function Editor(props: {
 
   async function save(source: string) {
     const details = validTrigger()
-    if (!ready() || !details) return
+    if (!ready() || !details || saving() || uploading()) return
+    setSaving(true)
     setError(undefined)
     const automation = props.automation
     const text = promptText()
@@ -173,6 +178,8 @@ function Editor(props: {
       })
     } catch (failure) {
       setError(errorMessage(failure).replace(/^automations\/\w+: /, ''))
+    } finally {
+      setSaving(false)
     }
   }
   return (
@@ -288,17 +295,22 @@ function Editor(props: {
           </label>
         </Show>
         <Field label={wakeable() ? 'Prompt (optional)' : 'Prompt'}>
-          <Textarea
-            aria-label={wakeable() ? 'Prompt (optional)' : 'Prompt'}
-            class={cn(area, wakeable() ? 'min-h-16' : 'min-h-24')}
-            onValueChange={(prompt) => set({ prompt })}
+          <PromptBox
+            accepts={{ images: false }}
+            draft={undefined}
+            label={wakeable() ? 'Prompt (optional)' : 'Prompt'}
+            minimal
+            name="the automation's prompt"
+            onSubmit={() => save(writerNow())}
+            onUploading={setUploading}
+            ready={ready}
+            onValue={(prompt) => set({ prompt })}
             placeholder={
               wakeable()
                 ? 'Optional: also run a prompt in a new conversation, e.g. Summarise the failing tests.'
                 : 'Summarise yesterday’s commits and open questions.'
             }
-            rows={wakeable() ? 2 : 4}
-            submitShortcut="mod+enter"
+            sendButton={false}
             value={draft.prompt}
           />
         </Field>
@@ -336,7 +348,7 @@ function Editor(props: {
         </Button>
         <Button
           class="group/automation-save"
-          disabled={!ready()}
+          disabled={!ready() || saving() || uploading()}
           onClick={(_, details) => save(details.source)}
           size="sm"
           title={`${props.automation ? 'Save' : 'Create'} (${submitKeys})`}
