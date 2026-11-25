@@ -415,10 +415,8 @@ function TranscriptView(props: {
         top.left + top.width / 2,
         top.top + pinned.offsetHeight + 1,
       )
-      reading =
-        row && content.contains(row)
-          ? { row, offset: row.getBoundingClientRect().top - top.top }
-          : null
+      if (row && content.contains(row))
+        reading = { row, offset: row.getBoundingClientRect().top - top.top }
     }
     const keepReadingAcrossWidth = () => {
       if (scroll.clientWidth === width) return
