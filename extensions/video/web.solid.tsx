@@ -1,10 +1,18 @@
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { createEffect, createRoot } from 'solid-js'
+import { meansNone } from '../../lib/errors.ts'
 import { api, defineWebExtension, FileUpload, provide, ROOT, useDocOf } from '@/sdk/solid'
 import type { UploadSource } from '@/sdk/solid'
 import { StandingDoc } from '../subagents/refs.ts'
 import { VideoAskCall } from './call.solid.tsx'
-import { AppendAction, BeginAction, FinishAction, RemoveAction, VideosDoc } from './refs.ts'
+import {
+  AppendAction,
+  BeginAction,
+  FinishAction,
+  RemoveAction,
+  ThumbnailAction,
+  VideosDoc,
+} from './refs.ts'
 import type { Video } from './refs.ts'
 import { KEPT_MS, MAX_CHUNK_BYTES, MAX_UPLOAD_BYTES } from './limits.ts'
 
@@ -63,6 +71,7 @@ async function upload(
 ) {
   const { status, signal } = options
   const call = { conversationId: options.conversation }
+  let video: Video
   const { id } = await api.action(
     BeginAction,
     { name: file.name || 'video', mimeType: file.type, bytes: file.size, source: options.source },
@@ -81,15 +90,19 @@ async function upload(
     signal.throwIfAborted()
     status('Preparing · for Google')
     await api.action(FinishAction, { id }, { ...call, signal })
-    const video = await settled(id, signal)
-    return {
-      path: '',
-      line: videoLine(video),
-      note: `${video.seconds === undefined ? 'Video' : `${Math.round(video.seconds)} s`} · for Google`,
-    }
+    video = await settled(id, signal)
   } catch (failure) {
     void api.action(RemoveAction, { id })
     throw failure
+  }
+  const image = video.thumbnail
+    ? await api.action(ThumbnailAction, { id }, { ...call, signal }).catch(meansNone)
+    : null
+  return {
+    path: '',
+    line: videoLine(video),
+    note: `${video.seconds === undefined ? 'Video' : `${Math.round(video.seconds)} s`} · for Google`,
+    ...(image ? { image } : {}),
   }
 }
 
