@@ -1,11 +1,9 @@
 import type { ConversationId, EntryRecord } from '@earendil-works/pi-durable'
 import type { AssistantMessage } from '@earendil-works/pi-ai'
 import { createEffect, createMemo, createRoot, createSignal } from 'solid-js'
-import { api, composerDraft, errorMessage, ROOT, useConversation, useUiState } from '@/sdk/solid'
+import { api, composerDraft, errorMessage, events, useConversation, useUiState } from '@/sdk/solid'
 import { every } from '../../lib/timers.ts'
-import { inProcess, overshadowed } from '../../lib/errors.ts'
 import {
-  animationFrames,
   base64,
   capture,
   MIN_SPOKEN_SECONDS,
@@ -13,87 +11,64 @@ import {
   talkMode,
 } from '../dictation/ui.solid.tsx'
 import type { Recorded, Sink } from '../dictation/ui.solid.tsx'
+import { speech, splitReply } from '../read-aloud/ui.solid.tsx'
+import type { Sentence } from '../read-aloud/ui.solid.tsx'
 import { createCues } from './cues.ts'
 import {
   DiscardAction,
   EndAction,
   IntentAction,
   RecordAction,
-  SpeakAction,
   StatusAction,
   StopAction,
   TurnAction,
 } from './refs.ts'
-import type { OpenAiVoice, VoiceClip, VoiceDelivery, VoiceFork, VoiceTurn } from './refs.ts'
-import {
-  createPlayer,
-  fetchedVoice,
-  splitReply,
-  splitSentences,
-  systemVoice,
-  systemVoices,
-} from './speech.ts'
-import type { Player } from './speech.ts'
-import { createTrace } from './trace.ts'
-import type { Trace } from './trace.ts'
+import type { VoiceClip, VoiceDelivery, VoiceFork, VoiceTurn } from './refs.ts'
 
 export const KEYS = 'mod+shift+v'
 type Image = { data: string; mimeType: string }
 export type Phase = 'idle' | 'recording' | 'sending' | 'thinking' | 'speaking' | 'done' | 'error'
 type Local = {
-  trace: Trace
   conversation?: number
   audio?: string
   failed?: string
   optimistic?: VoiceTurn
   images?: Image[]
 }
-type Cut = { key: string; sentence: number; charIndex: number }
+
+const loaded = new Set<string>()
+const owned = () => loaded.has(speech.state.get().key ?? '')
+const player = {
+  state: speech.state,
+  items: () => speech.items(),
+  idle: () => speech.idle(),
+  push: (key: string, sentence: Sentence) => owned() && speech.push(key, sentence),
+  play: (index: number) => speech.play(index),
+  load(key: string, sentences: readonly Sentence[], streaming: boolean) {
+    loaded.add(key)
+    speech.load(key, sentences, streaming, listening)
+  },
+  streaming: (on: boolean) => owned() && speech.streaming(on),
+  pause: () => owned() && speech.pause(),
+  resume: () => owned() && speech.resume(),
+  stop: () => owned() && speech.stop(),
+}
 
 export const dock = createRoot(() => {
   const [speak, setSpeak] = useUiState('ext.voice-live.speak', true)
   const [cuesOn, setCuesOn] = useUiState('ext.voice-live.cues', true)
-  const [rate, setRate] = useUiState('ext.voice-live.rate', 1.15)
   const [open, setOpen] = useUiState('ext.voice-live.open', false)
   const [collect, setCollect] = useUiState('ext.voice-live.collect', false)
   const [phase, setPhase] = createSignal<Phase>('idle')
   const [status, setStatus] = createSignal<string | undefined>()
   const [local, setLocal] = createSignal<Record<string, Local>>({})
-  const [cuts, setCuts] = createSignal<Cut[]>([])
   const [error, setError] = createSignal<string | undefined>()
   const [pending, setPending] = createSignal<string | undefined>()
   const cues = createCues(cuesOn)
-  const [voice, setVoice] = useUiState<'system' | 'openai'>('ext.voice-live.voice', 'system')
-  const [openaiVoice, setOpenaiVoice] = useUiState('ext.voice-live.openai-voice', 'cedar')
-  const [keyed, setKeyed] = createSignal<boolean | undefined>()
-  const voices = systemVoices()
-  const [voiced, setVoiced] = createSignal(voices.some())
-  voices.subscribe(() => setVoiced(voices.some()))
-  const openaiOn = () => keyed() === true && (voice() === 'openai' || !voiced())
-  const system = systemVoice()
-  const openai = fetchedVoice({
-    load: async (text, signal) => {
-      const { audio } = await api.action(
-        SpeakAction,
-        { voice: openaiVoice() as OpenAiVoice, text },
-        { conversationId: ROOT, signal },
-      )
-      return `data:audio/wav;base64,${audio}`
-    },
-    audio: () => new Audio(),
-    failed: (failure) => {
-      player.stop()
-      setError(`OpenAI voice: ${errorMessage(failure)}`)
-    },
+  speech.failure.subscribe(() => {
+    const failure = speech.failure.get()
+    if (failure?.key !== undefined && loaded.has(failure.key)) setError(failure.message)
   })
-  const player: Player = createPlayer({
-    rate,
-    enabled: speak,
-    listening,
-    frame: animationFrames,
-    engine: () => (openaiOn() ? openai : system),
-  })
-  createEffect(openaiOn, () => player.switched())
   let held: { busy: boolean } | undefined
   let stopPulse: (() => void) | undefined
   return {
@@ -101,16 +76,6 @@ export const dock = createRoot(() => {
     setSpeak,
     cuesOn,
     setCuesOn,
-    rate,
-    setRate,
-    voice,
-    setVoice,
-    keyed,
-    setKeyed,
-    voiced,
-    openaiOn,
-    openaiVoice,
-    setOpenaiVoice,
     collect,
     setCollect,
     open,
@@ -122,8 +87,6 @@ export const dock = createRoot(() => {
     setStatus,
     local,
     setLocal,
-    cuts,
-    setCuts,
     error,
     setError,
     pending,
@@ -216,52 +179,29 @@ export const setVoiceOpen = (open: boolean) => {
   if (!open) void capture.take(voiceSink)?.cancel()
   dock.setOpen(open)
 }
+const ours = () => {
+  const state = dock.player.state.get()
+  return state.key !== undefined && loaded.has(state.key)
+    ? state
+    : { ...state, playing: false, paused: false, streaming: false, index: -1, charIndex: -1 }
+}
 export const playerState = createRoot(() => {
-  const [state, setState] = createSignal(dock.player.state.get())
-  dock.player.state.subscribe(() => setState(dock.player.state.get()))
+  const [state, setState] = createSignal(ours())
+  dock.player.state.subscribe(() => setState(ours()))
   return state
 })
 
 const patchLocal = (key: string, change: Partial<Local>) =>
   dock.setLocal((all) => ({ ...all, [key]: { ...all[key], ...change } }))
 
-function hintFor(key: string, reply: string, cut: Cut | undefined) {
-  if (!reply.trim()) return '(Hint: the user pressed to talk before your reply started playing.)'
-  const sentences = splitSentences(reply, false).sentences
-  const before = sentences
-    .slice(0, cut?.sentence ?? 0)
-    .reduce((sum, item) => sum + item.text.length, 0)
-  const word = cut && sentences[cut.sentence]
-  const heardChars =
-    cut && word && cut.charIndex >= 0
-      ? before + cut.charIndex + (/^\S+/.exec(word.text.slice(cut.charIndex))?.[0].length ?? 0)
-      : before
-  const heard = reply.slice(0, heardChars)
-  const unheard = reply.slice(heardChars)
-  if (!heard.trim())
-    return `(Hint: the user pressed to talk before your reply started playing; they may only have read it: "${reply.slice(0, 500)}".)`
-  return `(Hint: the user pressed to talk while your reply was playing, around "…${heard.slice(-160)}". They may not have heard the rest: "${unheard.slice(0, 500)}${unheard.length > 500 ? '…' : ''}" (they can also read it on screen). Turn ${key}.)`
-}
+export const retire = (key: string) =>
+  dock.setLocal(({ [key]: { optimistic: _stored, images: _shown, ...kept }, ...rest }) => ({
+    ...rest,
+    [key]: kept,
+  }))
 
-let latestReply: { key: string; text: string } | undefined
-
-function markCut() {
-  const reply = latestReply
-  if (!reply) return undefined
-  const state = playerState()
-  const playingThis = state.key === reply.key && (state.playing || state.paused)
-  const cut: Cut = {
-    key: reply.key,
-    sentence: playingThis
-      ? Math.max(0, state.index)
-      : state.key === reply.key
-        ? dock.player.items().length
-        : 0,
-    charIndex: playingThis ? state.charIndex : -1,
-  }
-  dock.setCuts((cuts) => [...cuts.filter((item) => item.key !== reply.key), cut])
-  return hintFor(reply.key, reply.text, cut)
-}
+let generating = false
+const replying = () => generating || dock.phase() === 'thinking' || dock.phase() === 'sending'
 
 function listening() {
   return capture.capturing(voiceSink)
@@ -273,10 +213,10 @@ export const voiceSink: Sink = {
   },
   start() {
     dock.setError(undefined)
-    const paused = dock.player.pause()
+    const speaking = ours().playing
+    dock.player.pause()
     dock.hold({
-      busy:
-        paused || !!dock.held()?.busy || dock.phase() === 'thinking' || dock.phase() === 'sending',
+      busy: speaking || !!dock.held()?.busy || replying(),
     })
   },
   recording() {
@@ -316,7 +256,7 @@ async function finishRecording(recorded: Recorded, retaking: boolean) {
   const held = dock.held()
   if (!retaking) dock.hold(undefined)
   if (!recorded.spoke) {
-    if (playerState().paused) {
+    if (ours().paused) {
       dock.player.resume()
       dock.setPhase('speaking')
       dock.setStatus('Not enough audio · kept going')
@@ -364,11 +304,11 @@ async function collectClip(recorded: Recorded) {
       const clips = held.filter((clip) => chosen.has(clip.audio))
       const judged = held.length === chosen.size && held.every((clip) => !sending.has(clip.audio))
       if (intent.answered && !judged) {
-        if (playerState().paused) dock.player.resume()
+        if (ours().paused) dock.player.resume()
       } else if (clips.length === chosen.size)
         await sendDraft(intent.send, '', intent.answered ? 'answer' : true, clips)
       else dock.setStatus('The collected clips changed · press Enter to send')
-    } else if (playerState().paused) dock.player.resume()
+    } else if (ours().paused) dock.player.resume()
   } catch (failure) {
     if (!signal.aborted) dock.setError(errorMessage(failure))
   }
@@ -384,14 +324,10 @@ export async function sendDraft(
 ) {
   clips = clips.filter((clip) => !sending.has(clip.audio))
   if (!clips.length && !typed.trim() && !images?.length) return
-  const busy =
-    playerState().playing ||
-    playerState().paused ||
-    dock.phase() === 'thinking' ||
-    dock.phase() === 'sending'
+  const busy = ours().playing || ours().paused || replying()
   const interrupted = busy && delivery === 'steer'
   if (interrupted) dock.player.pause()
-  else if (playerState().paused) dock.player.resume()
+  else if (ours().paused) dock.player.resume()
   await sendTurn({
     clips: [...clips],
     typed: typed.trim(),
@@ -409,16 +345,14 @@ export async function sendTyped(text: string, images: readonly Image[] = []) {
   const free = draftOf().filter((clip) => !sending.has(clip.audio))
   if (free.length) return sendDraft('steer', text, false, free, true, images)
   if (!text.trim() && !images.length) return
-  const interrupted =
-    playerState().playing || dock.phase() === 'thinking' || dock.phase() === 'sending'
+  const interrupted = ours().playing || replying()
   dock.player.pause()
   await sendTurn({ typed: text.trim(), images, interrupted, fromComposer: true })
 }
 
-function heardNothing(key: string, trace: Trace) {
+function heardNothing(key: string) {
   dock.player.stop()
   dock.pulse(false)
-  trace.fail('no words')
   dock.setLocal(({ [key]: _dropped, ...rest }) => rest)
   dock.setPending(undefined)
   dock.setPhase('idle')
@@ -440,19 +374,12 @@ async function sendTurn(input: {
   const cancelled = () => {
     if (input.fromComposer) throw signal.reason
   }
-  if (dock.openaiOn() && dock.speak())
-    inProcess(
-      'opening the voice connection early only saves this page time',
-      api
-        .action(SpeakAction, { voice: dock.openaiVoice() as OpenAiVoice }, { conversationId: ROOT })
-        .catch(overshadowed),
-    )
-  const cut = input.interrupted ? markCut() : undefined
+  if (dock.speak()) speech.warm()
   const sentBySaying =
     input.spokenSend === true
       ? '(The user ended this message by saying a send command such as "send it": that sent it to you, it is not a request to hand off.)'
       : undefined
-  const hint = [screen()?.text, cut, sentBySaying].filter(Boolean).join('\n\n') || undefined
+  const hint = [screen()?.text, sentBySaying].filter(Boolean).join('\n\n') || undefined
   if (signal.aborted) return cancelled()
   const cold = composerDraft(COLD_DRAFT)
   const fromCold = !input.fromComposer && (session === undefined || coldHolds(cold))
@@ -480,7 +407,6 @@ async function sendTurn(input: {
   try {
     if (input.interrupted) {
       dock.player.stop()
-      for (const local of Object.values(dock.local())) local.trace.fail('cut in')
       dock.setPending(undefined)
       await api.action(StopAction, null, { signal }).catch((failure: unknown) => {
         if (!signal.aborted) throw failure
@@ -496,13 +422,7 @@ async function sendTurn(input: {
   async function deliver(): Promise<boolean> {
     const seconds = input.recorded?.seconds ?? clips.reduce((sum, clip) => sum + clip.seconds, 0)
     const envelope = input.recorded?.envelope ?? clips.flatMap((clip) => clip.envelope ?? [])
-    const trace = createTrace(
-      input.recorded || clips.length
-        ? ['mic', 'transcribe', 'send', 'model', 'thinking', 'voice']
-        : ['send', 'model', 'thinking', 'voice'],
-    )
     patchLocal(key, {
-      trace,
       optimistic: {
         key,
         text: typed,
@@ -516,16 +436,15 @@ async function sendTurn(input: {
       },
       images,
     })
+    if (owner !== undefined) events.emit('ultimate:sent', { conversationId: owner })
     dock.setPending(key)
     dock.setPhase('sending')
     dock.setStatus(input.recorded || clips.length ? 'Sending your voice…' : 'Sending…')
     if (input.interrupted) dock.cues.steer()
     else dock.cues.send()
-    if (input.recorded || clips.length) trace.record('mic', seconds * 1000)
     try {
       const status = await api.action(StatusAction, null, { signal })
-      dock.setKeyed(status.transcribes)
-      trace.label('model', status.model.split('/')[0])
+      speech.setKeyed(status.transcribes)
       const audio = input.recorded ? await base64(input.recorded.blob) : undefined
       const mimeType = input.recorded?.blob.type.split(';')[0] ?? ''
       const recorded = audio
@@ -540,20 +459,17 @@ async function sendTurn(input: {
       if (kept) patchLocal(key, { audio: kept })
       let text = typed
       if (kept && status.route === 'text') {
-        trace.start('transcribe')
         const heard = await Promise.all(
           (clips.length ? clips.map((clip) => clip.audio) : [kept]).map((clip) =>
             settled(clip, signal),
           ),
         )
         text = [heard.filter((part) => part.trim()).join(' '), text].filter(Boolean).join('\n\n')
-        trace.done('transcribe')
         if (!text.trim() && !images.length) {
-          heardNothing(key, trace)
+          heardNothing(key)
           return false
         }
-      } else if (kept) trace.drop('transcribe')
-      trace.start('send')
+      }
       const sent = await api.action(
         TurnAction,
         {
@@ -572,12 +488,13 @@ async function sendTurn(input: {
         { signal },
       )
       patchLocal(key, { conversation: sent.conversation })
+      if (!sent.dropped) retire(key)
       if (dock.pending() !== key) {
         if (sent.dropped) dock.setLocal(({ [key]: _dropped, ...rest }) => rest)
         return !sent.dropped
       }
       if (sent.dropped) {
-        heardNothing(key, trace)
+        heardNothing(key)
         return false
       }
       if (kept && status.route !== 'text') {
@@ -585,14 +502,11 @@ async function sendTurn(input: {
         void Promise.all(group.map((clip) => settled(clip, signal))).then(
           (heard) => {
             const silent = heard.every((part) => !part.trim())
-            if (silent && !typed && !images.length && dock.pending() === key)
-              heardNothing(key, trace)
+            if (silent && !typed && !images.length && dock.pending() === key) heardNothing(key)
           },
           () => undefined,
         )
       }
-      trace.done('send')
-      trace.start('model')
       dock.setPhase('thinking')
       dock.setStatus('Thinking…')
       dock.pulse(true)
@@ -602,7 +516,6 @@ async function sendTurn(input: {
         cancelled()
         return false
       }
-      trace.fail('error')
       patchLocal(key, { failed: errorMessage(failure) })
       dock.pulse(false)
       dock.cues.error()
@@ -616,16 +529,10 @@ async function sendTurn(input: {
 
 const textOf = (message: AssistantMessage | undefined) =>
   message?.content.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('') ?? ''
-const thoughtOf = (message: AssistantMessage | undefined) =>
-  message?.content.flatMap((part) => (part.type === 'thinking' ? [part.thinking] : [])).join('') ??
-  ''
 
 export type TurnView = {
   key: string
   data: VoiceTurn
-  images: { data: string; mimeType: string }[]
-  record?: EntryRecord
-  answer?: EntryRecord
   replies: AssistantMessage[]
   live?: AssistantMessage
   optimistic?: true
@@ -633,47 +540,51 @@ export type TurnView = {
 
 export function useTurns() {
   const state = useConversation()
-  const partial = createMemo(() => state().live.generation?.message as AssistantMessage | undefined)
-  return createMemo(() => {
-    const turns: TurnView[] = []
-    for (const entry of state().entries) {
-      if (entry.kind === 'voice.turn') {
-        const data = entry.data as VoiceTurn
-        turns.push({ key: data.key, data, images: imagesOf(entry), record: entry, replies: [] })
-      } else if (entry.kind === 'pi.assistant' && turns.length) {
-        const message = entry.model?.[0]
-        if (message?.role === 'assistant') {
-          turns.at(-1)!.replies.push(message)
-          turns.at(-1)!.answer = entry
-        }
-      }
-    }
-    const last = turns.at(-1)
-    if (last && state().busy && partial()) last.live = partial()
-    const stored = new Set(turns.map((turn) => turn.key))
-    const here = state().id
-    for (const [key, local] of Object.entries(dock.local()))
-      if (
-        local.optimistic &&
-        !stored.has(key) &&
-        (local.conversation === undefined || local.conversation === here)
-      )
-        turns.push({
-          key,
-          data: local.optimistic,
-          images: local.images ?? [],
-          replies: [],
-          optimistic: true,
-        })
-    return { turns, busy: state().busy }
-  })
+  return createMemo(() => turnsIn(state()))
 }
 
-function imagesOf(entry: EntryRecord) {
+export function turnsIn(state: ReturnType<ReturnType<typeof useConversation>>) {
+  const partial = state.live.generation?.message as AssistantMessage | undefined
+  const turns: TurnView[] = []
+  for (const entry of state.entries) {
+    if (entry.kind === 'voice.turn') {
+      const data = entry.data as VoiceTurn
+      turns.push({ key: data.key, data, replies: [] })
+    } else if (entry.kind === 'pi.assistant' && turns.length) {
+      const message = entry.model?.[0]
+      if (message?.role === 'assistant') turns.at(-1)!.replies.push(message)
+    }
+  }
+  const last = turns.at(-1)
+  if (last && state.busy && partial) last.live = partial
+  const stored = new Set(turns.map((turn) => turn.key))
+  const here = state.id
+  for (const [key, local] of Object.entries(dock.local()))
+    if (
+      local.optimistic &&
+      !stored.has(key) &&
+      (local.conversation === undefined || local.conversation === here)
+    )
+      turns.push({
+        key,
+        data: local.optimistic,
+        replies: [],
+        optimistic: true,
+      })
+  return { turns, busy: state.busy }
+}
+
+export function imagesOf(entry: EntryRecord) {
   const message = entry.model?.[0]
-  return message?.role === 'user' && Array.isArray(message.content)
-    ? message.content.flatMap((part) =>
-        part.type === 'image' ? [{ data: part.data, mimeType: part.mimeType }] : [],
+  return message?.role === 'user' ? imagesIn(message.content) : []
+}
+
+export function imagesIn(content: unknown) {
+  return Array.isArray(content)
+    ? (content as { type: string; data?: string; mimeType?: string }[]).flatMap((part) =>
+        part.type === 'image' && part.data && part.mimeType
+          ? [{ data: part.data, mimeType: part.mimeType }]
+          : [],
       )
     : []
 }
@@ -684,13 +595,7 @@ export function replyOf(turn: TurnView) {
     ...turn.replies.map((message) => ({ text: textOf(message), final: true })),
     ...(turn.live ? [{ text: textOf(turn.live), final: false }] : []),
   ]
-  return {
-    parts,
-    text: messages.map(textOf).filter(Boolean).join('\n\n'),
-    thought: messages.map(thoughtOf).filter(Boolean).join('\n\n'),
-    tokens: turn.replies.reduce((sum, message) => sum + (message.usage?.reasoning ?? 0), 0),
-    calls: messages.some((message) => message.content.some((part) => part.type === 'toolCall')),
-  }
+  return { parts, text: messages.map(textOf).filter(Boolean).join('\n\n') }
 }
 
 export function useSpeaking(view: () => { turns: TurnView[]; busy: boolean }) {
@@ -706,8 +611,6 @@ export function useSpeaking(view: () => { turns: TurnView[]; busy: boolean }) {
         key: turn.key,
         parts: reply.parts,
         text: reply.text,
-        thought: reply.thought,
-        tokens: reply.tokens,
         busy,
         answered: turn.replies.length > 0,
         stored: !turn.optimistic,
@@ -716,14 +619,8 @@ export function useSpeaking(view: () => { turns: TurnView[]; busy: boolean }) {
     },
     (latest) => {
       if (!latest) return
-      latestReply = { key: latest.key, text: latest.text }
-      const trace = latest.local?.trace
-      if (!trace) return
-      if (latest.thought) {
-        const model = trace.stages.get().find((stage) => stage.key === 'model')
-        if (model?.status === 'running') trace.start('thinking')
-        trace.detail('thinking', `${latest.tokens || Math.round(latest.thought.length / 4)} tok`)
-      }
+      if (!latest.local) return
+      generating = latest.busy && dock.pending() === latest.key
       const { sentences } = splitReply(
         latest.busy ? latest.parts : latest.parts.map((part) => ({ ...part, final: true })),
       )
@@ -735,31 +632,31 @@ export function useSpeaking(view: () => { turns: TurnView[]; busy: boolean }) {
         dock.pending() === latest.key &&
         !listening()
       ) {
-        trace.fail('stopped')
         dock.pulse(false)
         dock.setPhase('done')
         dock.setStatus('Stopped · your turn')
       }
       if (!sentences.length && (latest.busy || !latest.answered)) return
+      if (dock.pending() !== latest.key) return
       if (spoken?.key !== latest.key) {
         spoken = { key: latest.key, count: 0 }
-        dock.player.load(latest.key, [], latest.busy)
         if (sentences.length) {
           dock.pulse(false)
           if (!listening()) dock.cues.firstWord()
-          trace.start('voice')
         }
       }
-      if (dock.cuts().some((cut) => cut.key === latest.key)) return
-      for (const sentence of sentences.slice(spoken.count)) dock.player.push(latest.key, sentence)
+      const from = spoken.count
+      const fresh = sentences.slice(from)
       spoken.count = Math.max(spoken.count, sentences.length)
+      const voice = dock.speak() && fresh.length > 0
+      if (voice && !loaded.has(latest.key)) {
+        dock.player.load(latest.key, sentences, latest.busy)
+        dock.player.play(from)
+      } else if (voice) for (const sentence of fresh) dock.player.push(latest.key, sentence)
       if (!latest.busy) {
         dock.player.streaming(false)
-        if (!latest.text.trim()) {
-          dock.pulse(false)
-          trace.skip('voice', 'silent')
-        }
-        void dock.player.idle().then(() => {
+        if (!latest.text.trim()) dock.pulse(false)
+        void (ours().key === latest.key ? dock.player.idle() : Promise.resolve()).then(() => {
           if (dock.phase() === 'recording' || dock.pending() !== latest.key) return
           dock.cues.done()
           dock.setPhase('done')
@@ -772,11 +669,6 @@ export function useSpeaking(view: () => { turns: TurnView[]; busy: boolean }) {
     () => playerState().playing && playerState().key,
     (key) => {
       if (!key) return
-      const trace = dock.local()[key]?.trace
-      if (trace?.stages.get().find((stage) => stage.key === 'voice')?.status === 'running') {
-        trace.done('voice')
-        trace.finish(`heard after ${((Date.now() - trace.born) / 1000).toFixed(1)} s`)
-      }
       dock.setPhase('speaking')
       dock.setStatus('Speaking')
     },
@@ -790,6 +682,7 @@ export function endSession() {
 
 function endLocally() {
   void capture.end(voiceSink)
+  generating = false
   dock.hold(undefined)
   dock.player.stop()
   live.abort(new Error('The voice session ended'))
@@ -799,7 +692,6 @@ function endLocally() {
   setDraft([])
   dock.setPending(undefined)
   dock.setLocal({})
-  dock.setCuts([])
   dock.setPhase('idle')
   dock.setStatus(undefined)
 }

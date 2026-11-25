@@ -1,18 +1,30 @@
 import { LoaderCircle, Pause, Volume2 } from '@lucide/solid'
 import type { ConversationId, EntryRecord } from '@earendil-works/pi-durable'
-import { Match, Show, Switch } from 'solid-js'
+import { createMemo, createSignal, Match, Show, Switch } from 'solid-js'
 import { Button } from '@/components/ui/button.solid.tsx'
 import { cn, useExternal } from '@/sdk/solid'
+import { useSpokenText } from './spoken.solid.tsx'
+import { sections } from './text.ts'
 
 type Player = {
   current: () =>
-    | { conversation: ConversationId; entry: number; status: 'loading' | 'playing' | 'paused' }
+    | {
+        key: string
+        text: string
+        conversation: ConversationId
+        entry: number
+        status: 'loading' | 'playing' | 'paused'
+      }
     | undefined
   subscribe: (listener: () => void) => () => void
   read: (conversation: ConversationId, entry: number, text: string) => void
   pause: () => void
   resume: () => void
+  sectionOf: (item: number) => number | undefined
+  playSection: (conversation: ConversationId, entry: number, text: string, section: number) => void
 }
+
+const message = '[data-ui="message-card"], [data-from]'
 
 export function readAloudAction(player: Player) {
   return function ReadAloudAction(props: { entry: EntryRecord; text: string }) {
@@ -20,10 +32,31 @@ export function readAloudAction(player: Player) {
     const status = () => {
       const current = reading()
       return current?.conversation === props.entry.conversationId &&
-        current.entry === props.entry.id
+        current.entry === props.entry.id &&
+        current.text === props.text
         ? current.status
         : undefined
     }
+    const [button, setButton] = createSignal<HTMLElement>()
+    const spans = createMemo(() => sections(props.text))
+    useSpokenText(
+      () => {
+        const root = button()?.closest(message)
+        return root ? [root] : []
+      },
+      () => {
+        const key = status() ? reading()?.key : undefined
+        const { conversationId, id } = props.entry
+        const text = props.text
+        if (!key) return undefined
+        return {
+          key,
+          spans: spans(),
+          span: player.sectionOf,
+          play: (section: number) => player.playSection(conversationId, id, text, section),
+        }
+      },
+    )
     const label = () => (!status() ? 'Read aloud' : status() === 'playing' ? 'Pause' : 'Resume')
     return (
       <Show when={props.text.trim() && props.entry.model?.[0]?.role !== 'user'}>
@@ -34,6 +67,7 @@ export function readAloudAction(player: Player) {
             status() && 'text-brand',
           )}
           data-read-aloud={props.entry.id}
+          ref={setButton}
           onClick={() => {
             switch (status()) {
               case undefined:
