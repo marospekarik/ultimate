@@ -218,9 +218,12 @@
     color-scheme: light;
   }
   /* An app, not a page: swipes and scrolls past an end never navigate back or pull to refresh. */
+  /* Clipped sideways: on Android anything wider than the screen widens the layout viewport and zooms the whole app out,
+     leaving it stuck short and narrow (docs/pixel-fold.md). */
   html,
   body {
     overscroll-behavior: none;
+    overflow-x: clip;
   }
   html.dark {
     color-scheme: dark;

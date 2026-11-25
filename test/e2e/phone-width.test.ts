@@ -73,4 +73,35 @@ it('keeps the page and the transcript within a 375 px phone', async () => {
     }
   })
   expect(widths).toEqual({ layout: 375, page: 375, transcript: 0 })
+
+  // On an unfolded Pixel Fold one too-wide Inbox pane widened Android's layout viewport to 1348 px and zoomed the app
+  // out: it stayed stuck at 58 % of the screen, short and narrow, until a reload. Folding and unfolding keep it exact.
+  await page.evaluate(() => {
+    const wide = document.createElement('div')
+    wide.style.cssText = 'width: 2000px; height: 1px; flex-shrink: 0'
+    document.querySelector('main')!.append(wide)
+  })
+  const filled = []
+  for (const [width, height] of [
+    [375, 812],
+    [783, 680],
+    [783, 320],
+    [412, 800],
+  ] as const) {
+    await page.setViewportSize({ width, height })
+    filled.push(
+      await page.evaluate(() => [
+        innerWidth,
+        innerHeight,
+        scrollX,
+        Math.round(document.querySelector('.safe-area')!.getBoundingClientRect().width),
+      ]),
+    )
+  }
+  expect(filled).toEqual([
+    [375, 812, 0, 375],
+    [783, 680, 0, 783],
+    [783, 320, 0, 783],
+    [412, 800, 0, 412],
+  ])
 })

@@ -192,6 +192,12 @@ export default function browserExtension(host: ExtensionHost) {
       }),
     ),
     height: opt(int({ minimum: 1, description: 'Viewport height in CSS pixels; default 900.' })),
+    touch: opt(
+      bool({
+        description:
+          'Emulate a touch phone or tablet: pointer: coarse, and a layout viewport that widens to fit a too-wide page as Android Chrome does.',
+      }),
+    ),
     timeoutMs: opt(
       int({ minimum: 1, description: 'Limit per step, load and capture; default 30000.' }),
     ),
@@ -231,7 +237,7 @@ export default function browserExtension(host: ExtensionHost) {
       defineTool({
         name: 'browser',
         description:
-          "Drive a fresh browser page and report each step's outcome, then an image unless screenshot: false. width and height set the viewport (width: 375 for a phone). Each step times out after 30 s. On an Ultimate page (this UI or a preview) every control is a ui-sdk component: drive it with `ui` steps, not selectors. {ui: 'query', text} finds controls by label or row text, with their ref, state and actions; {ui: 'act', steps: [{ref, action, args?}]} runs actions as the agent (ref: the exact label or a ref) and returns what changed and what appeared, like [{ref: 'System', action: 'press'}] to switch surface or [{ref: 'Keep warm', action: 'setChecked', args: [false]}]; {ui: 'snapshot'} lists the page's controls (long pages stop at 100: prefer query). `send` submits a prompt and `until` waits on state, never a guessed time: 'idle' (that conversation's turn is done), 'quiet' (nothing is busy, branches and subagents included), {entry: kind}, {event: name, where} or {ui: label, is: {checked: false}} (that control has that state; is omitted: it is on the page); until fails after 10 s and says what it saw: a control, a state or an event that takes longer is a bug to report. Only waiting on a model turn ('idle', 'quiet' or {entry: 'assistant'} after a send) passes a longer timeoutMs, at most 120000. eval is not for waiting: no setTimeout sleeps in it; use until. click, fill, press and a selector wait are for testing the interaction itself or pages without ui-sdk; scope them to one card or panel ('[data-entry-id=\"42\"] button:has-text(\"Retry\")'). eval reads what no control holds: transcript text, layout, styles. Use this and the screenshot tool; never write ad hoc Playwright or Chromium scripts through bash.",
+          "Drive a fresh browser page and report each step's outcome, then an image unless screenshot: false. width and height set the viewport (width: 375 for a phone); touch: true emulates a touch phone or tablet, and a {resize: [w, h]} step resizes without reloading (a fold, a rotation, a keyboard). Each step times out after 30 s. On an Ultimate page (this UI or a preview) every control is a ui-sdk component: drive it with `ui` steps, not selectors. {ui: 'query', text} finds controls by label or row text, with their ref, state and actions; {ui: 'act', steps: [{ref, action, args?}]} runs actions as the agent (ref: the exact label or a ref) and returns what changed and what appeared, like [{ref: 'System', action: 'press'}] to switch surface or [{ref: 'Keep warm', action: 'setChecked', args: [false]}]; {ui: 'snapshot'} lists the page's controls (long pages stop at 100: prefer query). `send` submits a prompt and `until` waits on state, never a guessed time: 'idle' (that conversation's turn is done), 'quiet' (nothing is busy, branches and subagents included), {entry: kind}, {event: name, where} or {ui: label, is: {checked: false}} (that control has that state; is omitted: it is on the page); until fails after 10 s and says what it saw: a control, a state or an event that takes longer is a bug to report. Only waiting on a model turn ('idle', 'quiet' or {entry: 'assistant'} after a send) passes a longer timeoutMs, at most 120000. eval is not for waiting: no setTimeout sleeps in it; use until. click, fill, press and a selector wait are for testing the interaction itself or pages without ui-sdk; scope them to one card or panel ('[data-entry-id=\"42\"] button:has-text(\"Retry\")'). eval reads what no control holds: transcript text, layout, styles. Use this and the screenshot tool; never write ad hoc Playwright or Chromium scripts through bash.",
         parameters: obj({
           ...base,
           steps: arr(
@@ -245,6 +251,14 @@ export default function browserExtension(host: ExtensionHost) {
                 }),
               }),
               obj({ press: str() }),
+              obj({
+                resize: arr(int({ minimum: 1 }), {
+                  minItems: 2,
+                  maxItems: 2,
+                  description:
+                    '[width, height]: resize the viewport without reloading, as a fold, a rotation or a touch keyboard does.',
+                }),
+              }),
               obj({ wait: str({ description: 'A selector to wait for.' }) }),
               obj({
                 eval: str({
@@ -331,6 +345,10 @@ export default function browserExtension(host: ExtensionHost) {
                 else if ('fill' in step)
                   await one(step.fill[0], page.locator(step.fill[0]).fill(step.fill[1]))
                 else if ('press' in step) await guard(page.keyboard.press(step.press))
+                else if ('resize' in step)
+                  await guard(
+                    page.setViewportSize({ width: step.resize[0], height: step.resize[1] }),
+                  )
                 else if ('wait' in step) await one(step.wait, page.locator(step.wait).waitFor())
                 else if ('send' in step || 'until' in step || 'ui' in step) {
                   const waitForLoadedSdk = () =>
@@ -462,6 +480,7 @@ export default function browserExtension(host: ExtensionHost) {
       path?: string
       width?: number
       height?: number
+      touch?: boolean
       theme?: 'light' | 'dark'
       timeoutMs?: number
     },
@@ -550,6 +569,8 @@ export default function browserExtension(host: ExtensionHost) {
         coldLaunchAndPageSetupMs,
         browser.newContext({
           viewport: { width: args.width ?? 1440, height: args.height ?? 900 },
+          hasTouch: args.touch,
+          isMobile: args.touch,
           colorScheme: args.theme,
         }),
       )
