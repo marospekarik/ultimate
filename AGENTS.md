@@ -78,6 +78,7 @@ New UI is a new extension folder, not a change to `web/`: follow the `write-exte
 - [Running the server](docs/running.md): before starting, debugging or testing a server or core swap.
 - [Worktrees and integration](docs/worktrees.md): before previewing an isolate, landing or recovering a rejected push.
 - [Discovery and settings](docs/settings.md): before changing configuration, trust, resources or `summaryModel` (titles, summaries, reply summaries and tree abstracts).
+- [Foldable phones](docs/pixel-fold.md): before changing the shell, a surface's layout or touch sizing; the device's edge cases and how to check each.
 - [Durability](docs/durability.md): before changing persistence, replay or durable UI state.
 - [Extension topics](extensions/README.md#topics): before wiring facets, contracts, documents, events or runtime inspection.
 - [Subagents](docs/subagents.md): before delegating, changing definitions or configuring the review team.
