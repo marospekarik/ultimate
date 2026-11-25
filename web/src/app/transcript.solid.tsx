@@ -243,14 +243,14 @@ function TranscriptView(props: {
       top: row.getBoundingClientRect().top - viewTop,
     }
   }
-  let reading =
+  let resumed =
     id === undefined ? undefined : (takeFromLastPage(`transcript:${id}`) as Reading | undefined)
   createEffect(
     () => ({ rows: history.entries().length, controller: scroller() }),
     ({ rows, controller }) => {
-      if (!reading || !controller || rows === 0) return
-      const { entryId, last, top } = reading
-      reading = undefined
+      if (!resumed || !controller || rows === 0) return
+      const { entryId, last, top } = resumed
+      resumed = undefined
       const entry = parseEntryId(entryId)
       const row =
         content.querySelector(anchorSelector({ entryId: entry, last })) ??
