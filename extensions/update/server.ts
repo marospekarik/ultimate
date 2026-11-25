@@ -115,6 +115,7 @@ async function installPackages(
 
 const checkoutWriteWaitMs = 60_000
 const cloneInstallWaitMs = 10 * 60_000
+const cloneUpdateWaitMs = 30_000
 
 export function loadable(host: ExtensionHost): Promise<void> {
   const shared = reloadSharedState(host)
@@ -393,7 +394,11 @@ async function run(host: ExtensionHost): Promise<UpdateResult> {
     await recordWithoutRollingBackClone(host, Refused, { root, reason: refused })
     return { ok: false, refused }
   }
-  const result = await withLock(await cloneWideUpdateLock(root), () => apply(host, refuse))
+  const result = await withLock(
+    await cloneWideUpdateLock(root),
+    () => apply(host, refuse),
+    cloneUpdateWaitMs,
+  )
   return result ?? refuse('Another Ultimate is updating this clone')
 }
 

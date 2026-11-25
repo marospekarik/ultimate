@@ -9,6 +9,8 @@ import { Workspaces } from '../../../workspaces/workspaces.ts'
 import { eventHost, fauxServer, post, sourceCopy, temp } from '../../../../test/helpers.ts'
 import { Applied } from '../../refs.ts'
 import { RESTORE_PREFIX } from '../../../../lib/merge.ts'
+import { cloneLock, gitIn, gitPath, withLock } from '../../../../lib/clone.ts'
+import { pace } from '../../../../lib/timers.ts'
 
 const servers: Awaited<ReturnType<typeof fauxServer>>[] = []
 afterAll(async () => {
@@ -262,4 +264,21 @@ it('keeps a merged update whose check fails, offering @ultimate to fix it once',
   expect(messages.match(/the update merged origin into main in /g)).toHaveLength(1)
   expect(messages).toContain('pnpm check fails')
   expect(messages).toContain('workspace submit')
+})
+
+// Another project's Ultimate updating the shared clone refused Update now at once instead of queueing it.
+it.concurrent('waits for another Ultimate updating the clone instead of refusing', async () => {
+  const home = await temp()
+  const root = await diverged(home)
+  await git(root, 'reset', '-q', '--hard', 'origin/main')
+  await installMatches(root)
+  const server = await serve(home, root, root)
+  const lock = await gitPath(gitIn(root), root, cloneLock)
+  let waiting: ReturnType<typeof post> | undefined
+  await withLock(lock, async () => {
+    waiting = post(server, '/api/extensions/update/actions/update', {})
+    await pace(300)
+  })
+  const updated = await waiting
+  expect(updated?.data.result).toMatchObject({ ok: true })
 })
