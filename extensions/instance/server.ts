@@ -27,7 +27,7 @@ import type { ExtensionAction } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { Subagents } from '../subagents/api.ts'
 import { TailscaleApi } from '../tailscale/api.ts'
-import { WorkspacesApi } from '../workspaces/api.ts'
+import { SubmissionQueued, WorkspacesApi } from '../workspaces/api.ts'
 import type { WorkspaceService } from '../workspaces/api.ts'
 import { cleanPreview, makeOwnerWritable, sweepPreviews } from './cleanup.ts'
 import { implementAction } from '../../lib/actions.ts'
@@ -338,6 +338,14 @@ async function tailnet(host: Pick<ExtensionHost, 'want' | 'userHome'>) {
   )
 }
 
+export async function withTailnet<T extends { pid: number }>(
+  host: Pick<ExtensionHost, 'want' | 'userHome'>,
+  started: T,
+): Promise<T & { tailnet?: string }> {
+  const address = (await tailnet(host)).get(started.pid)
+  return address ? { ...started, tailnet: address } : started
+}
+
 export const userActions = ['start', 'stop']
 
 export const actions: Record<string, ExtensionAction> = {
@@ -364,7 +372,8 @@ export const actions: Record<string, ExtensionAction> = {
     )
     const item = running(host).get(id)!
     watchIdle(host, item)
-    return { ...listed(item), running: true }
+    const { tailnet: address } = await withTailnet(host, item)
+    return { ...listed(item), running: true, ...(address && { tailnet: address }) }
   }),
   stop: implementAction(StopAction, async (args, { host }) => {
     const item = running(host).get(stringArg(args, 'id', 100))
@@ -520,8 +529,18 @@ async function start(
       throw new Error(
         `home must be an absolute path, got ${JSON.stringify(args.home)}: "~" is not expanded, so build it from $HOME`,
       )
-    if ([...instances.values()].filter(live).length + starts.pending >= 3)
-      throw new Error('At most three instances may run at once')
+    if ([...instances.values()].filter(live).length + starts.pending >= 3) {
+      const holders = [...instances.values()]
+        .filter(live)
+        .map((item) =>
+          item.conversationId === undefined
+            ? `${item.id} (no conversation)`
+            : `${item.id} (conversation #${item.conversationId})`,
+        )
+      throw new Error(
+        `At most three instances may run at once; running: ${holders.join(', ') || 'none, others are starting'}`,
+      )
+    }
     starts.pending++
     reserved = true
     let home: string
@@ -661,6 +680,7 @@ export default function instanceExtension(
     ExtensionHost,
     | 'need'
     | 'implement'
+    | 'react'
     | 'want'
     | 'resource'
     | 'onClose'
@@ -726,19 +746,28 @@ export default function instanceExtension(
     return { cwd, project, conversationId }
   }
 
-  host.implement(Previews, {
-    stop: async (concludedConversationIds) => {
-      const concluded = new Set(concludedConversationIds)
-      const ended = []
-      for (const item of instances.values()) {
-        if (item.conversationId === undefined || !concluded.has(item.conversationId)) continue
-        await stop(instances, item.id)
-        if (item.url) remember(host, item)
-        ended.push(item.id)
-      }
-      return ended
+  host.react(
+    'stop-on-submit',
+    [SubmissionQueued],
+    async (_tx, { data }) => {
+      await stopPreviews([data.conversationId])
     },
+    { from: 'now' },
+  )
+  host.implement(Previews, {
+    stop: (ids) => stopPreviews(ids),
   })
+  async function stopPreviews(conversationIds: ConversationId[]) {
+    const wanted = new Set(conversationIds)
+    const ended = []
+    for (const item of instances.values()) {
+      if (item.conversationId === undefined || !wanted.has(item.conversationId)) continue
+      await stop(instances, item.id)
+      if (item.url) remember(host, item)
+      ended.push(item.id)
+    }
+    return ended
+  }
   return defineExtension({
     name: 'instance',
     sections: [
@@ -779,13 +808,14 @@ export default function instanceExtension(
               if (!item) throw new Error(`Unknown instance: ${args.id}`)
               result = item.output.split('\n').slice(-200).join('\n')
             } else {
-              result = await start(
+              const started = await start(
                 host,
                 args,
                 context,
                 () => toolWorkspace(args, api, context),
                 (text) => api.output(text),
               )
+              result = await withTailnet(host, started)
             }
             return { output: [{ type: 'text', text: JSON.stringify(result) }] }
           } catch (error) {

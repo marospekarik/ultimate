@@ -22,8 +22,8 @@ screenshots: send them with the request.
 5. **Check for errors**: load the preview, then read its server log (`instance logs`) and the page's console (the
    screenshot and browser tools report loading and page errors) for 4xx/5xx responses and page errors. Fix them
    before asking: an error the user hits first, like a `403` on an extension action, can leave them a dead preview.
-6. **Ask for approval** the way your instructions ask decisions, with the screenshots as `images`. Include the URL (the tailnet URL when the preview chip
-   shows one), what changed, a short numbered "what to try" naming the conversation you seeded, the review state (the
+6. **Ask for approval** the way your instructions ask decisions, with the screenshots as `images`. Include the preview's `tailnet` URL from `instance start` or `list`, never the
+   `127.0.0.1` one: the user opens it on a phone, and tell them to open it in Chrome, not the installed app. Also say what changed, a short numbered "what to try" naming the conversation you seeded, the review state (the
    reviewed `base..head` and its verdict, or "preview first, review before submit"), and a choice question (approve as
    is, or change something). Review never has to come before a preview.
 7. **Iterate**: each change is a new commit and a new round; keep the same preview running.

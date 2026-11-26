@@ -80,6 +80,11 @@ export type LandedData = {
   /** Set when it changed the running clone's core (`needsRestart` in `lib/layers.ts`, over every changed path). */
   needsRestart?: true
 }
+/** Conversation `conversationId` submitted its workspace to the lander's queue; emitted in the commit that queues it. */
+export const SubmissionQueued = defineEvent<{
+  submission: string
+  conversationId: ConversationId
+}>('workspaces.queued')
 /**
  * The lander landed a submission: the target moved to `sha`. Emitted in the commit that records the outcome, also when
  * only the push failed afterwards; react to it for anything that must follow every landing exactly once.

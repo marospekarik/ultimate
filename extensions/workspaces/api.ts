@@ -46,7 +46,13 @@ export type WorkspaceService = {
 /** Worktrees and landing; core, so `need` it. */
 export const WorkspacesApi = defineApi<WorkspaceService>()('workspaces')
 
-export { CheckRan, SubmissionFailed, SubmissionLanded, LanderReportEntry } from './refs.ts'
+export {
+  CheckRan,
+  SubmissionFailed,
+  SubmissionQueued,
+  SubmissionLanded,
+  LanderReportEntry,
+} from './refs.ts'
 export type { LandedData } from './refs.ts'
 export type BranchesService = {
   /** The conversation that started branch `id`, which hears that its submission landed. */
