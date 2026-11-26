@@ -71,10 +71,13 @@ export function StatusLine() {
           </>
         }
       >
-        <div class="flex min-w-0 flex-1 items-center gap-3 overflow-x-auto whitespace-nowrap [scrollbar-width:none]">
+        <div class="flex min-w-0 flex-1 items-center gap-3 overflow-x-auto whitespace-nowrap [scrollbar-width:none] md:flex-none">
           <ComposerStatusTarget />
           <Slot fallback={inlineFailure} name="statusline.left" phone />
           <Slot fallback={inlineFailure} name="statusline.right" phone />
+        </div>
+        <div class="flex h-4 min-w-0 flex-1 flex-wrap content-start justify-evenly gap-x-3 overflow-hidden whitespace-nowrap max-md:hidden">
+          <Slot fallback={inlineFailure} name="statusline.right" wide />
         </div>
         <StatusMore />
       </Show>
@@ -97,6 +100,8 @@ function ComposerStatusTarget() {
 }
 
 function StatusMore() {
+  const viewport = useViewport()
+  const notInline = () => (viewport() === 'phone' ? undefined : false)
   return (
     <Popover>
       <StatusPopoverTrigger aria-label="More status" class="shrink-0">
@@ -108,7 +113,7 @@ function StatusMore() {
         side="top"
       >
         <Slot fallback={inlineFailure} name="statusline.left" phone={false} />
-        <Slot fallback={inlineFailure} name="statusline.right" phone={false} />
+        <Slot fallback={inlineFailure} name="statusline.right" phone={false} wide={notInline()} />
       </PopoverContent>
     </Popover>
   )
