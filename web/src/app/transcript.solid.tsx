@@ -87,6 +87,7 @@ import type { AsideGroup, BetweenGroup, CompactPart, WorkRun } from './compact.t
 import { ContributionError } from './contribution-error.solid.tsx'
 import { reportedFailure } from './error-stack.solid.tsx'
 import { foldKey, readFold, writeFold } from './fold-state.ts'
+import { keepAcrossReload, takeFromLastPage } from '../sdk/resume.ts'
 import { follow } from './follow.ts'
 import type { Follow } from './follow.ts'
 import { createHistory } from './history.solid.tsx'
@@ -166,6 +167,8 @@ function SkeletonUntilLoaded(props: { dock?: boolean; loading: boolean }) {
   )
 }
 
+type Reading = { entryId: number; last?: number; top: number }
+
 const rowGap = (content: Element | undefined) =>
   content ? Number.parseFloat(getComputedStyle(content).rowGap) || 0 : 0
 const preloadOneViewportBeforeTop = '100% 0px 0px 0px'
@@ -215,9 +218,49 @@ function TranscriptView(props: {
     setScroller(controller)
     if (id !== undefined && !restored() && !covered() && hasRows() && !reducedMotion())
       fadeInRowsNearTheEnd(scroll, content)
-    return () => controller.dispose()
+    const release =
+      id === undefined
+        ? undefined
+        : keepAcrossReload(`transcript:${id}`, () =>
+            controller.following() ? undefined : readingRow(),
+          )
+    return () => {
+      release?.()
+      controller.dispose()
+    }
   })
   const hasRows = () => history.entries().length > 0
+
+  const readingRow = (): Reading | undefined => {
+    const viewTop = scroll.getBoundingClientRect().top
+    const row = [...content.querySelectorAll(':scope > [data-entry-id]')].find(
+      (element) => element.getBoundingClientRect().bottom > viewTop,
+    )
+    if (!row) return undefined
+    return {
+      entryId: Number(row.getAttribute('data-entry-id')),
+      last: Number(row.getAttribute('data-run-last')) || undefined,
+      top: row.getBoundingClientRect().top - viewTop,
+    }
+  }
+  let resumed =
+    id === undefined ? undefined : (takeFromLastPage(`transcript:${id}`) as Reading | undefined)
+  createEffect(
+    () => ({ rows: history.entries().length, controller: scroller() }),
+    ({ rows, controller }) => {
+      if (!resumed || !controller || rows === 0) return
+      const { entryId, last, top } = resumed
+      resumed = undefined
+      const entry = parseEntryId(entryId)
+      const row =
+        content.querySelector(anchorSelector({ entryId: entry, last })) ??
+        content.querySelector(anchorSelector({ entryId: entry }))
+      if (!row) return
+      controller.stop()
+      const viewTop = scroll.getBoundingClientRect().top
+      controller.place(scroll.scrollTop + row.getBoundingClientRect().top - viewTop - top)
+    },
+  )
 
   const toEnd = (instant = false) => {
     held = null
@@ -412,10 +455,13 @@ function TranscriptView(props: {
     const noteReading = () => {
       if (scroll.clientWidth !== width) return
       const top = scroll.getBoundingClientRect()
-      const row = document.elementFromPoint(
-        top.left + top.width / 2,
-        top.top + pinned.offsetHeight + 1,
-      )
+      const line = top.top + pinned.offsetHeight + 1
+      let row = document.elementFromPoint(top.left + top.width / 2, line)
+      while (row) {
+        const below = [...row.children].find((child) => child.getBoundingClientRect().bottom > line)
+        if (!below) break
+        row = below
+      }
       if (row && content.contains(row))
         reading = { row, offset: row.getBoundingClientRect().top - top.top }
     }
@@ -1031,11 +1077,9 @@ function EmptyState() {
     },
     {
       label: 'ext',
-      value:
-        system()
-          ?.extensions.filter((extension) => extension.enabled)
-          .map((extension) => extension.name)
-          .join(' · ') ?? '…',
+      value: system()
+        ? `${system()!.extensions.filter((extension) => extension.enabled).length} enabled`
+        : '…',
     },
     {
       label: 'host',
