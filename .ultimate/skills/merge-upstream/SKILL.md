@@ -46,7 +46,7 @@ cost (#85440: 95 calls growing to 157k tokens took 17% of a Claude 5 h window).
      `~/.ultimate/settings.json` `landers` (memory `landing-policy-load`): carry upstream's check commands over there.
    - `.ultimate/agents/coordinator.md` and the other files under `.ultimate/`.
 5. Recheck every conflicted hunk against our local rules (`git diff` of each resolved file against `HEAD`): a side that
-   looked redundant may carry one, such as the `!front` check #91729 dropped (memory `merge-drops-rules`).
+   looked redundant may carry one, such as the `!front` check #91729 dropped (a merge silently dropped our rules).
 6. Upstream's `ultimate/no-comments` lint rejects comments in product code. Where our side carried a comment, say it in
    code (a name, a small function) instead of keeping or merely deleting the comment.
 7. Run `pnpm install --frozen-lockfile` when the lockfile changed, `pnpm check`, and the tests of every file you
