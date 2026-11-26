@@ -1,4 +1,5 @@
 import { Check, KeyRound, Layers, LogIn, Terminal } from '@lucide/solid'
+import { Dynamic } from '@solidjs/web'
 import { createMemo, createSignal, For, Show } from 'solid-js'
 import {
   Command,
@@ -16,22 +17,21 @@ import {
 } from '@/components/ui/dialog.solid.tsx'
 import { Kbd } from '@/components/ui/kbd.solid.tsx'
 import {
-  api,
   cn,
   ConversationScope,
   errorMessage,
   openPanel,
+  useAllProvided,
   useConversationId,
   useDialog,
   useExternal,
   useModels,
   writingAs,
 } from '@/sdk/solid'
-import type { ConversationId } from '@earendil-works/pi-durable'
 import { familyTitle } from '../../lib/families.ts'
 import { agentsPanel, familyOf, modelIdOf, runsOn, thinkingOf } from './family-state.ts'
-import { FamilyDot, useCurrentModel, useFamilies } from './readers.solid.tsx'
-import { SetFamilyAction } from './refs.ts'
+import { PickerRows } from './points.ts'
+import { FamilyDot, PickContext, useCurrentModel, useFamilies } from './readers.solid.tsx'
 import type { FamilyView } from './refs.ts'
 import {
   authLabel,
@@ -39,7 +39,6 @@ import {
   loginProvider,
   matchesEveryQueryTerm,
   modelKey,
-  notePick,
   pickerTarget,
   termsOf,
 } from './state.ts'
@@ -63,25 +62,15 @@ function rankModels(models: ModelInfo[], terms: string[]) {
     .slice(0, LIMIT)
 }
 
-export async function selectModel(
-  model: { provider: string; modelId: string },
-  id: ConversationId | undefined,
-  source: string,
-  family: FamilyView | null = null,
-) {
-  const level = family && thinkingOf(family)
-  await api.configure({ model, ...(level ? { thinkingLevel: level } : {}) }, id)
-  await writingAs(source, () =>
-    api.action(SetFamilyAction, { family: family?.name ?? null }, { conversationId: id }),
-  )
-  notePick()
-}
-
 export function ModelPicker() {
   const [open, setOpen] = useDialog(dialogs.picker)
   const target = useExternal(pickerTarget.get, pickerTarget.subscribe)
   const shown = useConversationId()
-  const scope = () => (target() === shown() ? 'shown' : (target() ?? 'shown'))
+  const scope = () => {
+    const picked = target()
+    if (typeof picked === 'object') return picked
+    return picked === shown() ? 'shown' : (picked ?? 'shown')
+  }
   return (
     <Dialog onOpenChange={setOpen} open={open()}>
       <DialogContent
@@ -94,11 +83,17 @@ export function ModelPicker() {
           setup; other models you are not logged in for open the login.
         </DialogDescription>
         <Show when={open() && scope()} keyed>
-          {(conversation) => (
-            <ConversationScope value={conversation === 'shown' ? null : conversation}>
-              <Picker close={() => setOpen(false)} />
-            </ConversationScope>
-          )}
+          {(conversation) =>
+            typeof conversation === 'object' ? (
+              <PickContext value={conversation}>
+                <Picker close={() => setOpen(false)} />
+              </PickContext>
+            ) : (
+              <ConversationScope value={conversation === 'shown' ? null : conversation}>
+                <Picker close={() => setOpen(false)} />
+              </ConversationScope>
+            )
+          }
         </Show>
       </DialogContent>
     </Dialog>
@@ -106,7 +101,7 @@ export function ModelPicker() {
 }
 
 function Picker(props: { close: () => void }) {
-  const { id, ref, thinking, recorded, loading } = useCurrentModel()
+  const { target: pickedFor, ref, thinking, recorded, loading, select } = useCurrentModel()
   const models = useModels()
   const families = useFamilies()
   const [, setLogin] = useDialog(dialogs.login)
@@ -114,12 +109,14 @@ function Picker(props: { close: () => void }) {
   const [error, setError] = createSignal<string>()
   const [highlight, setHighlight] = createSignal<string | null>()
   const terms = createMemo(() => termsOf(query()))
+  const extra = useAllProvided(PickerRows, () => ({ query: query() }))
+  const extraRows = createMemo(() => extra().flatMap((group) => group?.rows ?? []))
   const found = createMemo(() => rankModels(models()?.models ?? [], terms()))
   const groups = createMemo(() => [...Map.groupBy(found(), (model) => model.provider)])
   const providers = createMemo(
     () => new Map(models()?.providers.map((provider) => [provider.id, provider])),
   )
-  const current = createMemo(() => familyOf(families(), ref(), thinking(), recorded()?.name)?.name)
+  const current = createMemo(() => familyOf(families(), ref(), thinking(), recorded())?.name)
   const shownFamilies = createMemo(() =>
     (families()?.families ?? []).filter((family) => {
       const target = runsOn(family)
@@ -131,7 +128,10 @@ function Picker(props: { close: () => void }) {
   const firstMatch = () => {
     const family = shownFamilies()[0]
     const model = found()[0]
-    return family ? `family/${family.name}` : model ? modelKey(model) : 'accounts/families'
+    const added = extraRows().find((choice) => !choice.disabled)
+    if (family) return `family/${family.name}`
+    if (model) return modelKey(model)
+    return added?.value ?? 'accounts/families'
   }
   const startAt = () => {
     if (!query()) {
@@ -142,7 +142,7 @@ function Picker(props: { close: () => void }) {
   }
 
   function login(provider?: string) {
-    pickerTarget.set(id())
+    pickerTarget.set(pickedFor())
     loginProvider.set(provider)
     props.close()
     setLogin(true)
@@ -167,7 +167,7 @@ function Picker(props: { close: () => void }) {
     }
     setError(undefined)
     try {
-      await selectModel(model, id(), source, family)
+      await select(model, source, family)
       writingAs(source, close)
     } catch (failure) {
       setError(errorMessage(failure))
@@ -185,7 +185,24 @@ function Picker(props: { close: () => void }) {
     )
   }
 
+  async function chooseExtra(run: () => Promise<unknown>, source: string) {
+    const close = props.close
+    setError(undefined)
+    try {
+      await writingAs(source, run)
+      writingAs(source, close)
+    } catch (failure) {
+      setError(errorMessage(failure))
+    }
+  }
+
   function activate(value: string, source: string) {
+    for (const choice of extraRows()) {
+      if (choice.disabled) continue
+      if (value === choice.value) return chooseExtra(choice.activate, source)
+      if (choice.worktree && value === `${choice.value}/worktree`)
+        return chooseExtra(choice.worktree.activate, source)
+    }
     if (value === 'accounts/families') {
       props.close()
       openPanel(agentsPanel)
@@ -242,6 +259,49 @@ function Picker(props: { close: () => void }) {
             )}
           </For>
         </CommandGroup>
+        <For
+          each={extra().flatMap((group) => (group ? [group] : []))}
+          keyed={(group) => group.group}
+        >
+          {(group) => (
+            <CommandGroup heading={group().group}>
+              <For each={group().rows} keyed={(choice) => choice.value}>
+                {(choice) => (
+                  <div class="flex items-center gap-1">
+                    <CommandItem
+                      aria-label={choice().title}
+                      class={cn(row, 'min-w-0 flex-1')}
+                      data-agent-confirm={choice().confirm}
+                      disabled={choice().disabled}
+                      value={choice().value}
+                    >
+                      <Dynamic
+                        class="size-3.5 shrink-0 text-muted-foreground"
+                        component={choice().icon}
+                      />
+                      {choice().title}
+                      <span class="ml-auto truncate text-[11px] text-muted-foreground">
+                        {choice().detail}
+                      </span>
+                    </CommandItem>
+                    <Show when={choice().worktree && !choice().disabled && choice().worktree}>
+                      {(worktree) => (
+                        <CommandItem
+                          aria-label={worktree().title}
+                          class={cn(row, 'shrink-0 text-[11px] text-muted-foreground')}
+                          data-agent-confirm={choice().confirm}
+                          value={`${choice().value}/worktree`}
+                        >
+                          worktree
+                        </CommandItem>
+                      )}
+                    </Show>
+                  </div>
+                )}
+              </For>
+            </CommandGroup>
+          )}
+        </For>
         <For each={groups()} keyed={([provider]) => provider}>
           {(group) => (
             <CommandGroup

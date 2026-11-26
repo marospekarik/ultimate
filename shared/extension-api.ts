@@ -44,6 +44,7 @@ export const defaultOff: readonly string[] = [
   'phase',
   'sounds',
   'voice-live',
+  'acp',
   'push',
   'wire',
 ]
