@@ -74,7 +74,7 @@ it('keeps syncing UI state, selection and theme while a held reload waits', asyn
     expect(location.href).toBe('http://localhost/?conversation=7')
     expect(local.getItem('ultimate.theme')).toBe('light')
     expect(toggle).toHaveBeenLastCalledWith('dark', false)
-    expect(setAttribute).toHaveBeenLastCalledWith('content', '#f9fafb')
+    expect(setAttribute).toHaveBeenLastCalledWith('content', '#f2f3f5')
     expect(
       session.setItem.mock.calls.filter(([key]) => key === 'ultimate.web-switch'),
     ).toHaveLength(1)
