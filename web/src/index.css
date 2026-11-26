@@ -248,8 +248,7 @@
   }
   /* Installed on a phone, the status line's ends sit in from the rounded corners, so it reaches down into the
      home-indicator band: no empty strip under it, its items still 14px clear of the bottom edge and the indicator. */
-  @media (display-mode: standalone) and (width < 45rem),
-    (display-mode: fullscreen) and (width < 45rem) {
+  @media (display-mode: standalone) and (width < 45rem) {
     .status-line {
       box-sizing: content-box;
       margin-bottom: calc(-1 * var(--inset-bottom));
