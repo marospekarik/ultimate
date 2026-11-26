@@ -100,6 +100,8 @@ function ComposerStatusTarget() {
 }
 
 function StatusMore() {
+  const viewport = useViewport()
+  const notInline = () => (viewport() === 'phone' ? undefined : false)
   return (
     <Popover>
       <StatusPopoverTrigger aria-label="More status" class="shrink-0">
@@ -111,7 +113,7 @@ function StatusMore() {
         side="top"
       >
         <Slot fallback={inlineFailure} name="statusline.left" phone={false} />
-        <Slot fallback={inlineFailure} name="statusline.right" phone={false} />
+        <Slot fallback={inlineFailure} name="statusline.right" phone={false} wide={notInline()} />
       </PopoverContent>
     </Popover>
   )
