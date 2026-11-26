@@ -46,6 +46,8 @@ export type Status = {
   /** Messages waiting on the user's answer; `first` is the oldest. */
   questions: {
     count: number
+    /** When the newest open question was asked (epoch ms). */
+    newestAt?: number
     first?: { text: string; conversation: ConversationId; message: number }
   }
   /** Conversations running a turn now. */

@@ -77,7 +77,7 @@ it('summarizes the clone, failures, providers, questions and busy conversations 
       { provider: 'a', state: 'ok' },
       { provider: 'b', state: 'failing', error: 'invalid_grant' },
     ],
-    questions: { count: 2, first: { text: 'Ship it?', conversation: 9, message: 4 } },
+    questions: { count: 2, newestAt: 20, first: { text: 'Ship it?', conversation: 9, message: 4 } },
     busy: 2,
     extensions,
   })
@@ -88,7 +88,7 @@ it('leaves out what an extension that is off owns', async () => {
   expect(await status(host(['update', 'watchdog', 'health']), 0, 1000, signal)).toEqual({
     at: 1000,
     generation: 3,
-    questions: { count: 2, first: { text: 'Ship it?', conversation: 9, message: 4 } },
+    questions: { count: 2, newestAt: 20, first: { text: 'Ship it?', conversation: 9, message: 4 } },
     busy: 2,
     extensions,
   })
