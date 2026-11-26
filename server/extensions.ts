@@ -365,7 +365,7 @@ export async function loadExtensions(
       }),
     )
   }
-  const extensionHost: ExtensionHost = {
+  const extensionHost: Omit<ExtensionHost, 'reloadSelf'> = {
     invoke: async (name, action, args, signal, conversationId) => {
       if (userActions.get(name)?.includes(action))
         throw new Error(`${name}/${action} is a user-only action`)
