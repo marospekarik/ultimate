@@ -59,8 +59,8 @@ the same on every surface (`Control+1` … `Control+7`) and at 412×800.
 **Seen:** unfolded with the keyboard open, the header, the context bar, the composer and the status line filled the
 whole visible height: 0 px of transcript at 783×320.
 
-**Fix:** on a touch screen at least 45rem wide and under 30rem tall, a focused field hides the title bar, the
-conversation header and the status line (`web/src/index.css`); the transcript gets about 170 px back.
+**Fix:** on a touch screen at least 45rem wide and under 30rem tall, a focused field hides the conversation header and the status line (`web/src/index.css`); the transcript gets about 130 px
+back. The title bar stays: it holds the surface tabs, and hiding it left no way to switch to the Inbox while typing.
 
 **Check:** `width: 783, height: 320, touch: true`, focus the composer, measure the transcript scroller's height.
 
