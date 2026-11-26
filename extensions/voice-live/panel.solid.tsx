@@ -475,7 +475,11 @@ function Bottom(props: { fork: ConversationId | undefined; fold: boolean }) {
     (notify) => composerDraft(COLD_DRAFT).subscribe(notify),
   )
   const hot = () => (coldHeld() ? undefined : props.fork)
-  const placeholder = () => `Type, paste a screenshot, or ${talkVerb()} ${holdKeys()} to talk…`
+  const viewport = useViewport()
+  const placeholder = () =>
+    viewport() === 'phone'
+      ? `Type, paste, or ${talkVerb()} to talk…`
+      : `Type, paste a screenshot, or ${talkVerb()} ${holdKeys()} to talk…`
   const target = (): ComposerTarget => ({
     name: 'Voice dock',
     placeholder: placeholder(),
@@ -556,7 +560,7 @@ export function VoicePanel() {
     ([on, conversation, title]) => {
       const showing = on === 'agent' ? conversation : undefined
       setScreen({
-        text: `Daniel's screen: the ${on} surface${
+        text: `The user's screen: the ${on} surface${
           showing !== undefined
             ? `, showing conversation #${showing}${title ? ` "${title}"` : ''}`
             : ''
