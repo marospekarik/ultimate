@@ -21,7 +21,7 @@ cost (#85440: 95 calls growing to 157k tokens took 17% of a Claude 5 h window).
 - A conflict that needs a port or a rewrite (a React facet to Solid, more than about 50 changed lines) goes to a
   `worker` with a brief: the file, upstream's change, our intent and the check to run. Read its diff and test run, not
   its whole transcript.
-- Personal-extension checks in step 7 go to one worker together, reporting a table of errors and screenshots.
+- Personal-extension checks in step 8 go to one worker together, reporting a table of errors and screenshots.
 
 ## Steps
 
@@ -45,18 +45,22 @@ cost (#85440: 95 calls growing to 157k tokens took 17% of a Claude 5 h window).
      checks and new keys. This machine's real lander checks, worker counts, time limits and `push: fork` live in
      `~/.ultimate/settings.json` `landers` (memory `landing-policy-load`): carry upstream's check commands over there.
    - `.ultimate/agents/coordinator.md` and the other files under `.ultimate/`.
-5. Upstream's `ultimate/no-comments` lint rejects comments in product code. Where our side carried a comment, say it in
+5. Recheck every conflicted hunk against our local rules (`git diff` of each resolved file against `HEAD`): a side that
+   looked redundant may carry one, such as the `!front` check #91729 dropped (memory `merge-drops-rules`).
+6. Upstream's `ultimate/no-comments` lint rejects comments in product code. Where our side carried a comment, say it in
    code (a name, a small function) instead of keeping or merely deleting the comment.
-6. Run `pnpm install --frozen-lockfile` when the lockfile changed, `pnpm check`, and the tests of every file you
-   resolved, fast and e2e (`pnpm test <path>`, `pnpm test:e2e <path>`).
-7. When the merge touches `web/`, `extensions/ui` or an SDK file, check every personal and project extension in the
+7. Run `pnpm install --frozen-lockfile` when the lockfile changed, `pnpm check`, and the tests of every file you
+   resolved, fast and e2e (`pnpm test <path>`, `pnpm test:e2e <path>`). Before bisecting a failing test, run it on the
+   clone's own `main` first: if it fails there too, it isn't the merge. Report it, or fix it in a separate branch
+   (#102737 spent about 100 entries bisecting phone-width before finding it failed on main).
+8. When the merge touches `web/`, `extensions/ui` or an SDK file, check every personal and project extension in the
    merged preview, because the clone's checks never build them (memory `solid-core-switch`): each facet in
    `~/.ultimate/extensions` and `.ultimate/extensions`. Treat an error chip, an Extensions-panel failure, a page error,
    `Minified React error` or `insertBefore` as a failure. Look at each on screen: the Docs surface and a `.md` link,
    the PRs list with its chip and fit marks, the rail with Plans, the agent-usage counts. Fix only what breaks, in
    the personal repo (commit and push, memory `personal-extensions-in-git`), and push it with this landing: Andrea's
    nightly sync pulls both (memory `andrea-setup`). Then `workspace submit`.
-8. Report:
+9. Report:
    - how each conflict was resolved, and what was dropped;
    - whether a restart is needed: diff against the sha the host runs (codemode `ultimate.system()`, `code.sha`), never
      against the merge base: `git diff --name-only <running sha> HEAD -- server shared patches pnpm-lock.yaml`. Any
