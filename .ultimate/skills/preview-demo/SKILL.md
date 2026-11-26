@@ -46,7 +46,7 @@ Tell the user which link is which.
 
 ## What to hand over
 
-The link (plus the tailnet URL from the server log, if any) and the prompt to paste first:
+The `tailnet` URL from `instance start` or `list` (never the `127.0.0.1` link: the phone cannot open it), with the note to open it in Chrome, not the installed app, and the prompt to paste first:
 
 ```
 Please start three coordinators in parallel, one each, all small: (1) dark mode for the recipe list via prefers-color-scheme in style.css, (2) a search box above the list that filters recipes by name, (3) show the total cooking time of all recipes under the list. Each should just do it, commit and workspace submit without asking me anything. Tell me as each one lands.

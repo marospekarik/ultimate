@@ -120,6 +120,7 @@ async function fixture({ foreign = false } = {}) {
       return resources.get(key) as T
     },
     onOpen: () => {},
+    react: () => {},
     onClose: (cleanup: () => Promise<void>) => {
       cleanups.push(cleanup)
     },

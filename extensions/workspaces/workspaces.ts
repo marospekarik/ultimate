@@ -18,7 +18,7 @@ import { meansNone, overshadowed, settled } from '../../lib/errors.ts'
 import { needsRestart as restartNeeded } from '../../lib/layers.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { ConversationsApi, ExternalSessions } from '../conversations/api.ts'
-import { Branches } from './api.ts'
+import { Branches, SubmissionQueued } from './api.ts'
 import { SetupFailedEntry, WorkspacesDoc } from './refs.ts'
 import { setup } from '../../lib/worktree-setup.ts'
 import {
@@ -831,6 +831,7 @@ export function workspaces(host: Host) {
       if (!queued) {
         await log(tx, lander, entry, { step: 'queued' })
         index.queue.push(entry)
+        await host.emit(tx, SubmissionQueued, { submission: entry.id, conversationId: id })
       }
       if (idleReadBeforeWrites) await startIdleLander(tx, index, source)
       const position = index.queue

@@ -15,6 +15,7 @@ import instance, {
   remember,
   seedUserHome,
   stopped,
+  withTailnet,
 } from '../server.ts'
 import { saveDefinition } from '../../../lib/agents.ts'
 import { writeFamilies } from '../../../lib/families-settings.ts'
@@ -204,6 +205,7 @@ it('refuses a home that is not absolute before creating anything', async () => {
     want: () => undefined,
     need: () => ({}),
     implement: () => {},
+    react: () => {},
     resource: <T>(_key: string, create: () => T) => create(),
     onClose: () => {},
     onOpen: () => {},
@@ -240,6 +242,7 @@ it('keeps a preview tracked and allows retry when stop cannot clean its home', a
     implement: (_token: unknown, service: PreviewsService) => {
       previews = service
     },
+    react: () => {},
     onClose: () => {},
     onOpen: () => {},
   } as never)
@@ -306,4 +309,55 @@ it('labels a preview chip with the URL it opens when its text is that link', () 
     ),
   ).toBe('https://rog.tail3a3a66.ts.net:46335/?conversation=3')
   expect(label('the preview', 'http://127.0.0.1:46335/', tailnet)).toBe('the preview')
+})
+
+it('gives a started preview its tailnet address, so a link works from a phone', async () => {
+  const userHome = await mkdtemp(join(tmpdir(), 'instance-tailnet-'))
+  homes.push(userHome)
+  await mkdir(join(userHome, '.ultimate'))
+  await writeFile(
+    join(userHome, '.ultimate/tailscale.json'),
+    JSON.stringify({ ports: { '/work': { port: 41234, owner: '77:token' } } }),
+  )
+  const host = {
+    userHome,
+    want: () => ({ status: () => ({ url: 'https://rog.example.ts.net:4747' }) }),
+  } as never
+  expect(await withTailnet(host, { pid: 77, url: 'http://127.0.0.1:41000' })).toEqual({
+    pid: 77,
+    url: 'http://127.0.0.1:41000',
+    tailnet: 'https://rog.example.ts.net:41234',
+  })
+})
+
+it("stops a conversation's previews when it submits its workspace", async () => {
+  const home = await mkdtemp(join(tmpdir(), 'instance-submit-'))
+  homes.push(home)
+  const host = hostOver(home)
+  const item = {
+    ...preview(40001, 5),
+    home: join(home, 'preview'),
+    temporary: true,
+    child: { exitCode: 0, signalCode: null },
+    output: '',
+  }
+  await mkdir(item.home)
+  host.resource('instance', () => new Map([[item.id, item]]))
+  let react!: (tx: unknown, event: { data: { conversationId: number } }) => Promise<void>
+  instance({
+    ...host,
+    want: () => undefined,
+    need: () => ({}),
+    implement: () => {},
+    react: (_name: string, _events: unknown, handler: typeof react) => {
+      react = handler
+    },
+    onClose: () => {},
+    onOpen: () => {},
+  } as never)
+  await react({}, { data: { conversationId: 6 } })
+  expect(existsSync(item.home)).toBe(true)
+  await react({}, { data: { conversationId: 5 } })
+  expect(existsSync(item.home)).toBe(false)
+  expect([...stopped(hostOver(home)).values()]).toEqual([preview(40001, 5)])
 })
