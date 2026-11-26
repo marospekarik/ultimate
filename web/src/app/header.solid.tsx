@@ -288,6 +288,7 @@ function PhoneHeader(props: { children?: JSX.Element; sidebar: boolean; panels: 
   return (
     <header
       class="flex h-11 shrink-0 items-center gap-0.5 border-b border-border/70 bg-sidebar px-1"
+      data-phone-bar
       data-ui="conversation-header"
     >
       <Show when={props.sidebar}>
