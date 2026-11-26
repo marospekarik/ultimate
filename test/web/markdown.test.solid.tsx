@@ -85,19 +85,18 @@ it('streams into the last block only, closing what it leaves open', () => {
   expect(view.querySelector('em')?.textContent).toBe('one star')
 })
 
-it('ends a stream as the whole text renders, wherever its chunks broke', () => {
-  const texts = [
-    'a\n#topic and more\n\nnext',
-    'Intro\n\n   ```ts\n   let x\n   ```\n\nafter',
-    '- one\n- two\n\n- three\n\nend',
-    '1. one\n\n2. two',
-    '[x][r]\n\n> [r]: /target',
-  ]
-  for (const text of texts)
-    for (let cut = 1; cut < text.length; cut++)
-      expect(
-        withoutNames(stream([text.slice(0, cut), text.slice(cut)], { end: true }).innerHTML),
-      ).toBe(finished(text))
+it.each([
+  'a\n#topic and more\n\nnext',
+  'Intro\n\n   ```ts\n   let x\n   ```\n\nafter',
+  '- one\n- two\n\n- three\n\nend',
+  '1. one\n\n2. two',
+  '[x][r]\n\n> [r]: /target',
+])('ends a stream as the whole text renders, wherever its chunks broke: %j', (text) => {
+  const whole = finished(text)
+  for (let cut = 1; cut < text.length; cut++)
+    expect(
+      withoutNames(stream([text.slice(0, cut), text.slice(cut)], { end: true }).innerHTML),
+    ).toBe(whole)
 })
 
 it('tells a code block renderer only its own fence is unfinished', () => {
