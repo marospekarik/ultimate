@@ -532,6 +532,7 @@ it('reserves trust and secret writes for the UI while allowing normal actions', 
     )
     expect(denied.data.isError).toBe(true)
     expect(denied.text).toContain(`${extension}/${action} is a user-only action`)
+    expect(denied.text).toContain('do not retry it; ask the user')
     const response = await post(server, `/api/extensions/${extension}/actions/${action}`, { args })
     expect(response.status).toBe(200)
   }

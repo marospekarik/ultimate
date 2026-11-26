@@ -317,6 +317,8 @@ export async function loadExtensions(
   let open = false
   const cleanups = new Set<() => Promise<void>>()
   const resources = new Map<string, unknown>()
+  const userOnlyMessage = (name: string, action: string) =>
+    `${name}/${action} is a user-only action: do not retry it; ask the user to run it (send a card)`
   async function invoke(
     name: string,
     action: string,
@@ -328,7 +330,7 @@ export async function loadExtensions(
     source: UiSource = { source: 'person' },
   ) {
     if (caller === 'agent' && userActions.get(name)?.includes(action))
-      throw new Error(`${name}/${action} is a user-only action`)
+      throw new Error(userOnlyMessage(name, action))
     const table = actions.get(name)
     const fn = table && Object.hasOwn(table, action) ? table[action] : undefined
     if (!fn) throw new Error(`Unknown extension action: ${name}/${action}`)
@@ -367,8 +369,7 @@ export async function loadExtensions(
   }
   const extensionHost: Omit<ExtensionHost, 'reloadSelf'> = {
     invoke: async (name, action, args, signal, conversationId) => {
-      if (userActions.get(name)?.includes(action))
-        throw new Error(`${name}/${action} is a user-only action`)
+      if (userActions.get(name)?.includes(action)) throw new Error(userOnlyMessage(name, action))
       return invoke(name, action, args, signal, conversationId, 'agent')
     },
     emit: log.emit,
