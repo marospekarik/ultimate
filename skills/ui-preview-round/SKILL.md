@@ -25,7 +25,9 @@ screenshots: send them with the request.
 6. **Ask for approval** the way your instructions ask decisions, with the screenshots as `images`. Include the preview's `tailnet` URL from `instance start` or `list`, never the
    `127.0.0.1` one: the user opens it on a phone, and tell them to open it in Chrome, not the installed app. Also say what changed, a short numbered "what to try" naming the conversation you seeded, the review state (the
    reviewed `base..head` and its verdict, or "preview first, review before submit"), and a choice question (approve as
-   is, or change something). Review never has to come before a preview.
+   is, or change something). Review never has to come before a preview. When the change depends on a real device
+   (phone, real mic, real playback, on-screen keyboard), name each such check as **confirmed**, **simulated only** or
+   **not checked**: a desktop preview cannot show them, so say which one the user still owes.
 7. **Iterate**: each change is a new commit and a new round; keep the same preview running.
 8. **On approval**: remove anything only the preview needed, `instance stop`, run the review if it has not run, then
    `workspace submit` with the divergence and the reviewed range. Report the landing in your final answer.
