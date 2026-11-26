@@ -18,6 +18,7 @@ import { defineApi } from '../../shared/extension-api.ts'
 import { RunsDoc, StandingDoc } from './refs.ts'
 import type { Run } from './refs.ts'
 import type { createChild } from './children.ts'
+import { checkpointEvery } from '../../shared/checkpoint.ts'
 
 export { Started, StandingDoc } from './refs.ts'
 
@@ -49,7 +50,7 @@ export const Subagents = defineDoc<{
   >
 }>({
   kind: 'ultimate.subagents',
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -60,7 +61,7 @@ export const Subagents = defineDoc<{
 /** `{ [name]: conversationId }` of the standing agents, on the root conversation. */
 export const Standing = defineDoc<Record<string, ConversationId>>({
   kind: StandingDoc.kind,
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -71,7 +72,7 @@ export const Standing = defineDoc<Record<string, ConversationId>>({
 /** `{ [conversationId]: Run }` of the children `subagent start` made, on the root, for the sidebar and call cards. */
 export const Runs = defineDoc<Record<string, Run>>({
   kind: RunsDoc.kind,
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'conversation',
   history: 'latest',
@@ -85,7 +86,7 @@ export const Runs = defineDoc<Record<string, Run>>({
  */
 export const Profile = defineDoc<{ definition?: string; adhoc?: true }>({
   kind: 'ultimate.agent-profile',
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   version: 1,
   scope: 'conversation',
   history: 'latest',
