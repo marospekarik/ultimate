@@ -84,6 +84,10 @@ bar's colour in each theme; that is the whole fix, not a shortfall. The top bar 
 `#0e0e10` dark and `#f2f3f5` light: `web/index.html`, `web/src/sdk/client.ts` and the manifest's `theme_color` carry
 those values and must change with it.
 
+`display: fullscreen` was tried and dropped: on the unfolded inner screen Android letterboxes the camera cutout in
+black (default cutout mode; Chrome draws into it only behind `chrome://flags/#web-app-short-edges-cutout-mode`, off by
+default, Chromium issue 407420295), and no page or manifest setting colours it.
+
 ### 7. The Inbox squeezed its reading pane
 
 Unfolded, the docked list (about 250 px) and the Inbox's own 24rem item list left the question about 80 px, one word a
