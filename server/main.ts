@@ -191,6 +191,7 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
     home: host.home,
     watch,
     before: () => extensions.prepareLoadBestEffort(),
+    held: extensions.heldForNewCore,
     pages: () => api?.pages() ?? 0,
     changed: () => void system?.changed(),
     notice: (message) => notice({ level: 'error', message }),
@@ -256,7 +257,8 @@ export async function prepareServer(options: Partial<ServerOptions> = {}) {
     go: (activationError?: string) =>
       serial(async () => {
         processInfo.activationError = activationError
-        const served = await openExtensionsThenServeApi(await host.open(false))
+        const swappedIn = !!process.env.ULTIMATE_PREVIOUS_BUILD && activationError === undefined
+        const served = await openExtensionsThenServeApi(await host.open(false, swappedIn))
         reportCore({ type: 'web', state: 'ready' })
         return served
       }),
