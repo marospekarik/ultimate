@@ -30,6 +30,7 @@ import { WatchdogApi } from './api.ts'
 import type { ReportedFailure } from './api.ts'
 import type { Failure } from './refs.ts'
 import { FailureEntry, StandingFailureEntry } from './entries.ts'
+import { checkpointEvery } from '../../shared/checkpoint.ts'
 
 async function isTally(tx: Tx, id: ConversationId) {
   if (!(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots.includes(id)) return false
@@ -53,7 +54,7 @@ const Reported = defineDoc<{ failures: ReportedFailure[] }>({
   scope: 'conversation',
   history: 'latest',
   fork: 'initial',
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   initial: () => ({ failures: [] }),
 })
 
@@ -63,7 +64,7 @@ const Receipts = defineDoc<{ highWater?: number; tasks: Record<string, true> }>(
   scope: 'conversation',
   history: 'latest',
   fork: 'initial',
-  checkpointWhen: () => false,
+  checkpointWhen: checkpointEvery(100),
   initial: () => ({ tasks: {} }),
 })
 const terminal = { status: 'terminal', outcome: { status: 'completed', result: null } } as const
