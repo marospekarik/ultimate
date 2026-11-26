@@ -408,16 +408,6 @@ export default function watchdog(host: ExtensionHost) {
           (inputs !== undefined || (input.entry > info.lower && input.entry <= info.upper)),
       )
       receipts.tasks[String(task.id)] = true
-      const messages = (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages
-      if (
-        runInputs.some((input) => {
-          const match = /^board:(\d+)$/.exec(input.requestId ?? '')
-          return (
-            match && messages.some((message) => message.id === Number(match[1]) && message.reply)
-          )
-        })
-      )
-        return
       const child = (await tx.conversation(task.conversationId))!
       const ultimate = (await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate
       const started =
@@ -432,6 +422,12 @@ export default function watchdog(host: ExtensionHost) {
       if (task.state.status !== 'terminal' || task.state.outcome.status !== 'failed') return
       const error = task.state.outcome.error.message
       const { hint, temporary } = diagnose(error, info.assistant)
+      const messages = (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages
+      const sender = runInputs.some((input) => {
+        const match = /^board:(\d+)$/.exec(input.requestId ?? '')
+        return match && messages.some((message) => message.id === Number(match[1]) && message.reply)
+      })
+      if (sender && !temporary) return
       const retries = await retriesBefore(tx, recipient, runInputs)
       await tx.createTask(
         Watchdog,

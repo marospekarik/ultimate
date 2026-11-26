@@ -691,6 +691,34 @@ it('lets reply:true board messages report their own failures, including during r
   expect(await f.tasks()).toHaveLength(0)
 })
 
+it('continues a stalled run that a reply:true board message started', async () => {
+  const seen: string[] = []
+  const f = await fixture((transcript) => {
+    const text = inputText(transcript)
+    seen.push(text)
+    return text === 'fail'
+      ? error('Model stream stalled: claude-code/claude-sonnet-5-5 sent nothing for 300 s')
+      : fauxAssistantMessage('ok')
+  })
+  const branch = await f.conversation('Stalled')
+  await f.harness.commit(async (tx) => {
+    ;(await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages.push({
+      id: 7,
+      from: f.ultimate,
+      to: branch,
+      text: 'fail',
+      at: 0,
+      reply: true,
+      state: 'delivered',
+    })
+  }, context)
+  await (await f.submit(branch, 'fail', 'board:7')).wait(context)
+  await f.sleeping()
+  f.advance(60_000)
+  await until(async () => seen.length === 2)
+  expect(seen[1]).toContain('Continue from where you left off')
+})
+
 it('reports a faulted message delivery to its sender, once', async () => {
   const f = await fixture()
   const branch = await f.conversation('Favourites')
