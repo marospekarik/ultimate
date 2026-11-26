@@ -283,6 +283,8 @@ export async function createApi(
       signal,
       spec.conversation === undefined ? undefined : parseConversationId(spec.conversation),
       'ui',
+      undefined,
+      { source: 'app' },
     )
   })
   let onGraph = () => {}
@@ -345,6 +347,7 @@ export async function createApi(
         ...(!record.owner && record.parent ? { branchOf: record.parent } : {}),
         ...(record.owner ? { ownerTaskId: record.owner.taskId } : {}),
         ...(metadata?.label ? { label: metadata.label } : {}),
+        ...(metadata?.external ? { external: metadata.external } : {}),
         ...(title ? { title } : {}),
         cwd: agent.cwd,
         ...(metadata?.inputAt === undefined ? {} : { inputAt: metadata.inputAt }),
@@ -898,6 +901,8 @@ export async function createApi(
               break
             }
             case 'configure': {
+              if ((await harness.snapshot(Metadata, conversation.id, context))?.external)
+                throw new HttpError(409, 'Set the model through Antigravity’s ACP controls')
               const configure: ConfigureRequest = {}
               if (data.model !== undefined) {
                 if (!data.model || typeof data.model !== 'object')
@@ -939,6 +944,8 @@ export async function createApi(
               break
             }
             case 'compact':
+              if ((await harness.snapshot(Metadata, conversation.id, context))?.external)
+                throw new HttpError(409, 'ACP conversations cannot be compacted')
               if (data.instructions !== undefined && typeof data.instructions !== 'string')
                 throw new HttpError(400, 'Invalid instructions')
               json(202, {

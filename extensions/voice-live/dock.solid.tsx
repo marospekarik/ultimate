@@ -252,6 +252,9 @@ function restore() {
   dock.setStatus(undefined)
 }
 
+type Rider = { typed: string; images: readonly Image[]; taken?: true }
+let entering: Rider | undefined
+
 async function finishRecording(recorded: Recorded, retaking: boolean) {
   const held = dock.held()
   if (!retaking) dock.hold(undefined)
@@ -272,21 +275,29 @@ async function finishRecording(recorded: Recorded, retaking: boolean) {
     }
     return
   }
+  const riding = entering
+  if (riding) riding.taken = true
   if (dock.collect()) {
-    await collectClip(recorded)
+    await collectClip(recorded, riding)
     return
   }
-  await sendTurn({ recorded, interrupted: !!held?.busy })
+  entering = undefined
+  await sendTurn({
+    recorded,
+    interrupted: !!held?.busy,
+    ...(riding ? { typed: riding.typed.trim(), images: riding.images, fromComposer: true } : {}),
+  })
 }
 
-async function collectClip(recorded: Recorded) {
+async function collectClip(recorded: Recorded, riding?: Rider) {
   const { signal } = live
   const owner = session
   dock.setPhase('idle')
-  dock.setStatus('Collecting · say "send it" or press Enter')
+  dock.setStatus(riding ? 'Sending your voice…' : 'Collecting · say "send it" or press Enter')
+  let kept: string
   try {
     const audio = await base64(recorded.blob)
-    const { audio: kept } = await api.action(
+    ;({ audio: kept } = await api.action(
       RecordAction,
       {
         audio,
@@ -295,7 +306,21 @@ async function collectClip(recorded: Recorded) {
         ...(owner !== undefined ? { session: owner } : {}),
       },
       { signal },
-    )
+    ))
+  } catch (failure) {
+    if (!signal.aborted) dock.setError(errorMessage(failure))
+    if (!riding) return
+    dock.setStatus(undefined)
+    throw signal.aborted ? signal.reason : failure
+  }
+  if (riding) {
+    entering = undefined
+    const earlier = draftOf().filter((clip) => clip.audio !== kept)
+    const clip = { audio: kept, seconds: recorded.seconds, envelope: recorded.envelope }
+    await sendDraft('steer', riding.typed, false, [...earlier, clip], true, riding.images)
+    return
+  }
+  try {
     await settled(kept, signal)
     const intent = await api.action(IntentAction, { audio: kept }, { signal })
     if (intent.send && intent.clips) {
@@ -322,6 +347,7 @@ export async function sendDraft(
   fromComposer = false,
   images?: readonly Image[],
 ) {
+  if (entering) return
   clips = clips.filter((clip) => !sending.has(clip.audio))
   if (!clips.length && !typed.trim() && !images?.length) return
   const busy = ours().playing || ours().paused || replying()
@@ -342,6 +368,19 @@ export async function sendDraft(
 export const discardDraft = () => api.action(DiscardAction, null)
 
 export async function sendTyped(text: string, images: readonly Image[] = []) {
+  const take = capture.take(voiceSink)
+  if (take) {
+    const { signal } = live
+    const riding: Rider = { typed: text, images }
+    entering = riding
+    try {
+      await take.release()
+    } finally {
+      if (entering === riding) entering = undefined
+    }
+    signal.throwIfAborted()
+    if (riding.taken) return
+  }
   const free = draftOf().filter((clip) => !sending.has(clip.audio))
   if (free.length) return sendDraft('steer', text, false, free, true, images)
   if (!text.trim() && !images.length) return

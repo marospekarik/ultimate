@@ -327,6 +327,8 @@ export async function loadExtensions(
     device?: Device,
     source: UiSource = { source: 'person' },
   ) {
+    if (caller === 'agent' && userActions.get(name)?.includes(action))
+      throw new Error(`${name}/${action} is a user-only action`)
     const table = actions.get(name)
     const fn = table && Object.hasOwn(table, action) ? table[action] : undefined
     if (!fn) throw new Error(`Unknown extension action: ${name}/${action}`)
@@ -343,6 +345,7 @@ export async function loadExtensions(
         host: facetHosts.get(name)!,
         conversationId,
         ...(device ? { device } : {}),
+        by,
         uiChanged: async (tx, change) => {
           const data = uiChange(by, { ...change, conversation: conversationId })
           if (data) await log.emit(tx, ChangedEvent, data)

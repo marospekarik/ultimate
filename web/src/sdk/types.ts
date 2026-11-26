@@ -174,6 +174,8 @@ export interface ComposerTarget {
    * cold voice session): the composer then shows none of the scoped conversation's run, queue, toolbar or status.
    */
   draft?: string
+  /** With `draft`, the controls at the start of its prompt box's row, in place of the conversation's toolbar. */
+  toolbar?: JSX.Element
   /** `false` hides dictation; a sink replaces the box's default transcription and insertion. */
   dictation?: false | DictationSink
 }
@@ -430,7 +432,7 @@ export const Dictation = definePoint<
   JSX.Element
 >('ultimate.dictation')
 /**
- * How the talk shortcut is pressed, gesture and keys (`dictation` provides it: `hold Ctrl+Shift+Space`), for the main
+ * How the talk shortcut is pressed, gesture and keys (`dictation` provides it: `tap Ctrl+Shift+Space`), for the main
  * composer's placeholder. While nothing provides it, the placeholder leaves it out.
  */
 export const DictationShortcut = definePoint<null, string | undefined>('ultimate.dictationShortcut')

@@ -96,6 +96,7 @@ export async function status(
       : {}),
     questions: {
       count: open.length,
+      ...(open.length ? { newestAt: Math.max(...open.map((question) => question.at)) } : {}),
       ...(first
         ? {
             first: { text: first.text, conversation: first.conversation, message: first.message },

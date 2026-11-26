@@ -17,7 +17,7 @@ import { git, isolatable } from '../../lib/git.ts'
 import { meansNone, overshadowed, settled } from '../../lib/errors.ts'
 import { needsRestart as restartNeeded } from '../../lib/layers.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { ConversationsApi } from '../conversations/api.ts'
+import { ConversationsApi, ExternalSessions } from '../conversations/api.ts'
 import { Branches } from './api.ts'
 import { SetupFailedEntry, WorkspacesDoc } from './refs.ts'
 import { setup } from '../../lib/worktree-setup.ts'
@@ -629,6 +629,8 @@ export function workspaces(host: Host) {
           kept.push(item)
           return
         }
+        using external = await host.want(ExternalSessions)?.stop([id])
+        void external
         if (
           !present &&
           !(await lstat(workspace.source).catch((error: NodeJS.ErrnoException) => {
@@ -1061,6 +1063,8 @@ export function workspaces(host: Host) {
       if (!workspace) throw new Error('Conversation has no workspace')
       if (workspace.state === 'preparing') throw new Error('Workspace is preparing')
       if (workspace.state !== 'removed') {
+        using external = await host.want(ExternalSessions)?.stop([id])
+        void external
         if (await listedBySource(workspace))
           await removeCheckoutWithoutForce(
             await host.projectSettings(),
