@@ -166,6 +166,26 @@ it('steers on Enter, queues a follow-up on Alt+Enter, cancels a queued input and
   ])
 })
 
+it('keeps the editor focused when a button in the prompt box is pressed', async () => {
+  await show(17)
+  const container = renderSolid(() => <Composer />)
+  await settle()
+  flush()
+  const editor = container.querySelector<HTMLTextAreaElement>('#composer-input')!
+  const buttons = container.querySelectorAll<HTMLElement>('[data-ui="prompt-box"] button')
+  expect(buttons.length).toBeGreaterThan(0)
+  const press = (button: Element) => {
+    const event = new PointerEvent('pointerdown', { bubbles: true, cancelable: true })
+    button.dispatchEvent(event)
+    return event.defaultPrevented
+  }
+  editor.focus()
+  expect([...buttons].map(press)).toEqual([...buttons].map(() => true))
+  expect(press(editor)).toBe(false)
+  editor.blur()
+  expect([...buttons].map(press)).toEqual([...buttons].map(() => false))
+})
+
 it('queues a follow-up from a long press on send', async () => {
   await show(9, { 'pi.live': { run: { taskId: 3, inputs: [], turns: 0 } } })
   const container = renderSolid(() => <Composer />)
