@@ -13,6 +13,7 @@ import {
   useConversationId,
   useConversationSummary,
   useEvent,
+  plural,
   type SolidEntryProps,
 } from '@/sdk/solid'
 import { ConversationRef, ConversationTaskChip } from '../conversations/ui.solid.tsx'
@@ -118,6 +119,9 @@ export function AgentInput(props: SolidEntryProps) {
                 point={ConversationTaskChip}
               />
               <span>{message().kind}</span>
+              <Show when={message().images}>
+                {(count) => <span>{plural(count(), 'image')}</span>}
+              </Show>
               <Button
                 aria-label={`Open source of ${message().kind} #${props.entry.id}`}
                 class="ml-auto flex items-center gap-1 text-[11px] font-normal hover:text-foreground disabled:opacity-50"

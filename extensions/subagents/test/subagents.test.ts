@@ -648,6 +648,28 @@ it('attributes durable instructions and reports across reopen and forks, never h
   expect(forkView.entries.find((entry) => entry.id === report.id)?.data).toEqual(report.data)
 })
 
+it('forwards the images of this turn with the brief a subagent starts from', async () => {
+  const f = await fixture()
+  const image = { type: 'image' as const, mimeType: 'image/png', data: 'iVBORw0KGgo0AAAA' }
+  const brief = { action: 'start', agent: 'scout', task: 'Judge the mockup', images: 'latest' }
+  await (
+    await f.opened.root.submit(
+      { type: 'input', content: [{ type: 'text', text: `CALL ${JSON.stringify(brief)}` }, image] },
+      context,
+    )
+  ).wait(context)
+  const [child] = await children(f.opened)
+  const conversation = (await f.opened.harness.conversation(child.conversationId, context))!
+  const instruction = (await conversation.context(context)).entries.find(
+    (entry) => entry.kind === 'subagents.instruction',
+  )!
+  expect(instruction.data).toMatchObject({ body: 'Judge the mockup', images: 1 })
+  expect(instruction.model?.[0].content).toEqual([
+    { type: 'text', text: 'Judge the mockup' },
+    image,
+  ])
+})
+
 async function children(opened: OpenHost) {
   return Object.values(
     (await opened.harness.snapshot(Subagents, opened.root.id, context))?.agents ?? {},

@@ -2,9 +2,12 @@ Delegate bounded work to child conversations with `subagent`, configure them fro
 
 ## The `subagent` tool
 
-- `start {agent, task, background?, fork?, isolate?}` starts a child from a definition and returns its answer
+- `start {agent, task, background?, fork?, isolate?, images?}` starts a child from a definition and returns its answer
   (foreground) or its id (background). Child ids are conversation ids.
-- `message {id, text, steer?}` steers a busy child, or queues a follow-up with `steer: false`.
+- `message {id, text, steer?, images?}` steers a busy child, or queues a follow-up with `steer: false`.
+- `images` forwards images with the task or text, resolved as for `message` (`'latest'` or an entry id, see
+  `lib/images.ts`); the instruction carries them as image blocks. A child whose model reads no images is refused,
+  and a refused start creates no child.
 - `wait {id}` returns the latest answer; `list` shows your children.
 - `stop {id}` stops the child's current work and pending reporters, even before its run starts. It lists the paths left
   uncommitted in the child's worktree; nothing is committed or deleted.

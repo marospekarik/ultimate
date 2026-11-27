@@ -5,5 +5,6 @@ export type AgentOrigin = {
   failed?: boolean
   sender: ConversationId
   entry?: EntryId
+  images?: number
   kind: 'instruction' | 'report'
 }
