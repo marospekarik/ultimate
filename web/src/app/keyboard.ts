@@ -1,79 +1,66 @@
-import { debounce } from '../../../lib/timers.shared.ts'
 import { allCommands, applies, currentContext, runCommand } from '../sdk/actions.ts'
-import { store } from '../sdk/client.ts'
-import { scopeOf } from '../sdk/scope.ts'
-import { chordOf, parseKeys } from '../sdk/keys.ts'
+import { registry } from '../sdk/client.ts'
 import type { CommandItem } from '../sdk/registry.ts'
+import { scopeOf } from '../sdk/scope.ts'
+import { registerShortcut } from '../sdk/shortcuts.ts'
 
-function editable(target: EventTarget | null) {
-  return (
-    target instanceof HTMLElement &&
-    (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
-  )
+const inComposer = (focused: Element | null) =>
+  focused instanceof HTMLTextAreaElement && !!focused.closest('[data-composer-target]')
+const inDraftComposer = (focused: Element | null) =>
+  !!focused?.closest('[data-composer-target="draft"]')
+const inPopup = (focused: Element | null) =>
+  !!focused?.closest('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]')
+const typing = (focused: Element | null) =>
+  focused instanceof HTMLElement &&
+  (focused.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(focused.tagName))
+const plainKey = (keys: string) => !/\b(mod|alt|ctrl)\+/.test(keys)
+
+function allowedAt(command: CommandItem, keys: string, focused: Element | null) {
+  if (!plainKey(keys)) return true
+  if (inDraftComposer(focused) || inPopup(focused)) return false
+  if (inComposer(focused)) return !!command.whileTyping
+  return !typing(focused)
+}
+
+function register(id: string, keys: string, title: string, latest: () => CommandItem | undefined) {
+  const context = () => currentContext(scopeOf(document.activeElement))
+  return registerShortcut(keys, () => runCommand(id, context()), {
+    allowInInput: true,
+    description: title,
+    when: () => {
+      const command = latest()
+      return (
+        !!command && allowedAt(command, keys, document.activeElement) && applies(command, context())
+      )
+    },
+  })
 }
 
 export function installShortcuts() {
-  let pending: string[] = []
-  const resetPending = debounce(1200, () => (pending = []))
-  const onKeyDown = (event: KeyboardEvent) => {
-    if (event.defaultPrevented || event.isComposing) return
-    const chord = chordOf(event)
-    if (!chord || ['mod', 'alt', 'shift', 'ctrl'].includes(chord)) return
-    const sequence = [...pending, chord]
-    const context = currentContext(scopeOf(event.target))
-    const candidates = allCommands().flatMap((command) =>
-      command.keys && applies(command, context) ? [{ command, keys: parseKeys(command.keys) }] : [],
+  let current = new Map<string, CommandItem>()
+  const registered = new Map<string, { shape: string; release: () => void }>()
+  const sync = () => {
+    current = new Map(
+      allCommands().flatMap((command) => (command.keys ? [[command.id, command]] : [])),
     )
-    const typing = editable(event.target)
-    const composer =
-      event.target instanceof HTMLTextAreaElement &&
-      !!event.target.closest('[data-composer-target]')
-    const draftOnly =
-      event.target instanceof HTMLElement &&
-      !!event.target.closest('[data-composer-target="draft"]')
-    const emptyPalette =
-      store.getState().ui.paletteOpen &&
-      event.target instanceof HTMLInputElement &&
-      event.target.value === ''
-    const dialogOpen = !!document.querySelector('[role="dialog"]')
-    const allowed = ({ command, keys }: { command: CommandItem; keys: string[] }) => {
-      const continuingCapturedSequence = sequence.length > 1
-      if (continuingCapturedSequence) return !typing || emptyPalette
-      if (/\b(mod|alt|ctrl)\+/.test(keys[0] ?? '')) return true
-      if (draftOnly) return false
-      if (command.whileTyping) return !dialogOpen && (!typing || composer)
-      return !typing
+    const shapeOf = (command: CommandItem) => `${command.keys}\n${command.title}`
+    for (const [id, { shape, release }] of registered) {
+      const command = current.get(id)
+      if (command && shapeOf(command) === shape) continue
+      release()
+      registered.delete(id)
     }
-    const exact = candidates.find(
-      ({ keys }) => keys.length === sequence.length && keys.every((key, i) => key === sequence[i]),
-    )
-    const longer = candidates.some(
-      ({ keys }) => keys.length > sequence.length && sequence.every((key, i) => keys[i] === key),
-    )
-    resetPending.cancel()
-    pending = []
-    if (exact && allowed(exact)) {
-      event.preventDefault()
-      if (sequence.length > 1) store.setUi({ paletteOpen: false })
-      runCommand(exact.command.id, context)
-    }
-    if (longer && (exact || !typing || /\b(mod|alt|ctrl)\+/.test(chord))) {
-      if (!exact) event.preventDefault()
-      pending = sequence
-      resetPending()
-    }
+    for (const [id, command] of current)
+      if (!registered.has(id))
+        registered.set(id, {
+          shape: shapeOf(command),
+          release: register(id, command.keys!, command.title, () => current.get(id)),
+        })
   }
-  const onShortcut = (event: KeyboardEvent) => {
-    if (event.key !== 'Escape') onKeyDown(event)
-  }
-  const onEscape = (event: KeyboardEvent) => {
-    if (event.key === 'Escape') onKeyDown(event)
-  }
-  window.addEventListener('keydown', onShortcut, { capture: true })
-  window.addEventListener('keydown', onEscape)
+  sync()
+  const unsubscribe = registry.subscribe(sync)
   return () => {
-    resetPending.cancel()
-    window.removeEventListener('keydown', onShortcut, { capture: true })
-    window.removeEventListener('keydown', onEscape)
+    unsubscribe()
+    for (const { release } of registered.values()) release()
   }
 }

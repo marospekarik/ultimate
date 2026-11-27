@@ -1,11 +1,21 @@
 export const isMac = /Mac|iPhone|iPad/.test(navigator.platform)
 
+/**
+ * The shortcut a key press spells, as the shortcut registry matches it: the letter it types (on any layout), else its
+ * physical key for a letter or digit typed with Alt or Shift, else its key name: `mod+shift+space`, `mod+k`.
+ */
 export function chordOf(event: KeyboardEvent): string {
-  const key = event.code.startsWith('Key')
-    ? event.code.slice(3).toLowerCase()
-    : event.code.startsWith('Digit')
-      ? event.code.slice(5)
-      : event.key.toLowerCase()
+  const typed = event.key.length === 1 ? event.key.toLowerCase() : ''
+  const key =
+    typed === ' '
+      ? 'space'
+      : /^[a-z0-9]$/.test(typed)
+        ? typed
+        : event.code.startsWith('Key')
+          ? event.code.slice(3).toLowerCase()
+          : event.code.startsWith('Digit')
+            ? event.code.slice(5)
+            : event.key.toLowerCase()
   const parts = []
   if (isMac ? event.metaKey : event.ctrlKey) parts.push('mod')
   if (isMac && event.ctrlKey) parts.push('ctrl')
@@ -15,18 +25,7 @@ export function chordOf(event: KeyboardEvent): string {
   return parts.join('+')
 }
 
-export function parseKeys(keys: string): string[] {
-  const order = ['mod', 'ctrl', 'alt', 'shift']
-  return keys
-    .trim()
-    .toLowerCase()
-    .split(/\s+/)
-    .map((chord) => {
-      const parts = chord.split('+').map((part) => (part === 'esc' ? 'escape' : part))
-      const modifiers = order.filter((modifier) => parts.includes(modifier))
-      return [...modifiers, ...parts.filter((part) => !order.includes(part))].join('+')
-    })
-}
+const order = ['mod', 'ctrl', 'alt', 'shift']
 
 const symbols: Record<string, string> = isMac
   ? {
@@ -50,11 +49,15 @@ const symbols: Record<string, string> = isMac
       space: 'Space',
     }
 
-/** Display parts of a shortcut, one array of keys per chord: `mod+k m` → [['⌘','K'],['M']]. */
-export function formatKeys(keys: string): string[][] {
-  return parseKeys(keys).map((chord) =>
-    chord
-      .split('+')
-      .map((part) => symbols[part] ?? (part.length === 1 ? part.toUpperCase() : part)),
-  )
+/** Display keys of a shortcut, modifiers first: `shift+mod+k` → ['⌘', '⇧', 'K']. */
+export function formatKeys(keys: string): string[] {
+  const parts = keys
+    .trim()
+    .toLowerCase()
+    .split('+')
+    .map((part) => (part === 'esc' ? 'escape' : part))
+  return [
+    ...order.filter((modifier) => parts.includes(modifier)),
+    ...parts.filter((part) => !order.includes(part)),
+  ].map((part) => symbols[part] ?? (part.length === 1 ? part.toUpperCase() : part))
 }
