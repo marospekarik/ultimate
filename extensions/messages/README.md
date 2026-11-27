@@ -22,7 +22,8 @@ conversation as `#123` or `123`, a standing agent as `@name`, or `user`.
 - **Images.** `images` forwards images from the sender's own conversation: `'latest'` takes the newest entry with
   images in the current turn (its input, or a tool result such as a screenshot since) and fails when there is none; an
   entry id names an older one. At most `maxImages`, each at most
-  `maxImageBytes`. `branch` takes `images` for its first message too.
+  `maxImageBytes`. `branch` takes `images` for its first message too, and the `subagent` tool uses the same
+  resolution (`lib/images.ts`).
 
 ### Waking upward: notes and reports
 
@@ -165,7 +166,7 @@ exposes `send`, a one-way message from a conversation, and `answer`, the user's 
 
 ## Files
 
-Server side, imported in one direction (`log`, `images`, `addresses`, `questions` → `delivery` → `send` → `route` →
+Server side, imported in one direction (`log`, `addresses`, `questions` → `delivery` → `send` → `route` →
 `branch`; `remote` → `delivery`):
 
 - `server.ts`: wiring: the `message` tool, prompt section, hooks, actions, `MessagesApi` and the `workspaces.branches`
@@ -178,7 +179,7 @@ Server side, imported in one direction (`log`, `images`, `addresses`, `questions
 - `remote.ts`: `tell`, the `remote` and `remoteReply` actions.
 - `branch.ts`: the `branch` tool.
 - `addresses.ts`: resolving `to`, sender names, a subagent's parent and the lander.
-- `images.ts`, `questions.ts`, `log.ts`: forwarded images, questions and the `board.open` line, the bounded log.
+- `questions.ts`, `log.ts`: questions and the `board.open` line, the bounded log.
 
 `api.ts` and `refs.ts` are the contract; `caller.ts` is shared with the browser; the `.solid.tsx` files are the UI.
 

@@ -30,7 +30,7 @@ import type { Via } from './refs.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { isOwed } from '../../lib/message-state.shared.ts'
 import { actingAs } from '../../lib/acting-as.ts'
-import { imagesParameter, SCAN_PAGE } from './images.ts'
+import { imagesParameter } from '../../lib/images.ts'
 import { isFront, owed, parentOf, Serving, Started, starterOf } from './addresses.ts'
 import { Concluded } from '../conversations/api.ts'
 import { dropped } from './outcomes.ts'
@@ -159,7 +159,7 @@ export const actions = {
       do {
         const page = await tx.scanEntries(
           { conversationId: parseConversationId(Number(conversation)) },
-          SCAN_PAGE,
+          200,
           cursor,
         )
         const found = callerOf(page.items, scriptParentCallId)

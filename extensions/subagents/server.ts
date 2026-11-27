@@ -1,4 +1,6 @@
-import { parseConversationId } from '../../lib/ids.shared.ts'
+import { parseConversationId, parseEntryId } from '../../lib/ids.shared.ts'
+import { imagesOf } from '../../lib/entries.shared.ts'
+import { imagesParameter, resolveImages } from '../../lib/images.ts'
 import type {
   Agent,
   ConversationId,
@@ -159,6 +161,7 @@ type ReporterInput = {
   text: string
   steer: boolean
   sourceEntry?: EntryId
+  images?: EntryId
   answer?: EntryId
 }
 type ReporterCheckpoint =
@@ -197,13 +200,17 @@ function createReporter(failures: () => ChildFailuresService | undefined) {
       deliver: async (task, runtime, context) => {
         try {
           const child = (await runtime.conversation(task.input.conversationId, context))!
-          const content = task.input.text
+          const body = task.input.text
+          const images =
+            task.input.images === undefined
+              ? []
+              : imagesOf(await runtime.entry(task.input.images, context))
           await submitAndSleep(
             runtime,
             child,
             {
               type: 'input',
-              content,
+              content: images.length ? [{ type: 'text' as const, text: body }, ...images] : body,
               entry: {
                 kind: 'subagents.instruction',
                 data: {
@@ -211,8 +218,9 @@ function createReporter(failures: () => ChildFailuresService | undefined) {
                   kind: 'instruction',
                   agent: (await runtime.snapshot(Subagents, runtime.conversationId, context))!
                     .agents[String(child.id)].agent,
-                  body: content,
+                  body,
                   ...(task.input.sourceEntry ? { entry: task.input.sourceEntry } : {}),
+                  ...(images.length ? { images: images.length } : {}),
                 },
               },
               whenBusy: task.input.steer ? 'steer' : 'followUp',
@@ -1124,7 +1132,7 @@ export default function subagents(
       defineTool({
         name: 'subagent',
         description:
-          'Delegate to a named agent. start returns its answer (foreground) or id (background). Foreground start/message and wait yield on queued steering with details.yielded:true; work continues independently. Stop children explicitly; stopping the parent does not stop them; stop lists files left uncommitted in the child worktree. message steers a busy child (steer false queues a follow-up instead); wait returns the latest answer; stop stops current work; list shows your children; land verifies and fast-forwards a finished worktree child; discard removes its worktree but keeps its branch. start accepts isolate none or worktree, and fork true to inherit parent history before this call (more context cost; prompt caching usually covers the shared prefix). Background answers join the current run after its tool round, or wake you when idle.',
+          'Delegate to a named agent. images on start or message forwards images to the child, which must run on a model that reads images. start returns its answer (foreground) or id (background). Foreground start/message and wait yield on queued steering with details.yielded:true; work continues independently. Stop children explicitly; stopping the parent does not stop them; stop lists files left uncommitted in the child worktree. message steers a busy child (steer false queues a follow-up instead); wait returns the latest answer; stop stops current work; list shows your children; land verifies and fast-forwards a finished worktree child; discard removes its worktree but keeps its branch. start accepts isolate none or worktree, and fork true to inherit parent history before this call (more context cost; prompt caching usually covers the shared prefix). Background answers join the current run after its tool round, or wake you when idle.',
         ...safeToRerun(
           'Call-id receipts deduplicate starts/messages; memoized targets and guards protect stop/workspace replays.',
         ),
@@ -1166,6 +1174,7 @@ export default function subagents(
           text: opt(str()),
           steer: opt(bool()),
           isolate: opt(strEnum(['none', 'worktree'])),
+          images: opt(imagesParameter),
         }),
         execute: async (args, api, context) => {
           const cached = await api.memo<ReturnType<typeof reply>>('result', context)
@@ -1250,6 +1259,14 @@ export default function subagents(
             const action = await api.commit(async (tx) => {
               const state = await tx.doc(Subagents, api.conversationId)
               if (state.actions[api.callId]) return { ...state.actions[api.callId] }
+              const images =
+                args.images === undefined
+                  ? undefined
+                  : await resolveImages(
+                      tx,
+                      api.conversationId,
+                      typeof args.images === 'number' ? parseEntryId(args.images) : args.images,
+                    )
               let conversationId: ConversationId
               if (definition) {
                 await conversations.requestSummary(
@@ -1316,6 +1333,16 @@ export default function subagents(
                   })
                 }
               } else conversationId = parseConversationId(args.id!)
+              if (images) {
+                const { model: runs } = await tx.doc(AgentDoc, conversationId)
+                if (
+                  runs &&
+                  !host.modelRuntime.getModel(runs.provider, runs.modelId)?.input.includes('image')
+                )
+                  throw new Error(
+                    `images: subagent ${conversationId} runs on ${runs.provider}/${runs.modelId}, which reads no images; start it on a model that does (model or family)`,
+                  )
+              }
               const reporter = await tx.createTask(
                 Reporter,
                 {
@@ -1323,6 +1350,7 @@ export default function subagents(
                   text,
                   steer: args.steer !== false,
                   ...(assistant ? { sourceEntry: assistant } : {}),
+                  ...(images ? { images: images.entry } : {}),
                 },
                 { ownership: { kind: 'conversation' }, background: true },
               )
