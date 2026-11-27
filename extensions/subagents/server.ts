@@ -1340,7 +1340,7 @@ export default function subagents(
                   !host.modelRuntime.getModel(runs.provider, runs.modelId)?.input.includes('image')
                 )
                   throw new Error(
-                    `images: subagent ${conversationId} runs on ${runs.provider}/${runs.modelId}, which reads no images; start it on a model that does (model or family)`,
+                    `images: ${runs.provider}/${runs.modelId} reads no images; start the subagent on a model that does (model or family)`,
                   )
               }
               const reporter = await tx.createTask(
