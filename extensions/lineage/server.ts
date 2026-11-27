@@ -78,7 +78,7 @@ import {
   memoryIndex,
   memoryText,
 } from './memory.ts'
-import { catchup, Seen, seedSeen, watchSeen } from './catchup.ts'
+import { catchupPreparation, Seen, seedSeen, watchSeen } from './catchup.ts'
 import { rewindActions, rewindTask } from './rewind.ts'
 import type { RootEvent } from './types.ts'
 import { compareUrl } from '../../lib/compare.ts'
@@ -1122,11 +1122,12 @@ async function isBranch(tx: Tx, id: ConversationId) {
   return (await unownedRootBeforeWrites(tx, id, roots)) !== undefined
 }
 
-async function refuseTally(tx: Tx, id: ConversationId) {
-  if (!(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots.includes(id)) return
+async function tallyRefusal(tx: Tx, id: ConversationId) {
+  if (!(await tx.doc(Roots, ROOT_CONVERSATION_ID)).roots.includes(id)) return undefined
   const tally = await tx.doc(Tally, id)
-  if (tally.since !== undefined)
-    throw new Error(`#${id} is a tally and runs no turns; ask @ultimate to start a branch`)
+  return tally.since === undefined
+    ? undefined
+    : `#${id} is a tally and runs no turns; ask @ultimate to start a branch`
 }
 
 export default function lineageExtension(host: ExtensionHost) {
@@ -1235,14 +1236,16 @@ export default function lineageExtension(host: ExtensionHost) {
   })
   watchSeen(host, context)
   watchTally(host, context)
+  const catchups = catchupPreparation(host, isBranch)
   return defineExtension({
     name: 'lineage',
     tasks: [Notify, WakeAfterPlacedManualCompaction, rewindTask(host)],
     sections: [section('lineage', (input, ctx) => lineageSection(host, input.conversationId, ctx))],
     hooks: [
       hook(GenerationTask, {
-        beforeInput: async (input, api, ctx) => {
-          await refuseTally(api.tx, api.conversationId)
+        refuseInput: (_input, api) => tallyRefusal(api.tx, api.conversationId),
+        prepareInput: ({ conversationId }, ctx) => catchups.prepare(conversationId, ctx),
+        beforeInput: async (_input, api, ctx) => {
           if (await isSideChat(host, api.tx, api.conversationId)) return undefined
           const parent = (await api.tx.conversation(api.conversationId))?.parent
           if (
@@ -1250,7 +1253,7 @@ export default function lineageExtension(host: ExtensionHost) {
             (await api.tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate === parent.conversationId
           )
             return undefined
-          return catchup(host, input, api, ctx, isBranch)
+          return catchups.place(api, ctx)
         },
       }),
       hook(CompactionTask, {

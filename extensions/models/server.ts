@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import type { AuthEvent, AuthPrompt, AuthType } from '@earendil-works/pi-ai'
 import {
+  AgentDoc,
   configure,
   defineDoc,
   defineExtension,
@@ -29,7 +30,7 @@ import {
 import type { SaveFamilies } from './refs.ts'
 import { DEFAULT_FAMILY } from '../../lib/families.ts'
 import { familiesView, saveFamilies, setDefault } from './families.ts'
-import { fallback } from './fallback.ts'
+import { checkLogin, fallback, loginChecks as newLoginChecks } from './fallback.ts'
 import { inProcess } from '../../lib/errors.ts'
 import { checkpointEvery } from '../../shared/checkpoint.ts'
 
@@ -259,6 +260,7 @@ export const actions = {
 
 export default function models(host: ExtensionHost) {
   const live = liveFlows(host)
+  const loginChecks = host.resource('models.login-checks', newLoginChecks)
   host.onOpen(async () => {
     await host.harness().commit(async (tx) => {
       const { flows } = await tx.doc(Logins, ROOT_CONVERSATION_ID)
@@ -274,7 +276,12 @@ export default function models(host: ExtensionHost) {
     hooks: [
       hook(GenerationTask, {
         // Pi upstream: @earendil-works/pi-durable@1.6.0 — patched transactional beforeInput hook.
-        beforeInput: (_input, { tx, conversationId }) => fallback(host, tx, conversationId),
+        prepareInput: async ({ conversationId }, ctx) => {
+          const agent = await host.harness().snapshot(AgentDoc, conversationId, ctx)
+          await checkLogin(host, conversationId, agent?.model, loginChecks)
+        },
+        beforeInput: (_input, { tx, conversationId }) =>
+          fallback(host, tx, conversationId, loginChecks),
       }),
     ],
   })

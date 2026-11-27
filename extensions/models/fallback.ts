@@ -16,24 +16,78 @@ function usesSubscriptionNotPerToken(host: ExtensionHost, provider: string) {
   return !PAY_PER_TOKEN_PROVIDERS.has(provider) && host.modelRuntime.isUsingSubscription(provider)
 }
 
+function needsCheck(host: ExtensionHost, model: Ref | undefined): model is Ref {
+  const available = host.modelRuntime.getAvailableSnapshot()
+  const availabilitySnapshotIsUnsettled = !available.length
+  return (
+    !!model &&
+    !availabilitySnapshotIsUnsettled &&
+    !hasLogin(available, model) &&
+    !!host.modelRuntime.getProvider(model.provider)
+  )
+}
+
+type Login = Awaited<ReturnType<typeof loginCheck>>
+export type LoginChecks = {
+  byProvider: Map<string, { snapshot: readonly unknown[]; login: Login }>
+  inconclusiveFor: Map<ConversationId, { provider: string; snapshot: readonly unknown[] }>
+}
+
+export const loginChecks = (): LoginChecks => ({
+  byProvider: new Map(),
+  inconclusiveFor: new Map(),
+})
+
+async function conclusiveLogin(host: ExtensionHost, provider: string, checks: LoginChecks) {
+  const snapshot = host.modelRuntime.getAvailableSnapshot()
+  const checked = checks.byProvider.get(provider)
+  if (checked?.snapshot === snapshot) return checked.login
+  const login = await loginCheck(host, provider)
+  if (login !== 'inconclusive') checks.byProvider.set(provider, { snapshot, login })
+  return login
+}
+
+export async function checkLogin(
+  host: ExtensionHost,
+  conversationId: ConversationId,
+  model: Ref | undefined,
+  checks: LoginChecks,
+) {
+  checks.inconclusiveFor.delete(conversationId)
+  if (!needsCheck(host, model)) return
+  const snapshot = host.modelRuntime.getAvailableSnapshot()
+  if ((await conclusiveLogin(host, model.provider, checks)) === 'inconclusive')
+    checks.inconclusiveFor.set(conversationId, { provider: model.provider, snapshot })
+}
+
+async function loginMissing(
+  host: ExtensionHost,
+  conversationId: ConversationId,
+  provider: string,
+  checks: LoginChecks,
+) {
+  const inconclusive = checks.inconclusiveFor.get(conversationId)
+  checks.inconclusiveFor.delete(conversationId)
+  const sameCheck =
+    inconclusive?.provider === provider &&
+    inconclusive.snapshot === host.modelRuntime.getAvailableSnapshot()
+  if (sameCheck) return false
+  return (await conclusiveLogin(host, provider, checks)) === 'missing'
+}
+
 export async function fallback(
   host: ExtensionHost,
   tx: Tx,
   conversationId: ConversationId,
+  checks: LoginChecks,
 ): Promise<{ entries: EntryDraft[] } | undefined> {
   const agent = await tx.doc(AgentDoc, conversationId)
   const runtime = host.modelRuntime
-  const available = runtime.getAvailableSnapshot()
-  const availabilitySnapshotIsUnsettled = !available.length
-  if (!agent.model || availabilitySnapshotIsUnsettled || hasLogin(available, agent.model))
-    return undefined
   const from = agent.model
-  if (
-    !runtime.getProvider(from.provider) ||
-    (await loginIsPresentOrUnconfirmed(host, from.provider))
-  )
+  if (!needsCheck(host, from) || !(await loginMissing(host, conversationId, from.provider, checks)))
     return undefined
   const fresh = runtime.getAvailableSnapshot()
+  if (hasLogin(fresh, from)) return undefined
   const requiresSubscriptionReplacement = providerDeclaresSubscriptionAuth(host, from.provider)
   const preservesSubscriptionBilling = (provider: string) =>
     !requiresSubscriptionReplacement || usesSubscriptionNotPerToken(host, provider)
@@ -77,14 +131,15 @@ export async function fallback(
 
 const INPUT_TRANSACTION_AUTH_CHECK_TIMEOUT_MS = 5_000
 
-async function loginIsPresentOrUnconfirmed(host: ExtensionHost, provider: string) {
+async function loginCheck(host: ExtensionHost, provider: string) {
   try {
-    return !!(await host.modelRuntime.checkAuth(provider, {
+    const found = await host.modelRuntime.checkAuth(provider, {
       signal: AbortSignal.timeout(INPUT_TRANSACTION_AUTH_CHECK_TIMEOUT_MS),
-    }))
+    })
+    return found ? 'present' : 'missing'
   } catch (error) {
     host.notice(`Checking the ${provider} login failed, keeping the model: ${String(error)}`)
-    return true
+    return 'inconclusive'
   }
 }
 
