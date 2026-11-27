@@ -21,7 +21,7 @@ import { scanNonterminalTasks } from './tasks.ts'
 import { isOpen } from '../../lib/message-state.shared.ts'
 import type { LandingOutput, Owner, Serves } from './addresses.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { Standing, SubagentsApi } from '../subagents/api.ts'
+import { ChildFailures, Standing, SubagentsApi } from '../subagents/api.ts'
 import { locate, postAction } from '../../lib/remote.ts'
 import { Messages, MessageSent } from './api.ts'
 import type { Message } from './api.ts'
@@ -265,10 +265,14 @@ export function delivery(host: ExtensionHost) {
             failed &&
             ((settled.status === 'unanswered' && settled.reason === 'aborted') ||
               (model?.role === 'assistant' && model.stopReason === 'aborted'))
+          const continuesIn =
+            failed && !stopped && settled.status === 'unanswered'
+              ? host.want(ChildFailures)?.continuesIn(settled.reason, settled.detail)
+              : undefined
           const error = stopped
             ? 'was stopped by the user before it answered'
             : failed
-              ? `ended its turn without an answer (${settled.status === 'unanswered' ? settled.reason : settled.status})`
+              ? `ended its turn without an answer (${settled.status === 'unanswered' ? settled.reason : settled.status})${continuesIn === undefined ? '' : `. The watchdog continues it in about ${Math.round(continuesIn / 60_000)} min; do not resume it yourself`}`
               : undefined
           const state = stopped ? 'stopped' : failed ? 'failed' : undefined
           const interim =

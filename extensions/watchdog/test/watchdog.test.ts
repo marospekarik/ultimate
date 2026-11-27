@@ -30,7 +30,7 @@ import { afterEach, expect, it } from 'vitest'
 import watchdog, { diagnose, RETRY_DELAYS_MS } from '../server.ts'
 import { WatchdogApi } from '../api.ts'
 import { Messages } from '../../messages/api.ts'
-import { Standing, Subagents } from '../../subagents/api.ts'
+import { ChildFailures, Standing, Subagents } from '../../subagents/api.ts'
 import { Roots, Tally } from '../../lineage/api.ts'
 import subagents from '../../subagents/server.ts'
 import { Workspaces } from '../../workspaces/workspaces.ts'
@@ -247,6 +247,7 @@ async function fixture(
     host,
     starters,
     failures: (since: number) => services.need(WatchdogApi).failures(since),
+    childFailures: () => services.need(ChildFailures),
     ultimate,
     notices,
     conversation,
@@ -717,6 +718,10 @@ it('continues a stalled run that a reply:true board message started', async () =
   f.advance(60_000)
   await until(async () => seen.length === 2)
   expect(seen[1]).toContain('Continue from where you left off')
+  // The sender's failed reply says so, and gives the same delay, so its agent waits rather than resume it by hand.
+  const stall = 'Model stream stalled: claude-code/claude-sonnet-5-5 sent nothing for 300 s'
+  expect(f.childFailures().continuesIn('model_error', stall)).toBe(RETRY_DELAYS_MS[0])
+  expect(f.childFailures().continuesIn('model_error', 'Run `claude auth login`')).toBeUndefined()
 })
 
 it('reports a faulted message delivery to its sender, once', async () => {

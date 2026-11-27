@@ -20,7 +20,7 @@ import {
 import type { ActionContext } from '../../server/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { Branches, WorkspacesApi } from '../workspaces/api.ts'
-import { Standing, SubagentsApi } from '../subagents/api.ts'
+import { ChildFailures, Standing, SubagentsApi } from '../subagents/api.ts'
 import { LineageApi, Replies } from '../lineage/api.ts'
 import { Judgements, Messages, MessagesApi } from './api.ts'
 import { gist, openQuestion, openQuestionsNote, questionsParameter } from './questions.ts'
@@ -235,6 +235,7 @@ export default function messages(host: ExtensionHost) {
   host.need(LineageApi)
   host.need(SubagentsApi)
   host.need(WorkspacesApi)
+  host.want(ChildFailures)
   host.onOpen(() => host.harness().commit((tx) => reconcileOutputs(host, tx), BACKGROUND_CONTEXT))
 
   host.react(

@@ -125,6 +125,11 @@ export type ChildFailuresService = {
   holds(reason: string): boolean
   /** Whether `input` is a continuation the provider submitted to retry a failed run. */
   continues(input: SubmissionRecord): boolean
+  /**
+   * In how many ms the provider continues a run by itself whose input ended unanswered for `reason` with `detail` (the
+   * error text), or `undefined` when it reports that failure instead.
+   */
+  continuesIn(reason: string, detail: unknown): number | undefined
   /** Inside `tx`, the provider's tasks on `parent` that may still continue `child`, with each one's request ID. */
   continuations(
     tx: Tx,

@@ -49,7 +49,7 @@ import type { MessagesService } from '../api.ts'
 import { BranchReceipts, rootOf, startBranch } from '../../lineage/server.ts'
 import type { BranchInput } from '../../lineage/server.ts'
 import { Branch, Roots, Tally } from '../../lineage/api.ts'
-import { Standing, Subagents } from '../../subagents/api.ts'
+import { ChildFailures, Standing, Subagents } from '../../subagents/api.ts'
 import { landingPending, pendingLandingCards, Workspaces } from '../../workspaces/workspaces.ts'
 import { actions as conversationActions } from '../../conversations/server.ts'
 import { concludedIn } from '../../conversations/projection.ts'
@@ -295,6 +295,11 @@ async function fixture(
       )
     if (last.role === 'user' && text.startsWith('Message from') && text.includes('NOANSWER'))
       return fauxAssistantMessage([])
+    if (last.role === 'user' && text.startsWith('Message from') && text.includes('STREAMSTALL'))
+      return fauxAssistantMessage([], {
+        stopReason: 'error',
+        errorMessage: 'Model stream stalled: faux/faux-1 sent nothing for 300 s',
+      })
     // A branch's reply that keeps @ultimate busy, so another branch's reply steers into the same run.
     if (last.role === 'user' && text.startsWith('Reply from #') && text.includes('STALL'))
       return fauxAssistantMessage([fauxToolCall('hold', {})], { stopReason: 'toolUse' })
@@ -733,6 +738,21 @@ it('resolves a standing address and returns unanswered inputs as failure replies
   }, context)
   expect(await actions.addresses({}, f.action())).toMatchObject({
     agents: [{ name: 'scout', description: 'Search', id: f.recipient.id }],
+  })
+})
+it('tells the sender that the watchdog continues a stalled run, so it does not resume it by hand', async () => {
+  const f = await fixture()
+  f.provided.set(ChildFailures.name, {
+    continuesIn: (reason: string, detail: unknown) =>
+      reason === 'model_error' && String(detail).startsWith('Model stream stalled: ')
+        ? 60_000
+        : undefined,
+  })
+  await f.send(`#${f.recipient.id}`, 'STREAMSTALL')
+  await until(async () => (await replies(f)).length === 1)
+  expect((await f.log())!.messages[1]).toMatchObject({
+    state: 'failed',
+    text: 'ended its turn without an answer (model_error). The watchdog continues it in about 1 min; do not resume it yourself',
   })
 })
 it('tells the sender a Stop as stopped, not failed', async () => {

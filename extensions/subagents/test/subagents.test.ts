@@ -160,6 +160,7 @@ async function fixture(
     services.implement(ChildFailures, {
       holds: (reason) => reason === 'model_error' || reason === 'no_model',
       continues: (input) => input.requestId?.startsWith('watchdog-retry:') === true,
+      continuesIn: () => undefined,
       continuations: async () => [],
     })
   if (failures === 'watchdog')

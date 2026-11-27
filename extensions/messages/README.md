@@ -16,7 +16,8 @@ conversation as `#123` or `123`, a standing agent as `@name`, or `user`.
   conversation resumes it.
 - **Answers.** With `reply` (the default) the recipient's final answer returns as a `board.reply`, steering the sender;
   one answer to several of the sender's messages returns once and closes them all. An unanswered input returns a
-  `failed` reply, or `stopped` when a person pressed Stop. Answer directly instead of messaging the sender: a
+  `failed` reply, or `stopped` when a person pressed Stop; when a `ChildFailures` provider (the watchdog) continues that
+  failed run by itself (`continuesIn`), the reply says so and when, so the sender waits instead of resuming it. Answer directly instead of messaging the sender: a
   reply-enabled message back to a sender whose message you have read and owe becomes that answer and ends your run. A message still queued is unread and never owed. `reply: false` is one-way: it wakes the
   recipient and returns nothing.
 - **Images.** `images` forwards images from the sender's own conversation: `'latest'` takes the newest entry with

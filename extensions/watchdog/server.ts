@@ -454,6 +454,10 @@ export default function watchdog(host: ExtensionHost) {
   host.implement(ChildFailures, {
     holds: (reason) => reportedReasons.includes(reason),
     continues: (input) => continuedFailure(input) !== undefined,
+    continuesIn: (reason, detail) =>
+      reason === 'model_error' && typeof detail === 'string' && diagnose(detail).temporary
+        ? retryDelay(0)
+        : undefined,
     continuations: async (tx, parent, child) => {
       const continuations = []
       let cursor: Cursor | undefined
