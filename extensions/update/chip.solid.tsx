@@ -19,7 +19,7 @@ import {
   useSystem,
   writingAs,
 } from '@/sdk/solid'
-import { itemOf, mergeOffered } from './item.ts'
+import { itemOf, mergeOffered } from './item.web.ts'
 import { CheckAction, MergeAction, StateAction, UpdateAction } from './refs.ts'
 import type { Layers, UpdateResult, UpdateState } from './refs.ts'
 

@@ -15,7 +15,7 @@ import {
   switchConversation,
   useAction,
 } from '@/sdk/solid'
-import { itemOf, warns } from './item.ts'
+import { itemOf, warns } from './item.web.ts'
 import { CheckAction, MergeAction, PrAction, PullAction, PushAction, StateAction } from './refs.ts'
 import type { SyncState } from './refs.ts'
 

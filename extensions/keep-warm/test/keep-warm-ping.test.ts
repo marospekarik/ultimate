@@ -15,7 +15,7 @@ import { UserInputEvent } from '../../../shared/events.ts'
 import { Standing } from '../../subagents/api.ts'
 import { apis, eventHost, openers, until } from '../../../test/helpers.ts'
 import { ContextUsageDoc } from '../../conversations/api.ts'
-import { LEAD, PRECOLD } from '../due.ts'
+import { LEAD, PRECOLD } from '../due.shared.ts'
 import keepWarm, { docs } from '../server.ts'
 
 const cleanups: (() => Promise<void>)[] = []

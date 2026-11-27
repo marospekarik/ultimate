@@ -1,5 +1,14 @@
 import { describe, expect, it, vi } from 'vitest'
-import { due, failing, IDLE_STOP, LEAD, precoldAt, precoldDue, PRECOLD, TTL } from '../due.ts'
+import {
+  due,
+  failing,
+  IDLE_STOP,
+  LEAD,
+  precoldAt,
+  precoldDue,
+  PRECOLD,
+  TTL,
+} from '../due.shared.ts'
 import * as keepWarm from '../server.ts'
 
 const now = Date.parse('2026-10-24T12:00:00Z')

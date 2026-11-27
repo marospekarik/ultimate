@@ -54,8 +54,8 @@ import {
   loginProvider,
   pickerTarget,
   termsOf,
-} from './state.ts'
-import type { ProviderInfo } from './state.ts'
+} from './state.web.ts'
+import type { ProviderInfo } from './state.web.ts'
 
 type Method = {
   provider: ProviderInfo

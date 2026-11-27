@@ -40,7 +40,7 @@ import {
   Tag,
   useOpenDefinition,
 } from './definitions.solid.tsx'
-import { AgentMark } from './points.ts'
+import { AgentMark } from './points.web.ts'
 import { DefinitionsAction } from './refs.ts'
 import type { Definition } from './refs.ts'
 

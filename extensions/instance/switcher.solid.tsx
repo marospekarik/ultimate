@@ -9,7 +9,14 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu.solid.tsx'
 import { cn, useConversations, useExternal } from '@/sdk/solid'
-import { getPreviews, getShown, previewName, refetchPreviews, show, subscribe } from './previews.ts'
+import {
+  getPreviews,
+  getShown,
+  previewName,
+  refetchPreviews,
+  show,
+  subscribe,
+} from './previews.web.ts'
 import type { Preview } from './refs.ts'
 
 const port = (url: string) => `:${new URL(url).port}`
