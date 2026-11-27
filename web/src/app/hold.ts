@@ -1,5 +1,5 @@
-import { deadline } from '../../../lib/timers.ts'
-import type { Cancel } from '../../../lib/timers.ts'
+import { deadline } from '../../../lib/timers.shared.ts'
+import type { Cancel } from '../../../lib/timers.shared.ts'
 
 const holdMs = 450
 const slopPx = 10

@@ -3,7 +3,7 @@ import { isAbsolute, join } from 'node:path'
 import { exec } from './exec.ts'
 import type { Git } from './fast-forward.ts'
 import { acquireLock } from './lock.ts'
-import { meansNone } from './errors.ts'
+import { meansNone } from './errors.shared.ts'
 
 export const gitIn =
   (root: string): Git =>

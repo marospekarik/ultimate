@@ -22,7 +22,7 @@ import {
   useSystem,
 } from '@/sdk/solid'
 import { Provided } from '@/sdk/parts.solid.tsx'
-import { DEFAULT_FAMILY, familyColor, familyTitle } from '../../lib/families.ts'
+import { DEFAULT_FAMILY, familyColor, familyTitle } from '../../lib/families.shared.ts'
 import {
   AddFamily,
   FamilyDot,

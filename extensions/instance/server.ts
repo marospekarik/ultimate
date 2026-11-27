@@ -39,17 +39,17 @@ import {
   rebuiltOnOpen,
   meansNone,
   overshadowed,
-} from '../../lib/errors.ts'
+} from '../../lib/errors.shared.ts'
 import { spawnGroup, stopGroup, sweepPidFiles } from '../../lib/process-group.ts'
-import { every, within } from '../../lib/timers.ts'
-import type { Cancel } from '../../lib/timers.ts'
+import { every, within } from '../../lib/timers.shared.ts'
+import type { Cancel } from '../../lib/timers.shared.ts'
 import type { Group, GroupProcess } from '../../lib/process-group.ts'
 import { Previews } from '../conversations/api.ts'
 import { ListAction, StartAction, StopAction } from './refs.ts'
 import { setup } from '../../lib/worktree-setup.ts'
 import { readSettings, userSettingsPath } from '../../lib/settings.ts'
 import { readFamilies } from '../../lib/families-settings.ts'
-import { BUILTIN_FAMILIES, DEFAULT_FAMILY, FEATURES } from '../../lib/families.ts'
+import { BUILTIN_FAMILIES, DEFAULT_FAMILY, FEATURES } from '../../lib/families.shared.ts'
 
 export const DEFAULT_PREVIEW_MODEL = BUILTIN_FAMILIES[FEATURES.preview.family].model!
 

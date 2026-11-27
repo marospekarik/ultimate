@@ -10,7 +10,7 @@ import { eventHost, fauxServer, post, sourceCopy, temp } from '../../../../test/
 import { Applied } from '../../refs.ts'
 import { RESTORE_PREFIX } from '../../../../lib/merge.ts'
 import { cloneLock, gitIn, gitPath, withLock } from '../../../../lib/clone.ts'
-import { pace } from '../../../../lib/timers.ts'
+import { pace } from '../../../../lib/timers.shared.ts'
 
 const servers: Awaited<ReturnType<typeof fauxServer>>[] = []
 afterAll(async () => {

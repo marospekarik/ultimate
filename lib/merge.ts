@@ -1,7 +1,7 @@
 import { exec } from './exec.ts'
 import type { FastForward, Git, Standing } from './fast-forward.ts'
 import { Refusal } from './fast-forward.ts'
-import { overshadowed, retriedLater } from './errors.ts'
+import { overshadowed, retriedLater } from './errors.shared.ts'
 
 export async function conflictsPredicted(
   root: string,

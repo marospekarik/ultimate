@@ -1,7 +1,7 @@
 import { defineExtension } from '@earendil-works/pi-durable'
 import { implementAction } from '../../lib/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { meansNone } from '../../lib/errors.ts'
+import { meansNone } from '../../lib/errors.shared.ts'
 import {
   OPENAI_SECRET as SECRET,
   openaiSecretOrNonOAuthKey,
