@@ -231,7 +231,13 @@ it('reads front only on a resident definition, lists it, and keeps it through an
   await writeFile(file, definition('Instructions', 'front: true\n'))
   expect(await service.residents(ctx)).toEqual([{ name: 'x', description: 'Test', front: true }])
   // The form has no control for it: a save keeps it, and turning Standing off ends it.
-  const action = { host: { ...prepared, projectRoot: path } } as unknown as ActionContext
+  const action = {
+    host: {
+      ...prepared,
+      projectRoot: path,
+      resource: (_key: string, create: () => unknown) => create(),
+    },
+  } as unknown as ActionContext
   const form = {
     name: 'x',
     scope: 'user',

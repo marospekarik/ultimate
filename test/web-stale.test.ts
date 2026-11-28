@@ -41,7 +41,8 @@ test('a page load after a source change gets the last bundle this process built 
     await new Promise<void>((resolve) => releases.push(resolve))
     await mkdir(request.outDir, { recursive: true })
     await writeFile(join(request.outDir, 'index.html'), `<head></head>build ${number}`)
-    return { stdout: JSON.stringify({ inputs: [source] }), stderr: '' }
+    await writeFile(request.resultFile, JSON.stringify({ inputs: [source] }))
+    return { stdout: '', stderr: '' }
   })
   let change: ((file: string) => Promise<void> | void) | undefined
   const web = await createWeb({
