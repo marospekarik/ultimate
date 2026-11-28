@@ -23,16 +23,14 @@ import type { ActionContext } from '../../server/actions.ts'
 import { EVENT_FEED } from '../../shared/events.ts'
 import type { EventRecord } from '../../shared/events.ts'
 import { implementAction } from '../../lib/actions.ts'
-import { actingAs } from '../../lib/acting-as.ts'
 import { errnoCode, isMissing } from '../../lib/errors.shared.ts'
-import { discoverAgents } from '../../lib/agents.ts'
+import { agentDefinitions } from '../../lib/agents.ts'
 import { validateName } from '../../lib/secrets.ts'
 import { groupAlive } from '../../lib/process-group.ts'
 import { writeJson } from '../../lib/json-file.ts'
 import { Standing, SubagentsApi } from '../subagents/api.ts'
 import { MessagesApi } from '../messages/api.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
-import { LineageApi } from '../lineage/api.ts'
 import { ConversationsApi } from '../conversations/api.ts'
 import { AutomationsApi, Hold } from './api.ts'
 import {
@@ -53,7 +51,7 @@ import {
 } from './refs.ts'
 import { describeNext, describeSchedule, nextAt, parseSchedule } from './schedule.ts'
 import { scheduler } from './scheduler.ts'
-import { triggers, TRIGGER_EVENTS, describeTrigger } from './triggers.ts'
+import { triggers, describeTrigger } from './triggers.ts'
 import { supervisor } from './supervisor.ts'
 import type { Prepared } from './supervisor.ts'
 import type {
@@ -130,6 +128,7 @@ const operations = [
   'unsubscribe',
   'delete',
 ] as const
+const backends = new WeakMap<ExtensionHost, ReturnType<typeof backend>>()
 function backend(host: ExtensionHost) {
   const schedule = scheduler(host, Automations, (...args) => scripts.deliver(...args))
   const scripts = supervisor(host, Automations, schedule.fire)
@@ -315,7 +314,6 @@ function backend(host: ExtensionHost) {
     args: Args,
     prepared: Prepared,
     caller?: ConversationId,
-    runBy = caller,
   ): Promise<{ result: JsonValue; effect?: Effect }> {
     const state = await tx.doc(Automations)
     if (args.action === 'list')
@@ -361,7 +359,7 @@ function backend(host: ExtensionHost) {
           updatedAt: Date.now(),
           subscribers,
           ...(args.key ? { key: args.key } : {}),
-          ...(await owedAtCreation(tx, sub.id, subscribers, runBy)),
+          ...(await owedAtCreation(tx, sub.id, subscribers, caller)),
         })
         sub.script!.state = 'writing'
         await deliver(tx, sub, 'create', 'writing', sub.script!.ask)
@@ -373,7 +371,7 @@ function backend(host: ExtensionHost) {
         : args.prompt
           ? []
           : [caller!]
-      const owed = await owedAtCreation(tx, id, subscribers, runBy)
+      const owed = await owedAtCreation(tx, id, subscribers, caller)
       const conversationId = await agentConversation(tx, prepared, id, name)
       const now = Date.now()
       const sub: Automation = {
@@ -458,9 +456,7 @@ function backend(host: ExtensionHost) {
     if (!operations.includes(args.action as (typeof operations)[number]))
       throw new Error(`Unknown action: ${args.action}`)
     if (args.agent) {
-      const found = (
-        await discoverAgents(host.ultimateRoot, host.projectRoot, host.userHome, host.modelRuntime)
-      ).definitions.some((d) => d.name === args.agent)
+      const found = (await agentDefinitions(host)).definitions.some((d) => d.name === args.agent)
       if (!found) throw new Error(`Unknown agent: ${args.agent}`)
     }
     if (args.model && !host.modelRuntime.getModel(args.model.provider, args.model.modelId))
@@ -486,7 +482,7 @@ function backend(host: ExtensionHost) {
         throw new Error('key must be a non-empty string')
     }
     if (args.event !== undefined) {
-      const event = TRIGGER_EVENTS.find(({ name }) => name === args.event!.name)
+      const event = trigger.list().find(({ name }) => name === args.event!.name)
       if (!event) throw new Error(`Unknown event: ${args.event.name}`)
       for (const [key, value] of Object.entries(args.event.where ?? {})) {
         if (!Object.hasOwn(event.fields, key)) throw new Error(`Unknown where field: ${key}`)
@@ -573,9 +569,8 @@ function backend(host: ExtensionHost) {
     args: Args,
     prepared: Awaited<ReturnType<typeof prepare>>,
     caller?: ConversationId,
-    runBy = caller,
   ): Promise<Change> {
-    if (args.action === 'events') return { result: json(TRIGGER_EVENTS) }
+    if (args.action === 'events') return { result: json(trigger.list()) }
     const state = await tx.doc(Automations)
     if (args.action === 'list') return changeScript(tx, args, prepared, caller)
     if (args.action === 'create' && args.key !== undefined) {
@@ -585,7 +580,7 @@ function backend(host: ExtensionHost) {
         throw new Error(`The automation for key ${args.key} was deleted meanwhile; create it again`)
     }
     if (args.action === 'create' && args.ask !== undefined)
-      return changeScript(tx, args, prepared, caller, runBy)
+      return changeScript(tx, args, prepared, caller)
     const id = args.action === 'create' ? `A${state.next++}` : required(args.id, 'id')
     if (args.action === 'create') {
       const now = Date.now()
@@ -605,7 +600,7 @@ function backend(host: ExtensionHost) {
         fires: 0,
         ...(args.key ? { key: args.key } : {}),
         subscribers,
-        ...(await owedAtCreation(tx, id, subscribers, runBy)),
+        ...(await owedAtCreation(tx, id, subscribers, caller)),
       }
     }
     const a = state.automations[id]
@@ -776,61 +771,68 @@ function input(args: unknown, action: string): Args {
   return { ...(args as Omit<Args, 'action'>), action }
 }
 export const actions = {
-  events: implementAction(EventsAction, () => TRIGGER_EVENTS),
+  events: implementAction(EventsAction, (_args, { host }) => backends.get(host)!.trigger.list()),
   list: implementAction(
     ListAction,
     async (args, { host }) =>
-      (await backend(host).operate(input(args, 'list'))) as AutomationListItem[],
+      (await backends.get(host)!.operate(input(args, 'list'))) as AutomationListItem[],
   ),
   create: implementAction(
     CreateAction,
     async (args, { host, conversationId }) =>
-      (await backend(host).operate(input(args, 'create'), conversationId)) as Automation,
+      (await backends.get(host)!.operate(input(args, 'create'), conversationId)) as Automation,
   ),
   update: implementAction(
     UpdateAction,
-    async (args, { host }) => (await backend(host).operate(input(args, 'update'))) as Automation,
+    async (args, { host }) =>
+      (await backends.get(host)!.operate(input(args, 'update'))) as Automation,
   ),
   pause: implementAction(
     PauseAction,
-    async (args, { host }) => (await backend(host).operate(input(args, 'pause'))) as Automation,
+    async (args, { host }) =>
+      (await backends.get(host)!.operate(input(args, 'pause'))) as Automation,
   ),
   resume: implementAction(
     ResumeAction,
-    async (args, { host }) => (await backend(host).operate(input(args, 'resume'))) as Automation,
+    async (args, { host }) =>
+      (await backends.get(host)!.operate(input(args, 'resume'))) as Automation,
   ),
   run: implementAction(
     RunAction,
     async (args, { host }) =>
-      (await backend(host).operate(input(args, 'run'))) as Run | Automation | { id: string },
+      (await backends.get(host)!.operate(input(args, 'run'))) as Run | Automation | { id: string },
   ),
   delete: implementAction(
     DeleteAction,
     async (args, { host }) =>
-      (await backend(host).operate(input(args, 'delete'))) as { id: string },
+      (await backends.get(host)!.operate(input(args, 'delete'))) as { id: string },
   ),
   subscribe: implementAction(
     SubscribeAction,
     async (args, { host, conversationId }) =>
-      (await backend(host).operate(input(args, 'subscribe'), conversationId)) as Automation,
+      (await backends.get(host)!.operate(input(args, 'subscribe'), conversationId)) as Automation,
   ),
   unsubscribe: implementAction(
     UnsubscribeAction,
     async (args, { host, conversationId }) =>
-      (await backend(host).operate(input(args, 'unsubscribe'), conversationId)) as Automation,
+      (await backends.get(host)!.operate(input(args, 'unsubscribe'), conversationId)) as Automation,
   ),
   log: implementAction(
     LogAction,
-    async (args, { host }) => (await backend(host).operate(input(args, 'log'))) as { text: string },
+    async (args, { host }) =>
+      (await backends.get(host)!.operate(input(args, 'log'))) as { text: string },
   ),
   escalate: implementAction(
     EscalateAction,
-    async (args, { host }) => (await backend(host).operate(input(args, 'escalate'))) as Automation,
+    async (args, { host }) =>
+      (await backends.get(host)!.operate(input(args, 'escalate'))) as Automation,
   ),
-  runs: (args: JsonValue, { host }: ActionContext) => backend(host).operate(input(args, 'runs')),
-  abort: (args: JsonValue, { host }: ActionContext) => backend(host).operate(input(args, 'abort')),
+  runs: (args: JsonValue, { host }: ActionContext) =>
+    backends.get(host)!.operate(input(args, 'runs')),
+  abort: (args: JsonValue, { host }: ActionContext) =>
+    backends.get(host)!.operate(input(args, 'abort')),
   script: implementAction(ScriptAction, async (args, { host }) => {
-    const api = backend(host)
+    const api = backends.get(host)!
     const a = await api.status(required(input(args, 'script').id, 'id'))
     if (!a.script) throw new Error('script requires a script trigger')
     const path = api.runPath(a)
@@ -861,6 +863,7 @@ export default function automations(host: ExtensionHost) {
   host.want(Hold)
   host.need(ConversationsApi)
   const api = backend(host)
+  backends.set(host, api)
   host.implement(AutomationsApi, {
     create: async (args) => (await api.operate({ ...args, action: 'create' })) as Automation,
     delete: async (id) => void (await api.operate({ action: 'delete', id })),
@@ -878,6 +881,8 @@ export default function automations(host: ExtensionHost) {
       )
       return keyed && json(keyed)
     },
+    trigger: api.trigger.register,
+    matched: api.trigger.matched,
   })
   api.trigger.install()
   host.onOpen(async (opened) => {
@@ -978,10 +983,7 @@ export default function automations(host: ExtensionHost) {
             context,
           )
           if (cached) return cached
-          const caller =
-            args.action === 'create' || args.action === 'subscribe'
-              ? await actingAs(host, tool.conversationId, context)
-              : tool.conversationId
+          const caller = tool.conversationId
           let receipt = await tool.commit(
             async (tx) =>
               json((await tx.doc(ReceiptsByToolCallId, tool.taskId))[tool.callId] ?? {}),
@@ -991,24 +993,11 @@ export default function automations(host: ExtensionHost) {
             const prepared = await api.prepare(args, caller)
             receipt = await tool.commit(async (tx) => {
               const saved = await tx.doc(ReceiptsByToolCallId, tool.taskId)
-              saved[tool.callId] ??= json(
-                await api.change(tx, args, prepared, caller, tool.conversationId),
-              )
+              saved[tool.callId] ??= json(await api.change(tx, args, prepared, caller))
               return json(saved[tool.callId])
             }, context)
           }
           await api.apply(receipt)
-          if (caller !== tool.conversationId)
-            await host
-              .need(LineageApi)
-              .leaveNote(
-                caller,
-                `Side chat #${tool.conversationId} ${args.action === 'create' ? 'created' : 'subscribed to'} automation ${(receipt.result as Automation).id}.`,
-                {
-                  from: tool.conversationId,
-                  requestId: `sidechat:automation:${tool.taskId}:${tool.callId}`,
-                },
-              )
           return tool.memo(
             'result',
             { output: [{ type: 'text' as const, text: concise(receipt.result!) }] },

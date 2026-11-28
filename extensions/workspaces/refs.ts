@@ -120,3 +120,8 @@ export const LanderReportEntry = defineEntry<{
   id: string
   outcome: WorkspaceIndex['results'][string]
 }>('workspaces.lander-report')
+
+/** The starter's one wake when branch `id`, whose submission `submission` landed while busy, ended a run still busy. */
+export const StillOpenEntry = defineEntry<{ id: ConversationId; submission: string }>(
+  'workspaces.still-open',
+)

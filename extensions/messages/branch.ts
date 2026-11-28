@@ -5,14 +5,13 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import {
   definitionAgent,
   definitionFamily,
-  discoverAgents,
+  agentDefinitions,
   hostDefault,
   onFamily,
 } from '../../lib/agents.ts'
 import { Family } from '../models/api.ts'
 import { readFamilies } from '../../lib/families-settings.ts'
 import { LineageApi, Roots } from '../lineage/api.ts'
-import { actingAs } from '../../lib/acting-as.ts'
 import { imagesParameter, resolveImages } from '../../lib/images.ts'
 import type { ImagesRef } from '../../lib/images.ts'
 import { send } from './send.ts'
@@ -37,7 +36,7 @@ export const branchTool = (host: ExtensionHost) =>
       'Lineage atomically deduplicates the fork; Sent deduplicates its first message.',
     ),
     async execute(input, api, ctx) {
-      const from = await actingAs(host, api.conversationId, ctx)
+      const from = api.conversationId
       let id = await api.memo<number>('branch-id', ctx)
       let images: ImagesRef | undefined =
         typeof input.images === 'number' ? parseEntryId(input.images) : input.images
@@ -62,12 +61,7 @@ export const branchTool = (host: ExtensionHost) =>
           throw new Error(
             `Choose a root. Roots: ${roots.map((candidate) => `#${candidate}`).join(', ') || '(none)'}`,
           )
-        const { definitions } = await discoverAgents(
-          host.ultimateRoot,
-          host.projectRoot,
-          host.userHome,
-          host.modelRuntime,
-        )
+        const { definitions } = await agentDefinitions(host)
         const definition = definitions.find((candidate) => candidate.name === 'coordinator')
         if (!definition) throw new Error('Missing coordinator definition')
         const coordinator =
@@ -126,26 +120,14 @@ export const branchTool = (host: ExtensionHost) =>
           text: input.prompt,
           reply: true,
           ...(images === undefined ? {} : { images }),
-          imagesFrom: api.conversationId,
         },
         ctx,
         {
           taskId: api.taskId,
           callId: api.callId,
-          ...(from === api.conversationId ? { serveBranch: true } : {}),
+          serveBranch: true,
         },
       )
-      if (from !== api.conversationId)
-        await host
-          .need(LineageApi)
-          .leaveNote(
-            from,
-            `Side chat #${api.conversationId} started branch #${id}: ${input.prompt.split('\n')[0].slice(0, 160)}`,
-            {
-              from: api.conversationId,
-              requestId: `sidechat:branch:${api.taskId}:${api.callId}`,
-            },
-          )
       const title = (await host.harness().snapshot(host.metadata, parseConversationId(id), ctx))
         ?.title
       return {

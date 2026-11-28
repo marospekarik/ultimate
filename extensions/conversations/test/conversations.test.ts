@@ -14,6 +14,7 @@ import {
   prepareFauxServer,
   temp,
   until,
+  createTestExtensionHost,
 } from '../../../test/helpers.ts'
 import type { ConversationSummary } from '../../../shared/protocol.ts'
 import { context } from '../../../server/harness.ts'
@@ -21,7 +22,6 @@ import { Metadata } from '../../../server/metadata.ts'
 import { actions as conversationActions, setStanding } from '../server.ts'
 import { concludedIn } from '../projection.ts'
 import { UiState } from '../../../shared/ui-state.ts'
-import type { ExtensionHost } from '../../../server/extensions.ts'
 import { actionExec } from '../../../server/actions.ts'
 import { currentAnswer, exchangeUser } from '../summary.ts'
 import { Overview, Previews, Release } from '../api.ts'
@@ -137,6 +137,7 @@ it('tells each top-level conversation about the others in a fixed text', async (
   expect(child.inputAt).toEqual(expect.any(Number))
   expect(child.parentConversationId).toBe(root)
   expect(child.branchOf).toBeUndefined()
+  expect(child.forkOf).toBeUndefined()
   expect(await render('conversations', child.id)).toBeUndefined()
   const childContext = await (await server.harness.conversation(child.id, context))!.context(
     context,
@@ -162,7 +163,10 @@ it('tells each top-level conversation about the others in a fixed text', async (
   const fork = await server.root.fork(entry.id, { ownership: { kind: 'ownerless' } }, context)
   await until(() => summary(fork.id)?.inputAt !== undefined)
   expect(summary(fork.id)!.inputAt).toEqual(expect.any(Number))
-  expect(summary(fork.id)).toMatchObject({ branchOf: { conversationId: root, at: entry.id } })
+  expect(summary(fork.id)).toMatchObject({
+    branchOf: { conversationId: root, at: entry.id },
+    forkOf: { conversationId: root, at: entry.id },
+  })
   expect(summary(fork.id)).not.toHaveProperty('parentConversationId')
   const stream = await attach(server)
   try {
@@ -631,7 +635,7 @@ it('conclude merges concurrent additions, deduplicates ids and returns kept chec
   const second = await create()
   const kept = [{ id: first, uncommitted: 2, unlanded: 1 }]
   const released: number[][] = []
-  const host = {
+  const host = createTestExtensionHost({
     harness: () => server.harness,
     emit: async () => {},
     metadata: Metadata,
@@ -646,7 +650,7 @@ it('conclude merges concurrent additions, deduplicates ids and returns kept chec
         }
       return undefined
     },
-  } as unknown as ExtensionHost
+  })
   const ctx = {
     host,
     signal: new AbortController().signal,

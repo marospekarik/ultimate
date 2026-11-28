@@ -1,33 +1,46 @@
 import { stat } from 'node:fs/promises'
-import { errnoCode, ignoring } from './errors.shared.ts'
+import { errnoCode } from './errors.shared.ts'
 
-const absent = (error: unknown) => ['ENOENT', 'ENOTDIR'].includes(errnoCode(error) ?? '')
+const unreadable = (error: unknown) => {
+  const code = errnoCode(error)
+  if (code === undefined) throw error
+  return ['ENOENT', 'ENOTDIR'].includes(code) ? '-' : `!${code}`
+}
 
 export async function signature(paths: readonly string[]) {
   const stats = await Promise.all(
-    paths.map((path) => stat(path, { bigint: true }).catch(ignoring(absent))),
+    paths.map((path) =>
+      stat(path, { bigint: true }).then(
+        (found) => `${found.ino}:${found.size}:${found.mtimeNs}`,
+        unreadable,
+      ),
+    ),
   )
-  return stats
-    .map((found) => (found ? `${found.ino}:${found.size}:${found.mtimeNs}` : '-'))
-    .join(',')
+  return stats.join(',')
 }
 
-export function fileMemo<T>(source: {
-  paths: () => Promise<readonly string[]>
-  read: () => Promise<T>
-  key?: () => string
-}) {
-  let last: { value: T; paths: readonly string[]; signature: string } | undefined
+export type FileMemoState<T> = {
+  last?: { value: T; paths: readonly string[]; signature: string }
+}
+
+export function fileMemo<T>(
+  source: {
+    paths: () => Promise<readonly string[]>
+    read: () => Promise<T>
+    key?: () => string
+  },
+  state: FileMemoState<T> = {},
+) {
   const sign = async (paths: readonly string[]) =>
     `${source.key?.() ?? ''}|${await signature(paths)}`
   return async (): Promise<T> => {
-    const cached = last
+    const cached = state.last
     if (cached && (await sign(cached.paths)) === cached.signature) return cached.value
     const paths = await source.paths()
     const before = await sign(paths)
     const value = await source.read()
     const unchangedWhileRead = (await sign(paths)) === before
-    last = unchangedWhileRead ? { value, paths, signature: before } : undefined
+    state.last = unchangedWhileRead ? { value, paths, signature: before } : undefined
     return value
   }
 }

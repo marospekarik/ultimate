@@ -34,6 +34,7 @@ import { needsRestart } from '../../lib/layers.ts'
 import { Applied, CheckAction, MergeAction, Refused, StateAction, UpdateAction } from './refs.ts'
 import type { UpdateResult, UpdateState } from './refs.ts'
 import { UpdateApi } from './api.ts'
+import { AutomationsApi } from '../automations/api.ts'
 
 export const TICK = 5 * 60_000
 
@@ -195,6 +196,25 @@ export default function update(host: ExtensionHost) {
   host.need(SubagentsApi)
   host.want(PauseApi)
   host.implement(UpdateApi, { state: () => locallyRefreshedState(host) })
+  const automations = host.need(AutomationsApi)
+  host.onOpen(async (opened) => {
+    opened.defer(
+      automations.trigger({
+        event: Applied,
+        description: 'An update was applied',
+        fields: {
+          needsRestart:
+            'true when it changed the clone’s core (server/, shared/, patches/, pnpm-lock.yaml)',
+        },
+      }),
+    )
+    opened.defer(
+      automations.trigger({ event: Refused, description: 'An update was refused', fields: {} }),
+    )
+  })
+  host.react('automations', [Applied, Refused], (tx, event) => automations.matched(tx, event), {
+    from: { cursorOf: 'automations/events' },
+  })
   const shared = reloadSharedState(host)
   if (sharesHostCloneAsPreview()) return defineExtension({ name: 'update' })
   const lastFile = join(host.home, 'update-auto-restart.json')

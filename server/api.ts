@@ -36,7 +36,6 @@ import type { Extensions } from './extensions.ts'
 import { context } from './harness.ts'
 import type { OpenHost, PreparedHost } from './harness.ts'
 import type { createSystem } from './system.ts'
-import { requestSwap } from './supervisor-protocol.ts'
 import { UiState, UiWriters } from '../shared/ui-state.ts'
 import type { JsonValue } from '@earendil-works/chord/json'
 import { diffRevisions } from '@earendil-works/chord/delta'
@@ -346,6 +345,7 @@ export async function createApi(
         id: record.id,
         ...(record.owner ? { parentConversationId: record.owner.conversationId } : {}),
         ...(!record.owner && record.parent ? { branchOf: record.parent } : {}),
+        ...(record.parent ? { forkOf: record.parent } : {}),
         ...(record.owner ? { ownerTaskId: record.owner.taskId } : {}),
         ...(metadata?.label ? { label: metadata.label } : {}),
         ...(metadata?.external ? { external: metadata.external } : {}),
@@ -797,9 +797,9 @@ export async function createApi(
         if (url.pathname === '/api/restart') {
           const error =
             (await extensions.restartRefusal()) ??
-            (await requestSwap(async (generation) => {
+            (await host.restart(async (generation) => {
               json(202, { ok: true, generation })
-            }, host.build()))
+            }))
           if (!response.writableEnded) json(500, { ok: false, error })
           return true
         }

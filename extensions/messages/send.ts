@@ -14,7 +14,6 @@ import { resolveImages } from '../../lib/images.ts'
 import type { ImagesRef } from '../../lib/images.ts'
 import { append } from './log.ts'
 import { isFront, parentOf, resolveRecipient, senderName, serve, starterOf } from './addresses.ts'
-import { actingAs } from '../../lib/acting-as.ts'
 import { delivery } from './delivery.ts'
 import { checkpointEvery } from '../../shared/checkpoint.ts'
 
@@ -62,7 +61,6 @@ export async function send(
     steer?: boolean
     re?: number
     images?: ImagesRef
-    imagesFrom?: ConversationId
     dismiss?: boolean
     questions?: Question[]
   },
@@ -81,6 +79,7 @@ export async function send(
     judged?: Judged
     stillReports?: (tx: Tx) => Promise<boolean>
     serveBranch?: true
+    informs?: () => Promise<boolean>
   } = {},
 ) {
   const { taskId, callId, requestId, answerId, device, via } = options
@@ -113,8 +112,8 @@ export async function send(
       `Subagents report to the conversation that started them: message only #${parent}. Your final answer reaches it anyway.`,
     )
   const to = await resolveRecipient(host, input.to, from, ctx)
-  const settlerId = via ? await actingAs(host, via.conversation, ctx) : undefined
-  const settler = settlerId === undefined ? undefined : await senderName(host, settlerId, ctx)
+  const settler = via ? await senderName(host, via.conversation, ctx) : undefined
+  const informs = (await options.informs?.()) ?? false
   const fromLabel = via
     ? `user (settled for them by ${settler}, from what they said in its chat)`
     : await senderName(host, from, ctx)
@@ -147,7 +146,7 @@ export async function send(
     if (input.images !== undefined) {
       if (from === 'user')
         throw new Error('your images go along with what you submit, not with a message')
-      images = await resolveImages(tx, input.imagesFrom ?? from, input.images)
+      images = await resolveImages(tx, from, input.images)
     }
 
     if (from === 'user' && input.re !== undefined)
@@ -208,7 +207,7 @@ export async function send(
       from,
       to,
       text: input.text,
-      reply: input.reply ?? true,
+      reply: !informs && (input.reply ?? true),
       state: to === 'user' ? 'delivered' : 'sent',
       ...(re === undefined ? {} : { re }),
       ...(callId === undefined ? {} : { call: callId }),
@@ -254,7 +253,7 @@ export async function send(
                     }),
               },
               content: via
-                ? `${settlerId === watcherId ? 'You' : settler} settled #${to}'s questions (message ${answerId}) for the user${input.dismiss ? ', closed without an answer' : ''}.`
+                ? `${via.conversation === watcherId ? 'You' : settler} settled #${to}'s questions (message ${answerId}) for the user${input.dismiss ? ', closed without an answer' : ''}.`
                 : input.dismiss
                   ? `The user dismissed #${to}'s questions (message ${answerId}).`
                   : `The user answered #${to}'s questions (message ${answerId}):\n${input.text}`,

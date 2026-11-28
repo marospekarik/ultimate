@@ -74,7 +74,6 @@ const comparableUnsealedRootCallKey = (
     ? `${call.name}\0${args ?? ''}`
     : undefined
 const SECRET = /secret|token|password|key|auth/i
-const EXTENSIONS_WITH_CREDENTIALS = new Set(['secrets', 'models'])
 
 function failure(error: unknown, credentials: boolean) {
   if (credentials) return error instanceof Error ? error.name : typeof error
@@ -118,6 +117,7 @@ export function callTrace(file: string | (() => string), retention = { rows: 200
   let buffer: unknown[][] = []
   const scheduleFlush = batch(200, flush, { unref: true })
   let stopPruning: Cancel | undefined
+  const sealedExtensions = new Set<string>()
   let reported = false
   const failed = (error: unknown) => {
     if (reported) return
@@ -198,7 +198,7 @@ export function callTrace(file: string | (() => string), retention = { rows: 200
       ...(taskId === undefined ? {} : { taskId }),
       ...(entryId === undefined ? {} : { entryId }),
     }
-    const credentials = EXTENSIONS_WITH_CREDENTIALS.has(call.callee)
+    const credentials = sealedExtensions.has(call.callee)
     const sealed = call.sealed || credentials
     const args = (!sealed && summary(call.args)) || undefined
     const repeat = comparableUnsealedRootCallKey({ ...call, sealed }, parent, args)
@@ -297,14 +297,18 @@ export function callTrace(file: string | (() => string), retention = { rows: 200
     run,
     begin,
     keep: (context: EventContext | undefined) => keepCallAndAncestors(context?.parentCall),
+    seal: (extension: string, sealed: boolean) =>
+      void (sealed ? sealedExtensions.add(extension) : sealedExtensions.delete(extension)),
     marked: () => skippableParentByCallId.size,
     open() {
       if (database) return
+      reported = false
       written.clear()
       polls.clear()
       try {
         database = new DatabaseSync(typeof file === 'string' ? file : file())
-        const crashSafeBatchedSchema = `PRAGMA journal_mode = WAL;
+        const crashSafeBatchedSchema = `PRAGMA busy_timeout = 5000;
+PRAGMA journal_mode = WAL;
 PRAGMA synchronous = NORMAL;
 CREATE TABLE IF NOT EXISTS calls (id TEXT PRIMARY KEY, parent TEXT, trace TEXT NOT NULL, at REAL NOT NULL,
   ms REAL NOT NULL, caller TEXT NOT NULL, callee TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL,

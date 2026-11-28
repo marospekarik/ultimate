@@ -3,13 +3,12 @@ import type { JsonValue } from '@earendil-works/chord/json'
 import { readFile } from 'node:fs/promises'
 import { expect, it } from 'vitest'
 import { actions } from '../server.ts'
-import { chapterFiles, FIRST_CHAPTER, requestChapter } from '../../../lib/chapters.ts'
+import { chapterFiles, FIRST_CHAPTER, prepareChapterRequest } from '../../../lib/chapters.ts'
 import type { ActionContext } from '../../../server/actions.ts'
-import type { ExtensionHost } from '../../../server/extensions.ts'
 import { context, prepareHarness } from '../../../server/harness.ts'
 import { Metadata } from '../../../server/metadata.ts'
 import { UiState } from '../../../shared/ui-state.ts'
-import { temp } from '../../../test/helpers.ts'
+import { temp, createTestExtensionHost } from '../../../test/helpers.ts'
 
 it('reads closed chapter records exactly like live fork-aware history, with titles and read validation', async () => {
   const home = await temp('ultimate-codemode-chapters-')
@@ -20,9 +19,9 @@ it('reads closed chapter records exactly like live fork-aware history, with titl
     faux: fauxProvider(),
   })
   await (await prepared.open(false)).close()
-  await requestChapter(home, 'next')
+  await prepareChapterRequest(home, 'next')()
   let opened = await prepared.open(false)
-  const host = {
+  const host = createTestExtensionHost({
     home,
     get chapter() {
       return prepared.chapter
@@ -30,7 +29,7 @@ it('reads closed chapter records exactly like live fork-aware history, with titl
     harness: () => opened.harness,
     conversations: () => [],
     uiState: async () => ({}),
-  } as unknown as ExtensionHost
+  })
   const ctx = { host, signal: new AbortController().signal } as ActionContext
   const read = (op: string, args: JsonValue[]) => actions.read({ op, args }, ctx)
   try {
@@ -95,7 +94,7 @@ it('reads closed chapter records exactly like live fork-aware history, with titl
     expect(await read('entries', [fork.id, { chapter: 'next' }])).toEqual(live)
     expect(await read('entries', [fork.id, { limit: 5000 }])).toEqual(live)
     await opened.close()
-    await requestChapter(home, FIRST_CHAPTER)
+    await prepareChapterRequest(home, FIRST_CHAPTER)()
     opened = await prepared.open(false)
     const database = chapterFiles(home, 'next').database
     const bytes = await readFile(database)

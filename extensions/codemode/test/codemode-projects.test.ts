@@ -8,9 +8,8 @@ import { machineHostname } from '../../../lib/machine.ts'
 import { join } from 'node:path'
 import { writeJson } from '../../../lib/json-file.ts'
 import { locate, resolveProject } from '../../../lib/remote.ts'
-import { temp } from '../../../test/helpers.ts'
+import { temp, createTestExtensionHost } from '../../../test/helpers.ts'
 import type { ActionContext } from '../../../server/actions.ts'
-import type { ExtensionHost } from '../../../server/extensions.ts'
 
 const here = { name: 'ultimate', root: '/p/ultimate', current: true }
 const hash = 'ab'.repeat(32)
@@ -91,12 +90,12 @@ it('stops a remote read when its call is cancelled', async () => {
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   try {
     const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
-    const host = {
+    const host = createTestExtensionHost({
       projects: async () => [
         { name: 'ultimate', current: true },
         { name: 'poe2-rust', current: false, running: { url } },
       ],
-    } as unknown as ExtensionHost
+    })
     const controller = new AbortController()
     const read = readProject(host, { project: 'poe2-rust' }, 'trace', [], controller.signal)
     await reached
@@ -132,11 +131,11 @@ it('reads a project on another machine through the register, with the cloud toke
       : [401, { error: 'unauthorized' }],
   )
   try {
-    const host = {
+    const host = createTestExtensionHost({
       userHome: '/nonexistent',
       notice: () => {},
       projects: async () => [{ name: 'ultimate', current: true }],
-    } as unknown as ExtensionHost
+    })
     // Without remotes or cloud backups other machines are unknown.
     await expect(readProject(host, { project: 'poe2-rust' }, 'trace', [])).rejects.toThrow(
       'reached only through remotes in user settings or cloud backups',
@@ -162,18 +161,18 @@ it('reads a project on another machine through the register, with the cloud toke
 it('caps an answer at 1 MiB of encoded JSON, counting multibyte characters as bytes', async () => {
   // 400k three-byte characters: under 1 Mi characters, over 1 MiB.
   const big = [{ name: '€'.repeat(400_000) }]
-  const host = {
+  const host = createTestExtensionHost({
     trace: { query: () => big, tree: () => [] },
-  } as unknown as ExtensionHost
+  })
   const ctx = { host, signal: new AbortController().signal } as ActionContext
   await expect(actions.read({ op: 'trace', args: [] }, ctx)).rejects.toThrow('larger than 1 MiB')
 })
 
 // "ask for a smaller limit" alone left another project's read of one `full: true` entry failing again.
 it('says how to narrow a read that is too large', async () => {
-  const host = {
+  const host = createTestExtensionHost({
     trace: { query: () => ['x'.repeat(1024 * 1024)], tree: () => [] },
-  } as unknown as ExtensionHost
+  })
   const ctx = { host, signal: new AbortController().signal } as ActionContext
   const failed = actions.read({ op: 'trace', args: [] }, ctx)
   for (const hint of ['`limit`', '`kinds`', '`full: true`', 'filtering in your script'])
@@ -182,12 +181,12 @@ it('says how to narrow a read that is too large', async () => {
 
 it("answers another project's read of an exported document, and refuses an unknown kind", async () => {
   const todos = { definition: { kind: 'todos', initial: () => ({ next: 1, items: [] }) } }
-  const host = {
+  const host = createTestExtensionHost({
     doc: (kind: string) => (kind === 'todos' ? todos : undefined),
     harness: () => ({
       snapshot: async (_doc: unknown, id: number) => (id === 1 ? { next: 2, items: [1] } : null),
     }),
-  } as unknown as ExtensionHost
+  })
   const ctx = { host, signal: new AbortController().signal } as ActionContext
   expect(await actions.read({ op: 'doc', args: ['todos', 1] }, ctx)).toEqual({
     next: 2,
@@ -210,11 +209,11 @@ it('reaches another machine at the address the user set in remotes, with no clou
       desktop: { blog: 'https://desktop.tail.ts.net:4747' },
     },
   })
-  const host = {
+  const host = createTestExtensionHost({
     userHome,
     notice: () => {},
     projects: async () => [{ name: 'ultimate', current: true }],
-  } as unknown as ExtensionHost
+  })
   // The project runs here too, so it answers here, unless the other machine is named.
   expect(await locate(host, 'ultimate')).toEqual({ current: true })
   expect(await locate(host, 'ultimate', 'laptop')).toEqual({
@@ -245,11 +244,11 @@ it('reads a project listed on several machines from the one the read names', asy
         desktop: { blog: `http://127.0.0.1:${(server.address() as AddressInfo).port}` },
       },
     })
-    const host = {
+    const host = createTestExtensionHost({
       userHome,
       notice: () => {},
       projects: async () => [{ name: 'ultimate', current: true }],
-    } as unknown as ExtensionHost
+    })
     expect(await readProject(host, { project: 'blog', machine: 'desktop' }, 'trace', [])).toEqual({
       value: ['from desktop'],
     })

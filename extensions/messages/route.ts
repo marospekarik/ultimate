@@ -7,14 +7,17 @@ import type {
   TaskId,
   Tx,
 } from '@earendil-works/pi-durable'
+import { awaitWithContext } from '@earendil-works/chord/context'
+import type { Context } from '@earendil-works/chord/context'
 import { defineTask, InboxDoc, LiveDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
+import { onCommit } from '../../lib/commits.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { ConversationsApi } from '../conversations/api.ts'
 import { Subagents } from '../subagents/api.ts'
 import { WorkspacesApi } from '../workspaces/api.ts'
-import { Judge, Judgements, Messages } from './api.ts'
+import { Judgements, Messages } from './api.ts'
 import type { JudgeState } from './api.ts'
-import { within } from '../../lib/timers.shared.ts'
+import { judge } from './judge.ts'
 import { isOpen } from '../../lib/message-state.shared.ts'
 import { terminal } from './log.ts'
 import type { Message } from './api.ts'
@@ -28,7 +31,6 @@ import { ownerOutput, sameOwner, Serving, Started } from './addresses.ts'
 import { sendResult } from './delivery.ts'
 import { scanNonterminalTasks } from './tasks.ts'
 
-const JUDGE_TIMEOUT_MS = 10_000
 const EXCERPT = { before: 600, input: 500, answer: 1200 }
 
 function inputSource(entry: EntryRecord | undefined): string {
@@ -70,37 +72,6 @@ async function branchSaidBefore(tx: Tx, id: ConversationId, before: EntryId) {
     cursor = page.next
   } while (cursor !== undefined)
   return ''
-}
-
-class JudgeTimeout extends Error {}
-
-async function judge(
-  host: ExtensionHost,
-  state: JudgeState,
-  signal: AbortSignal,
-): Promise<{ report: number } | { error: string }> {
-  const service = host.want(Judge)
-  if (!service) return { error: 'no judge' }
-  const stop = new AbortController()
-  try {
-    const cancelled = new Promise<never>((_resolve, reject) =>
-      signal.addEventListener('abort', () => reject(signal.reason), { once: true }),
-    )
-    const p = await within(
-      JUDGE_TIMEOUT_MS,
-      Promise.race([service.report(state, AbortSignal.any([signal, stop.signal])), cancelled]),
-      () => new JudgeTimeout(),
-      signal,
-    )
-    if (!Number.isFinite(p) || p < 0 || p > 1) return { error: 'invalid verdict' }
-    return { report: p }
-  } catch (error) {
-    if (signal.aborted) throw error
-    if (error instanceof JudgeTimeout) return { error: 'timed out' }
-    return { error: error instanceof Error ? error.message.slice(0, 80) : 'judge failed' }
-  } finally {
-    stop.abort()
-  }
 }
 
 async function hasRunQueuedInputOrWakeTask(tx: Tx, id: ConversationId) {
@@ -302,6 +273,52 @@ interface Route {
   }
 }
 
+async function outputsPlaced(
+  host: ExtensionHost,
+  branch: ConversationId,
+  starter: ConversationId,
+  ctx: Context,
+) {
+  const placing = ({ input, state }: { input: unknown; state: { status: string } }) => {
+    if (state.status === 'terminal') return false
+    const { message } = input as { message: Message }
+    if (message.from === starter && message.to === branch) return message.reply
+    const { phase, submission } =
+      (state as { checkpoint?: { phase?: string; submission?: number } }).checkpoint ?? {}
+    return (
+      message.from === branch &&
+      message.to === starter &&
+      message.report === true &&
+      phase === 'deliver' &&
+      submission === undefined
+    )
+  }
+  for (;;) {
+    const deliveryChanged = Promise.withResolvers<void>()
+    const unsubscribe = onCommit(host.harness(), (publication) => {
+      if (
+        publication.changes.some(
+          (change) => change.type === 'task' && change.value.kind === 'board.delivery',
+        )
+      )
+        deliveryChanged.resolve()
+    })
+    try {
+      const unplaced = await host
+        .harness()
+        .commit(
+          async (tx) =>
+            (await scanNonterminalTasks(tx, 'board.delivery', ROOT_CONVERSATION_ID)).some(placing),
+          ctx,
+        )
+      if (!unplaced) return
+      await awaitWithContext(deliveryChanged.promise, ctx)
+    } finally {
+      unsubscribe()
+    }
+  }
+}
+
 export function route(host: ExtensionHost) {
   return defineTask<
     {
@@ -314,7 +331,8 @@ export function route(host: ExtensionHost) {
     | { phase: 'observe' }
     | { phase: 'answered' }
     | { phase: 'judge'; answer: EntryId; toStarter: Route; state: JudgeState }
-    | { phase: 'forward'; routes: Route[] },
+    | { phase: 'forward'; routes: Route[] }
+    | { phase: 'landed' },
     null
   >({
     name: 'board.route',
@@ -336,6 +354,9 @@ export function route(host: ExtensionHost) {
         const answer = outcome.status === 'completed' ? outcome.result.entryId : undefined
         const { by, down } = task.input
         const id = runtime.conversationId
+        const done = down
+          ? terminal
+          : ({ status: 'running', checkpoint: { phase: 'landed' } } as const)
         await runtime.commit(async (tx) => {
           if (answer === undefined) return terminal
           const inputs = await Promise.all(
@@ -455,7 +476,7 @@ export function route(host: ExtensionHost) {
             return { status: 'running', checkpoint: { phase: 'judge', ...routes } }
           return routes.length
             ? { status: 'running', checkpoint: { phase: 'forward', routes } }
-            : terminal
+            : done
         }, ctx)
       },
       judge: async (task, runtime, ctx) => {
@@ -467,8 +488,12 @@ export function route(host: ExtensionHost) {
           if (!askedBeforeACrash) await runtime.memo('asked', true, ctx)
           const verdict = askedBeforeACrash
             ? { error: 'interrupted' }
-            : await judge(host, state, runtime.signal)
-          judged = await runtime.memo<Judged>('judged', { answer, ...verdict }, ctx)
+            : await judge(host, (service, signal) => service.report(state, signal), runtime.signal)
+          judged = await runtime.memo<Judged>(
+            'judged',
+            'p' in verdict ? { answer, report: verdict.p } : { answer, ...verdict },
+            ctx,
+          )
         }
         const verdict = judged
         await runtime.commit(async (tx) => {
@@ -499,6 +524,25 @@ export function route(host: ExtensionHost) {
               ? { stillReports: async (tx: Tx) => !(await concludedOrWorkUnderway(host, tx, id)) }
               : {}),
           })
+        }
+        await runtime.commit(
+          () =>
+            task.input.down ? terminal : { status: 'running', checkpoint: { phase: 'landed' } },
+          ctx,
+        )
+      },
+      landed: async (task, runtime, ctx) => {
+        const id = runtime.conversationId
+        if (
+          await host
+            .need(WorkspacesApi)
+            .get(id, ctx)
+            .then((own) => own?.landedOpen)
+        ) {
+          await outputsPlaced(host, id, task.input.by, ctx)
+          await host
+            .need(WorkspacesApi)
+            .settleLanded(id, ctx, async (tx) => (await tx.doc(Started, id)).lastRoute === task.id)
         }
         await runtime.commit(() => terminal, ctx)
       },

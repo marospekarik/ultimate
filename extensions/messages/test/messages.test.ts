@@ -7,6 +7,7 @@ import {
   until,
   fauxServer,
   linkDependencies,
+  createTestExtensionHost,
 } from '../../../test/helpers.ts'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
@@ -33,7 +34,6 @@ import type { JsonValue } from '@earendil-works/chord/json'
 import { afterEach, expect, it } from 'vitest'
 import { context, prepareHarness } from '../../../server/harness.ts'
 import type { OpenHost } from '../../../server/harness.ts'
-import type { ExtensionHost } from '../../../server/extensions.ts'
 import type { ActionContext } from '../../../server/actions.ts'
 import { Metadata } from '../../../server/metadata.ts'
 import { emit } from '../../../server/events.ts'
@@ -104,6 +104,8 @@ const anchor = defineTask<null, { phase: 'done' }, null>({
   abort: (_task, runtime, caller) =>
     runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), caller),
 })
+const asking = { report: async () => 1, asks: async () => 1 } satisfies JudgeService
+
 function gate() {
   let release!: () => void
   return {
@@ -159,7 +161,14 @@ async function fixture(
             },
           }
         : name === 'workspaces'
-          ? { doc: Workspaces, landingPending, pendingLandingCards, git: async () => '' }
+          ? {
+              doc: Workspaces,
+              landingPending,
+              pendingLandingCards,
+              settleLanded: async () => {},
+              get: async () => undefined,
+              git: async () => '',
+            }
           : name === 'conversations'
             ? { concludedIn }
             : name === 'lineage'
@@ -168,8 +177,11 @@ async function fixture(
                   branch: (input: BranchInput, ctx: Context) => startBranch(host, input, ctx),
                 }
               : undefined
-  const host = {
+  const resources = new Map<string, unknown>()
+  const host = createTestExtensionHost({
     ...prepared,
+    resource: (key: string, create: () => unknown) =>
+      resources.get(key) ?? resources.set(key, create()).get(key),
     metadata: Metadata,
     emit,
     react: events.react,
@@ -187,7 +199,7 @@ async function fixture(
     },
     conversations: () => [],
     doc: () => undefined,
-  } as unknown as ExtensionHost
+  })
   let backend = messagesExtension(host)
   if (sendGate)
     backend = {
@@ -201,7 +213,10 @@ async function fixture(
               ...api,
               memo: async (name: string, value: JsonValue | Context, memoContext?: Context) => {
                 if (memoContext === undefined) return api.memo(name, value as Context)
-                if (sendGate.conversation && sendGate.conversation() !== api.conversationId)
+                if (
+                  !['message-id', 'branch-id'].includes(name) ||
+                  (sendGate.conversation && sendGate.conversation() !== api.conversationId)
+                )
                   return api.memo(name, value as JsonValue, memoContext)
                 sendGate.taskId = api.taskId
                 if (!sendGate.afterMemo) {
@@ -786,6 +801,7 @@ it('delivers to a retired standing agent by id without refreshing it', async () 
 })
 it('answers questions to the user through answer cards or input in the sender conversation', async () => {
   const f = await fixture()
+  f.provided.set(Judge.name, asking)
   await f.opened.harness.commit(async (tx) => {
     ;(await tx.doc(Standing, ROOT_CONVERSATION_ID)).ultimate = f.recipient.id
   }, context)
@@ -853,6 +869,40 @@ it('answers questions to the user through answer cards or input in the sender co
   await f.open()
   expect(await state(second.id)).toBe('delivered')
 })
+// poe2-rust #17139: two progress reports to the user without reply: false showed as open questions with an answer box.
+it('sends a card-less message to the user as a report unless the judge says it asks something', async () => {
+  const f = await fixture()
+  const send = async (text: string) => {
+    await (
+      await f.recipient.submit(
+        { type: 'input', content: 'SEND ' + JSON.stringify({ to: 'user', text }) },
+        context,
+      )
+    ).wait(context)
+    return (await f.log())!.messages.at(-1)!
+  }
+  expect(await send('Review update: fixed, re-review running.')).toMatchObject({
+    reply: false,
+  })
+  const asked: string[] = []
+  let asks = async () => 0.1
+  f.provided.set(Judge.name, {
+    ...asking,
+    asks: async (message) => (asked.push(message), asks()),
+  } satisfies JudgeService)
+  expect(await send('Second review round: fixed.')).toMatchObject({ reply: false })
+  asks = async () => 0.9
+  expect(await send('Should I land this?')).toMatchObject({ reply: true, state: 'delivered' })
+  asks = async () => {
+    throw new Error('TypeSafe 500')
+  }
+  expect(await send('Third round: fixed.')).toMatchObject({ reply: false })
+  expect(asked).toEqual([
+    'Second review round: fixed.',
+    'Should I land this?',
+    'Third round: fixed.',
+  ])
+})
 it("ends @ultimate's run with its message to the user, unless it still owes a reply", async () => {
   const f = await fixture()
   await f.send('user', 'Landed')
@@ -876,6 +926,7 @@ it("ends @ultimate's run with its message to the user, unless it still owes a re
 })
 it('atomically admits only one answer-card reply through the Messages service', async () => {
   const f = await fixture()
+  f.provided.set(Judge.name, asking)
   await f.send('user', 'Keep it running?')
   const id = (await f.log())!.messages.at(-1)!.id
   const results = await Promise.allSettled([
@@ -1127,7 +1178,7 @@ import { WorkspacesApi } from ${JSON.stringify(resolve('extensions/workspaces/ap
 import { landingPending, pendingLandingCards, Workspaces } from ${JSON.stringify(resolve('extensions/workspaces/workspaces.ts'))}
 export default (host) => {
   host.implement(SubagentsApi, { residents: async () => [] })
-  host.implement(WorkspacesApi, { doc: Workspaces, landingPending, pendingLandingCards })
+  host.implement(WorkspacesApi, { doc: Workspaces, landingPending, pendingLandingCards, settleLanded: async () => {}, get: async () => undefined })
   host.implement(ConversationsApi, { concludedIn: async () => new Set() })
   return { name: 'core-stand-ins' }
 }
@@ -1187,11 +1238,12 @@ it('keeps sequential and parallel message calls distinct within one codemode scr
             'codemode',
             {
               code: `
-          await tools.message({to: 'user', text: 'Sequential 1'});
-          await tools.message({to: 'user', text: 'Sequential 2'});
+          const questions = [{text: 'Go?', kind: 'confirm'}];
+          await tools.message({to: 'user', text: 'Sequential 1', questions});
+          await tools.message({to: 'user', text: 'Sequential 2', questions});
           await Promise.all([
-            tools.message({to: 'user', text: 'Parallel 1'}),
-            tools.message({to: 'user', text: 'Parallel 2'})
+            tools.message({to: 'user', text: 'Parallel 1', questions}),
+            tools.message({to: 'user', text: 'Parallel 2', questions})
           ]);
         `,
             },
@@ -1200,9 +1252,16 @@ it('keeps sequential and parallel message calls distinct within one codemode scr
         ],
         { stopReason: 'toolUse' },
       ),
-      fauxAssistantMessage([fauxToolCall('message', { to: 'user', text: 'Direct' }, { id: 'm' })], {
-        stopReason: 'toolUse',
-      }),
+      fauxAssistantMessage(
+        [
+          fauxToolCall(
+            'message',
+            { to: 'user', text: 'Direct', questions: [{ text: 'Go?', kind: 'confirm' }] },
+            { id: 'm' },
+          ),
+        ],
+        { stopReason: 'toolUse' },
+      ),
       fauxAssistantMessage('Complete'),
     ])
     await (
@@ -1796,6 +1855,7 @@ it("lets the judge leave a branch's back-and-forth with the user as a note, and 
   const asked: JudgeState[] = []
   let verdict: () => Promise<number> = async () => 0.2
   f.provided.set(Judge.name, {
+    ...asking,
     report: async (state) => {
       asked.push(state)
       return verdict()
@@ -1932,6 +1992,7 @@ it("judges and sends a branch's answers in answer order, and a report judged whi
   const b = await branched(f)
   const pending: ((p: number) => void)[] = []
   f.provided.set(Judge.name, {
+    ...asking,
     report: async () => new Promise<number>((done) => pending.push(done)),
   } satisfies JudgeService)
   const say = async (content: string) =>
@@ -2502,17 +2563,17 @@ it('recovers once after the answer is recorded but before reply submission', asy
 /** The pause extension's actions over the fixture's harness. */
 function pauser(f: Awaited<ReturnType<typeof fixture>>) {
   const resources = new Map<string, unknown>()
-  const host = {
+  const host = createTestExtensionHost({
     harness: () => f.opened.harness,
-    resource: <T>(key: string, create: () => T) => {
+    resource: (key: string, create: () => unknown) => {
       if (!resources.has(key)) resources.set(key, create())
-      return resources.get(key) as T
+      return resources.get(key)
     },
     onOpen: () => {},
     onClose: () => {},
     implement: () => {},
     conversations: () => [],
-  } as unknown as ExtensionHost
+  })
   pauseExtension(host)
   return (name: keyof typeof pauseActions) =>
     pauseActions[name](null, { host } as unknown as ActionContext)

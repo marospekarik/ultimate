@@ -16,11 +16,15 @@ wait on any other name fails at once. `{ fails: '<event>' }` marks an event that
 - `host.react(name, [Event, …], (tx, event) => …)` runs the handler once per event, oldest first: those emitted before
   it started, then each new one, serially per name (`<extension>/<name>`). The cursor advances in the handler's
   transaction, so writes through `tx` happen exactly once across crashes, reloads and failures; side effects outside
-  `tx` (files, processes, network) are at least once. A throw rolls back the handler and the cursor, records the
-  failure, and retries the event on the next matching commit or harness open. Reactors run while the harness is open
-  and stop with their facet; a reloaded facet registering the same name continues from the cursor. Pass
+  `tx` (files, processes, network) are at least once. A throw rolls back the handler and the cursor and records the
+  failure. A timer retries from the same cursor after 1 s, doubling the delay up to 30 s on repeated failures.
+  Pending events are also retried when the harness opens. Reactors stop with their facet; a reloaded facet
+  registering the same name continues from the cursor. Pass
   `{ from: 'now' }` as a fourth argument when past events must not be handled: a reactor without a cursor then starts
-  after the newest event instead of replaying the log.
+  after the newest event instead of replaying the log. `{ from: { cursorOf: '<extension>/<name>' } }` starts it where
+  that reactor's cursor is, and after the newest event when that one has none. Hand over by retiring the old name, so
+  nothing advances its cursor after the handover: `automations/triggers` and the `automations` reactors of health,
+  update and cloud all start from the retired `automations/events`, so an event it had not handled yet still fires.
 - `host.eventLog.recent({ events?, since?, before?, order?, limit })` reads the newest first (oldest first with
   `order: 'ascending'`) as plain copies, `since` and `before` exclusive event ids; `host.eventLog.reactors()`
   shows each reactor's cursor, lag and last failure. In the browser, `useEvents({ events?, limit })` from `@/sdk/solid` streams
@@ -60,8 +64,8 @@ exactly once and that feeds the result the owner reports, like the lander waking
 call, idempotent by request id; when it calls up the layering, it goes through an
 [extension point](contracts.md#services-in-apits).
 `onCommit(host.harness(), …)` (`lib/commits.ts`, over Pi Durable's `Session.observeCommits`) remains for watching Pi's
-own records (entries, tasks, submissions, conversation records, usage and live documents), which are no domain events;
-each such watcher says so in a comment above it. Do not invent an event only to replace one.
+own records (entries, tasks, submissions, conversation records, usage and live documents), which are no domain events.
+Do not invent an event only to replace one.
 
 ## Browser events
 

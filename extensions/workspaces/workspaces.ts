@@ -19,7 +19,7 @@ import { needsRestart as restartNeeded } from '../../lib/layers.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { ConversationsApi, ExternalSessions } from '../conversations/api.ts'
 import { Branches, SubmissionQueued } from './api.ts'
-import { SetupFailedEntry, WorkspacesDoc } from './refs.ts'
+import { SetupFailedEntry, StillOpenEntry, WorkspacesDoc } from './refs.ts'
 import { setup } from '../../lib/worktree-setup.ts'
 import {
   addCheckout,
@@ -234,6 +234,49 @@ export function workspaces(host: Host) {
     },
     release: (id, context) => release([id], context),
   })
+  async function settleLanded(
+    id: ConversationId,
+    context: Context,
+    current: (tx: Tx) => Promise<boolean>,
+  ) {
+    if (!(await get(id, context))?.landedOpen) return
+    const starter = await host.want(Branches)?.starter(id, context)
+    const to =
+      starter === undefined || starter === id
+        ? undefined
+        : await host.harness().conversation(starter, context)
+    const concluded = await host.harness().commit(async (tx) => {
+      const open = (await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items[String(id)]?.landedOpen
+      if (!open) return false
+      if ((await host.need(ConversationsApi).concludedIn(tx)).has(id)) {
+        delete (await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items[String(id)].landedOpen
+        return true
+      }
+      if (!(await current(tx))) return false
+      if ((await tx.doc(LiveDoc, id)).run || (await tx.doc(InboxDoc, id)).items.length) return false
+      if (await host.want(Branches)?.working(tx, id)) {
+        if (open.escalated || !to) return false
+        await to.submit(tx, {
+          type: 'input',
+          requestId: `landed-open:${open.submission}`,
+          whenBusy: 'followUp',
+          entry: { kind: StillOpenEntry.kind, data: { id, submission: open.submission } },
+          content: `Landed branch #${id} is still open: its submission ${open.submission} landed, and its run ended with work still under way (a subagent, a reply it waits for or a pending notify). It concludes itself if a later run ends with nothing under way; conclude it now if that work no longer matters.`,
+        })
+        open.escalated = true
+        return false
+      }
+      delete (await tx.doc(Workspaces, ROOT_CONVERSATION_ID)).items[String(id)].landedOpen
+      try {
+        await host.need(ConversationsApi).concludeIn(tx, [id], id)
+        return true
+      } catch (error) {
+        host.notice(`Not concluding landed #${id}: ${String(error)}`)
+        return false
+      }
+    }, context)
+    if (concluded) await release([id], context)
+  }
   type IdleReadBeforeWrites = string
   const startIdleLander = async (tx: Tx, index: WorkspaceIndex, source: IdleReadBeforeWrites) => {
     index.landers[source] = await tx.createTask(
@@ -609,6 +652,7 @@ export function workspaces(host: Host) {
           const live = await tx.doc(LiveDoc, id)
           const inbox = await tx.doc(InboxDoc, id)
           const index = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
+          delete index.items[String(id)].landedOpen
           if (live.run) return 'Conversation is running; wait or stop it before removal'
           if (inbox.items.length) return 'Conversation has queued input; wait or cancel it first'
           const sources = new Set([workspace.path])
@@ -835,6 +879,7 @@ export function workspaces(host: Host) {
         await log(tx, lander, entry, { step: 'queued' })
         index.queue.push(entry)
         await host.emit(tx, SubmissionQueued, { submission: entry.id, conversationId: id })
+        delete index.items[String(id)].landedOpen
       }
       if (idleReadBeforeWrites) await startIdleLander(tx, index, source)
       const position = index.queue
@@ -1000,6 +1045,7 @@ export function workspaces(host: Host) {
     pending,
     progress,
     release,
+    settleLanded,
     sweep,
     async create(tx: Tx, id: ConversationId, cwd: string) {
       if (
@@ -1100,27 +1146,30 @@ export function workspaces(host: Host) {
         fresh: 0,
         dirty: 0,
       }
+      for (const workspace of items) stats[workspace.state]++
+      const gitProcessesAtOnce = 8
+      const queue = items.filter((workspace) => workspace.state === 'ready').values()
       await Promise.all(
-        items.map(async (workspace) => {
-          stats[workspace.state]++
-          if (workspace.state !== 'ready') return
-          const tip = await git(workspace.path, 'rev-parse', 'HEAD').catch(() => '')
-          if (await git(workspace.path, 'status', '--porcelain').catch(() => '')) stats.dirty++
-          if (!tip || tip === workspace.base) stats.fresh++
-          else if (
-            await git(
-              workspace.source,
-              'merge-base',
-              '--is-ancestor',
-              tip,
-              `refs/heads/${workspace.target}`,
-            ).then(
-              () => true,
-              () => false,
+        Array.from({ length: gitProcessesAtOnce }, async () => {
+          for (const workspace of queue) {
+            const tip = await git(workspace.path, 'rev-parse', 'HEAD').catch(() => '')
+            if (await git(workspace.path, 'status', '--porcelain').catch(() => '')) stats.dirty++
+            if (!tip || tip === workspace.base) stats.fresh++
+            else if (
+              await git(
+                workspace.source,
+                'merge-base',
+                '--is-ancestor',
+                tip,
+                `refs/heads/${workspace.target}`,
+              ).then(
+                () => true,
+                () => false,
+              )
             )
-          )
-            stats.landed++
-          else stats.ahead++
+              stats.landed++
+            else stats.ahead++
+          }
         }),
       )
       return stats

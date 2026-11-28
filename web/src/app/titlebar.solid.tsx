@@ -36,16 +36,6 @@ export function ProjectChip() {
   )
 }
 
-function Project() {
-  const extensions = useExtensions()
-  const replaced = () => slotItems(extensions(), 'titlebar.project').length > 0
-  return (
-    <Show when={replaced()} fallback={<ProjectChip />}>
-      <Slot fallback={inlineFailure} name="titlebar.project" />
-    </Show>
-  )
-}
-
 export function Wordmark(props: { onClick?: () => void; label?: string }) {
   return (
     <Show
@@ -195,7 +185,7 @@ export function TitleBar() {
             )}
           >
             <Brand />
-            <Project />
+            <ProjectChip />
             <Slot fallback={inlineFailure} name="titlebar.left" />
           </div>
           <div class="flex min-w-0 items-center overflow-x-auto pl-2 [scrollbar-width:none]">

@@ -401,8 +401,9 @@ export async function hasPendingLanderReport(tx: Tx, index: WorkspaceIndex, id: 
 export async function activeLandingCards(tx: Tx, index: WorkspaceIndex) {
   const results: string[] = []
   for (const taskId of Object.values(index.landers)) {
-    const task = await tx.task(taskId)
-    const checkpoint = task?.state.checkpoint as State | undefined
+    const state = (await tx.task(taskId))?.state
+    if (!state || state.status === 'terminal') continue
+    const checkpoint = state.checkpoint as State | undefined
     if (checkpoint?.phase === 'deliver' && checkpoint.concluded && checkpoint.starter !== undefined)
       results.push(checkpoint.id)
   }
@@ -1222,7 +1223,12 @@ export function createLander(
         const starter = await after.starter(branch, context)
         await runtime.commit(async (tx) => {
           let concludedInThisCommit = false
-          if (!(await after.working(tx, branch)))
+          const index = await tx.doc(Workspaces, ROOT_CONVERSATION_ID)
+          const newerSubmissionQueued = index.queue.some((item) => item.conversationId === branch)
+          if (newerSubmissionQueued) delete index.items[String(branch)].landedOpen
+          else if (await after.working(tx, branch))
+            index.items[String(branch)].landedOpen = { submission: id }
+          else
             try {
               await after.conclude(tx, branch)
               concludedInThisCommit = true
@@ -1255,7 +1261,7 @@ export function createLander(
           starter,
         } = task.state.checkpoint
         const entry = { kind: LanderReportEntry.kind, data: { id, outcome } }
-        const content = `${headline}\nDiverged: ${outcome.divergence}\n${conclusionCommitted ? `#${conversationId} is concluded.` : `#${conversationId} still has work under way; it reports when it stops.`}`
+        const content = `${headline}\nDiverged: ${outcome.divergence}\n${conclusionCommitted ? `#${conversationId} is concluded.` : `#${conversationId} still has work under way; it reports when it stops and is concluded once a run ends with nothing under way.`}`
         try {
           const to =
             starter === undefined ? undefined : await runtime.conversation(starter, context)

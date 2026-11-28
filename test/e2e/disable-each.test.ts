@@ -65,7 +65,10 @@ it.concurrent('boots cleanly with every optional extension disabled', async () =
 
 /** What turning each required built-in off keeps off with it: the default-on built-ins that declare `requires`. */
 const keptOff: Record<string, string[]> = {
+  dictation: ['side-chat'],
+  'page-agent': ['side-chat'],
   questions: ['inbox'],
+  'read-aloud': ['side-chat'],
   system: ['ui'],
 }
 
